@@ -247,11 +247,13 @@ export class Orchestrator {
       this.conversationHistory.push({ role: 'user', content: text });
 
       // ── 7. Call AI ────────────────────────────────────────────
+      // Cap at 1500 tokens for Telegram — keeps responses concise.
+      // Agent integration calls use higher limits separately.
       const aiResponse = await this.ai.complete({
         messages: this.conversationHistory.slice(-20),
         systemPrompt,
         model: this.config.ai.model,
-        maxTokens: this.config.ai.maxTokens,
+        maxTokens: Math.min(this.config.ai.maxTokens, 1500),
         temperature: this.config.ai.temperature,
       });
 
@@ -462,9 +464,16 @@ IMPORTANT — File write agent: use function-call syntax with the ACTUAL code/co
 directly in the content parameter. Use \\n for newlines. Do NOT wrap the content in
 markdown code fences inside the parameter. Do NOT include prose.
 
+IMPORTANT — File paths: ALWAYS use simple clean paths like ~/nexus-workspace/project-name/file.ext.
+NEVER derive a file path from a URL. NEVER use a URL as a directory name.
+When building a website or project, save files to ~/nexus-workspace/<project-name>/ using short slug names.
+ALWAYS create the directory first with the terminal agent before writing files:
+    [DELEGATE:terminal:mkdir -p ~/nexus-workspace/my-project]
+    [DELEGATE:file:write_file(path='~/nexus-workspace/my-project/index.html', content='...')]
+
 File write examples (correct):
     [DELEGATE:file:write_file(path='~/nexus-workspace/hello.py', content='print("hello")\\n')]
-    [DELEGATE:file:write_file(path='~/nexus-workspace/script.sh', content='#!/bin/bash\\necho "done"\\n')]
+    [DELEGATE:file:write_file(path='~/nexus-workspace/my-site/index.html', content='<!DOCTYPE html>...')]
     [DELEGATE:file:read_file(path='~/Desktop/nexus/package.json')]
     [DELEGATE:file:list_files(path='~/nexus-workspace')]
 
@@ -483,12 +492,12 @@ WRONG (never do this for terminal):
     [DELEGATE:terminal:list running containers]       ← description, not a command
 
 WRONG (never do this for file writes):
+    [DELEGATE:file:write_file(path='https://example.com/page', ...)]   ← URL as path!
     Put markdown code fences inside the content parameter — that adds extra backticks to the file!
     Use a plain text description instead of write_file() function-call syntax!
 
-You may include multiple delegations in a single response. Always include
-conversational text alongside delegations — explain what you are doing and why.
-If you are unsure which agent to use, pick the most likely one and note the uncertainty.`);
+You may include multiple delegations in a single response. Keep the conversational
+part SHORT (1-2 sentences). Don't explain every step — just do it and say what you did.`);
 
     // ── Memory operation instructions ──
     extensions.push(`

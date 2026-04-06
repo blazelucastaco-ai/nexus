@@ -37,6 +37,17 @@ export function truncateMessage(text: string, maxLength: number = TELEGRAM_MAX_L
   return text.slice(0, maxLength - suffix.length) + suffix;
 }
 
+// ─── Path Sanitization ────────────────────────────────────────────────
+
+/**
+ * Replace absolute home directory paths with ~ to avoid leaking internal paths in Telegram messages.
+ */
+export function sanitizePaths(text: string): string {
+  const home = process.env.HOME;
+  if (!home) return text;
+  return text.replaceAll(home, '~');
+}
+
 // ─── Status Formatting ───────────────────────────────────────────────
 
 /**

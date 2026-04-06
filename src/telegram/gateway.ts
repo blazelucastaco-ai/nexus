@@ -20,7 +20,7 @@ import {
   handleStop,
   handleHelp,
 } from './commands.js';
-import { escapeHtml, truncateMessage } from './messages.js';
+import { escapeHtml, sanitizePaths, truncateMessage } from './messages.js';
 import { handlePhoto, handleDocument, handleVoice } from './media.js';
 
 const log = createLogger('TelegramGateway');
@@ -300,7 +300,7 @@ export class TelegramGateway {
       if (this.orchestrator) {
         try {
           const response = await this.orchestrator.handleMessage(chatId, text);
-          await this.sendMessage(chatId, escapeHtml(response));
+          await this.sendMessage(chatId, escapeHtml(sanitizePaths(response)));
         } catch (err) {
           log.error({ err, chatId }, 'Orchestrator message handling failed');
           await ctx.reply('Something went wrong processing your message. I\'ll look into it.');
@@ -332,7 +332,7 @@ export class TelegramGateway {
             chatId,
             `[Photo received: ${result.filePath}] ${caption}`,
           );
-          await this.sendMessage(chatId, escapeHtml(response));
+          await this.sendMessage(chatId, escapeHtml(sanitizePaths(response)));
         }
       } catch (err) {
         log.error({ err }, 'Failed to process photo');
@@ -356,7 +356,7 @@ export class TelegramGateway {
             chatId,
             `[Document received: ${result.filePath}] ${caption}`,
           );
-          await this.sendMessage(chatId, escapeHtml(response));
+          await this.sendMessage(chatId, escapeHtml(sanitizePaths(response)));
         }
       } catch (err) {
         log.error({ err }, 'Failed to process document');
@@ -379,7 +379,7 @@ export class TelegramGateway {
             chatId,
             `[Voice message received: ${result.filePath}, duration: ${result.duration}s]`,
           );
-          await this.sendMessage(chatId, escapeHtml(response));
+          await this.sendMessage(chatId, escapeHtml(sanitizePaths(response)));
         }
       } catch (err) {
         log.error({ err }, 'Failed to process voice message');
