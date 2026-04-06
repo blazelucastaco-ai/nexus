@@ -32,20 +32,20 @@ export class ClaudeProvider {
     // Filter out system messages; Anthropic expects only user/assistant in the messages array
     const messages: Array<{ role: 'user' | 'assistant'; content: string }> =
       options.messages
-        .filter((m) => m.role !== 'system')
+        .filter((m) => m.role !== 'system' && m.role !== 'tool')
         .map((m) => ({
           role: m.role as 'user' | 'assistant',
-          content: m.content,
+          content: m.content ?? '',
         }));
 
     // If there were inline system messages, prepend their content to the system prompt
     const inlineSystemMessages = options.messages
       .filter((m) => m.role === 'system')
-      .map((m) => m.content);
+      .map((m) => m.content ?? '');
 
     const fullSystemPrompt = [
       ...(systemPrompt ? [systemPrompt] : []),
-      ...inlineSystemMessages,
+      ...inlineSystemMessages.filter(Boolean),
     ].join('\n\n') || undefined;
 
     log.info({ model, messageCount: messages.length }, 'Sending completion request to Anthropic');

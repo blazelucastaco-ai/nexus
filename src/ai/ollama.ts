@@ -53,7 +53,8 @@ export class OllamaProvider {
     }
 
     for (const msg of options.messages) {
-      messages.push({ role: msg.role, content: msg.content });
+      if (msg.role === 'tool') continue; // Ollama doesn't support tool messages
+      messages.push({ role: msg.role as 'system' | 'user' | 'assistant', content: msg.content ?? '' });
     }
 
     log.info({ model, messageCount: messages.length }, 'Sending completion request to Ollama');
