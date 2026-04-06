@@ -36,7 +36,7 @@ NEXUS is a persistent, opinionated AI assistant that runs locally on your Mac an
 ## Quick Start
 
 ```bash
-git clone https://github.com/lucastopinka/nexus.git
+git clone https://github.com/blazelucastaco-ai/nexus.git
 cd nexus
 ./install.sh
 ```
