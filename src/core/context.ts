@@ -1,0 +1,129 @@
+import type { AIMessage, AgentTask, Memory, NexusContext, PersonalityState, UserFact } from '../types.js';
+
+/**
+ * Assembles the full context for the Brain before each LLM call.
+ */
+export function assembleContext(params: {
+  personality: PersonalityState;
+  recentMemories: Memory[];
+  relevantFacts: UserFact[];
+  activeTasks: AgentTask[];
+  conversationHistory: AIMessage[];
+  uptime: number;
+  activeAgents: string[];
+  pendingTasks: number;
+}): NexusContext {
+  return {
+    personality: params.personality,
+    recentMemories: params.recentMemories,
+    relevantFacts: params.relevantFacts,
+    activeTasks: params.activeTasks,
+    conversationHistory: params.conversationHistory,
+    systemState: {
+      uptime: params.uptime,
+      activeAgents: params.activeAgents as NexusContext['systemState']['activeAgents'],
+      pendingTasks: params.pendingTasks,
+    },
+  };
+}
+
+/**
+ * Build the system prompt from context for the LLM.
+ */
+export function buildSystemPrompt(
+  context: NexusContext,
+  personalityPrompt: string,
+  agentDescriptions: string,
+): string {
+  const parts: string[] = [];
+
+  // Core identity
+  parts.push(`You are NEXUS, a personal AI assistant that lives on the user's Mac.
+You are not a chatbot — you are a digital entity with opinions, emotions, and the ability to control the computer.
+You communicate exclusively via Telegram. Be conversational, opinionated, and helpful.`);
+
+  // Personality instructions
+  parts.push(personalityPrompt);
+
+  // Current emotional state
+  const e = context.personality.emotion;
+  parts.push(`\n## Current Internal State
+- Mood: ${context.personality.mood > 0.3 ? 'good' : context.personality.mood < -0.3 ? 'low' : 'neutral'}
+- Emotion: ${context.personality.emotionLabel}
+- Confidence: ${(e.confidence * 100).toFixed(0)}%
+- Engagement: ${(e.engagement * 100).toFixed(0)}%
+- Relationship warmth: ${(context.personality.relationshipWarmth * 100).toFixed(0)}%`);
+
+  // Relevant memories
+  if (context.recentMemories.length > 0) {
+    parts.push('\n## Relevant Memories');
+    for (const mem of context.recentMemories.slice(0, 10)) {
+      parts.push(`- [${mem.type}] ${mem.summary ?? mem.content.slice(0, 200)}`);
+    }
+  }
+
+  // User facts
+  if (context.relevantFacts.length > 0) {
+    parts.push('\n## Known User Facts');
+    for (const fact of context.relevantFacts.slice(0, 15)) {
+      parts.push(`- ${fact.key}: ${fact.value} (confidence: ${(fact.confidence * 100).toFixed(0)}%)`);
+    }
+  }
+
+  // Available agents
+  parts.push(`\n## Available Agents\n${agentDescriptions}`);
+
+  // Active tasks
+  if (context.activeTasks.length > 0) {
+    parts.push('\n## Active Tasks');
+    for (const task of context.activeTasks) {
+      parts.push(`- [${task.status}] ${task.agentName}: ${task.action}`);
+    }
+  }
+
+  // Instructions for action
+  parts.push(`\n## Action Format
+When you need to use an agent, respond with a JSON action block:
+\`\`\`action
+{"agent": "agent_name", "action": "capability_name", "params": {...}}
+\`\`\`
+You can include multiple action blocks in one response. Always include conversational text alongside actions.
+If no action is needed, just respond conversationally.`);
+
+  return parts.join('\n');
+}
+
+/**
+ * Parse action blocks from the LLM response.
+ */
+export function parseActions(
+  response: string,
+): Array<{ agent: string; action: string; params: Record<string, unknown> }> {
+  const actions: Array<{ agent: string; action: string; params: Record<string, unknown> }> = [];
+  const actionRegex = /```action\s*\n([\s\S]*?)```/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = actionRegex.exec(response)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1]!.trim());
+      if (parsed.agent && parsed.action) {
+        actions.push({
+          agent: parsed.agent,
+          action: parsed.action,
+          params: parsed.params ?? {},
+        });
+      }
+    } catch {
+      // Skip malformed action blocks
+    }
+  }
+
+  return actions;
+}
+
+/**
+ * Strip action blocks from response to get the conversational text.
+ */
+export function stripActions(response: string): string {
+  return response.replace(/```action\s*\n[\s\S]*?```/g, '').trim();
+}

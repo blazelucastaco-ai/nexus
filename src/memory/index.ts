@@ -1,0 +1,446 @@
+// Nexus AI — Unified Memory Manager
+
+import type {
+  AIMessage,
+  Memory,
+  MemoryLayer,
+  MemoryType,
+  Mistake,
+  UserFact,
+} from '../types.js';
+import { nowISO } from '../utils/helpers.js';
+import { createLogger } from '../utils/logger.js';
+import {
+  MemoryConsolidation,
+  type ConsolidationReport,
+  type ConsolidationStats,
+} from './consolidation.js';
+import { closeDatabase, getDatabase } from './database.js';
+import { EpisodicMemory } from './episodic.js';
+import { ProceduralMemory } from './procedural.js';
+import { SemanticMemory } from './semantic.js';
+import { ShortTermMemory, type BufferEntry } from './short-term.js';
+
+const log = createLogger('MemoryManager');
+
+export interface StoreMemoryOptions {
+  type?: MemoryType;
+  summary?: string;
+  importance?: number;
+  confidence?: number;
+  emotionalValence?: number;
+  tags?: string[];
+  source?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RecallOptions {
+  layers?: MemoryLayer[];
+  types?: MemoryType[];
+  limit?: number;
+  minImportance?: number;
+  timeRange?: { from?: string; to?: string };
+  tags?: string[];
+}
+
+export interface RelevantContext {
+  recentMessages: AIMessage[];
+  relevantMemories: Memory[];
+  relevantFacts: UserFact[];
+  unresolvedMistakes: Mistake[];
+}
+
+export class MemoryManager {
+  readonly shortTerm: ShortTermMemory;
+  readonly episodic: EpisodicMemory;
+  readonly semantic: SemanticMemory;
+  readonly procedural: ProceduralMemory;
+  readonly consolidation: MemoryConsolidation;
+
+  private initialized = false;
+
+  constructor(maxShortTerm = 50) {
+    // Initialize the database (creates tables if needed)
+    getDatabase();
+
+    this.shortTerm = new ShortTermMemory(maxShortTerm);
+    this.episodic = new EpisodicMemory();
+    this.semantic = new SemanticMemory();
+    this.procedural = new ProceduralMemory();
+    this.consolidation = new MemoryConsolidation(this.semantic);
+
+    this.initialized = true;
+    log.info('MemoryManager initialized with all layers');
+  }
+
+  // ─── Unified Store ────────────────────────────────────────────────
+
+  /**
+   * Store content into a specific memory layer.
+   */
+  store(
+    layer: MemoryLayer,
+    type: MemoryType,
+    content: string,
+    options: StoreMemoryOptions = {},
+  ): Memory | BufferEntry | UserFact | string {
+    switch (layer) {
+      case 'buffer': {
+        const message: AIMessage = {
+          role:
+            (options.metadata?.role as AIMessage['role']) ?? 'user',
+          content,
+        };
+        return this.shortTerm.add(message, options.metadata);
+      }
+
+      case 'episodic': {
+        return this.episodic.store(content, {
+          type,
+          summary: options.summary,
+          importance: options.importance,
+          confidence: options.confidence,
+          emotionalValence: options.emotionalValence,
+          tags: options.tags,
+          source: options.source,
+          metadata: options.metadata,
+        });
+      }
+
+      case 'semantic': {
+        const fact = this.semantic.storeFact({
+          category: this.typeToFactCategory(type),
+          key:
+            (options.metadata?.key as string) ??
+            `${type}_${nowISO()}`,
+          value: content,
+          confidence: options.confidence,
+          sourceMemoryId:
+            (options.metadata?.sourceMemoryId as string) ?? null,
+        });
+        return fact;
+      }
+
+      case 'procedural': {
+        return this.procedural.storeProcedure(
+          options.summary ?? content.slice(0, 80),
+          content.split('\n').filter(Boolean),
+          options.tags?.[0] ?? 'general',
+          options.confidence,
+        );
+      }
+
+      default: {
+        log.warn(
+          { layer },
+          'Unknown memory layer, defaulting to episodic',
+        );
+        return this.episodic.store(content, { type, ...options });
+      }
+    }
+  }
+
+  // ─── Unified Recall ───────────────────────────────────────────────
+
+  /**
+   * Search across memory layers for relevant content.
+   * Returns a merged, deduplicated, relevance-sorted list of memories.
+   */
+  recall(query: string, options: RecallOptions = {}): Memory[] {
+    const limit = options.limit ?? 20;
+    const layers = options.layers ?? [
+      'buffer',
+      'episodic',
+      'semantic',
+      'procedural',
+    ];
+
+    const results: Memory[] = [];
+
+    // Search short-term buffer
+    if (layers.includes('buffer')) {
+      const bufferResults = this.shortTerm.search(query);
+      const bufferMemories: Memory[] = bufferResults.map(
+        (entry) => ({
+          id: entry.id,
+          layer: 'buffer' as const,
+          type: 'conversation' as const,
+          content: entry.message.content,
+          summary: null,
+          importance: 0.5,
+          confidence: 1.0,
+          emotionalValence: null,
+          createdAt: entry.timestamp,
+          lastAccessed: entry.timestamp,
+          accessCount: 0,
+          tags: [entry.message.role],
+          relatedMemories: [],
+          source: 'buffer',
+          metadata: entry.metadata,
+        }),
+      );
+      results.push(...bufferMemories);
+    }
+
+    // Search episodic memories
+    if (layers.includes('episodic')) {
+      const episodicResults = this.episodic.search({
+        query,
+        types: options.types,
+        minImportance: options.minImportance,
+        timeRange: options.timeRange,
+        tags: options.tags,
+        limit: limit * 2,
+      });
+      results.push(...episodicResults);
+    }
+
+    // Search semantic memory (facts) and convert to Memory format
+    if (layers.includes('semantic')) {
+      const facts = this.semantic.searchFacts(query);
+      const factMemories: Memory[] = facts.map((fact) => ({
+        id: fact.id,
+        layer: 'semantic' as const,
+        type: 'fact' as const,
+        content: `${fact.key}: ${fact.value}`,
+        summary: null,
+        importance: fact.confidence,
+        confidence: fact.confidence,
+        emotionalValence: null,
+        createdAt: fact.createdAt,
+        lastAccessed: fact.updatedAt,
+        accessCount: 0,
+        tags: [fact.category],
+        relatedMemories: [],
+        source: 'semantic',
+        metadata: { category: fact.category, key: fact.key },
+      }));
+      results.push(...factMemories);
+    }
+
+    // Search procedural memory
+    if (layers.includes('procedural')) {
+      const procedures =
+        this.procedural.findRelevantProcedures(query);
+      results.push(...procedures);
+    }
+
+    // Score and rank all results
+    const queryTerms = query
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+
+    const scored = results.map((memory) => {
+      const contentScore = this.scoreContentMatch(
+        memory,
+        queryTerms,
+      );
+      const recencyScore = this.scoreRecency(memory);
+      const importanceScore = memory.importance;
+
+      const totalScore =
+        contentScore * 0.4 +
+        recencyScore * 0.25 +
+        importanceScore * 0.35;
+
+      return { memory, score: totalScore };
+    });
+
+    // Deduplicate by ID
+    const seen = new Set<string>();
+    const deduped = scored.filter((item) => {
+      if (seen.has(item.memory.id)) return false;
+      seen.add(item.memory.id);
+      return true;
+    });
+
+    // Sort by score descending and return top-K
+    deduped.sort((a, b) => b.score - a.score);
+    return deduped.slice(0, limit).map((s) => s.memory);
+  }
+
+  // ─── Context Assembly ─────────────────────────────────────────────
+
+  /**
+   * Assemble relevant context for the brain to use in generating a response.
+   */
+  getRelevantContext(
+    query: string,
+    recentMessageCount = 10,
+    memoryLimit = 15,
+  ): RelevantContext {
+    const recentMessages =
+      this.shortTerm.getMessages(recentMessageCount);
+
+    const relevantMemories = this.recall(query, {
+      layers: ['episodic', 'procedural'],
+      limit: memoryLimit,
+      minImportance: 0.2,
+    });
+
+    const relevantFacts = this.semantic.searchFacts(query, 10);
+
+    const unresolvedMistakes =
+      this.procedural.getUnresolvedMistakes();
+
+    return {
+      recentMessages,
+      relevantMemories,
+      relevantFacts,
+      unresolvedMistakes,
+    };
+  }
+
+  // ─── Buffer Convenience ───────────────────────────────────────────
+
+  /**
+   * Add a message to the short-term buffer.
+   */
+  addToBuffer(
+    role: AIMessage['role'],
+    content: string,
+    metadata?: Record<string, unknown>,
+  ): BufferEntry {
+    return this.shortTerm.add({ role, content }, metadata);
+  }
+
+  /**
+   * Get recent buffer messages.
+   */
+  getBufferMessages(count?: number): AIMessage[] {
+    return this.shortTerm.getMessages(count);
+  }
+
+  // ─── Fact Convenience ─────────────────────────────────────────────
+
+  /**
+   * Store a user fact.
+   */
+  storeFact(
+    category: UserFact['category'],
+    key: string,
+    value: string,
+    confidence = 0.8,
+  ): UserFact {
+    return this.semantic.storeFact({
+      category,
+      key,
+      value,
+      confidence,
+    });
+  }
+
+  /**
+   * Get facts relevant to a query.
+   */
+  getRelevantFacts(query: string, limit = 15): UserFact[] {
+    return this.semantic.searchFacts(query, limit);
+  }
+
+  // ─── Consolidation ────────────────────────────────────────────────
+
+  /**
+   * Run the dream cycle consolidation process.
+   */
+  consolidate(): ConsolidationReport {
+    return this.consolidation.runConsolidation();
+  }
+
+  /**
+   * Get memory system statistics.
+   */
+  getStats(): ConsolidationStats & {
+    bufferSize: number;
+    bufferFull: boolean;
+  } {
+    const stats = this.consolidation.getStats();
+    return {
+      ...stats,
+      bufferSize: this.shortTerm.size,
+      bufferFull: this.shortTerm.isFull,
+    };
+  }
+
+  // ─── Lifecycle ────────────────────────────────────────────────────
+
+  /**
+   * Shut down the memory manager, closing the database.
+   */
+  shutdown(): void {
+    log.info('Shutting down MemoryManager');
+    closeDatabase();
+    this.initialized = false;
+  }
+
+  /**
+   * Alias for shutdown (backward compat).
+   */
+  close(): void {
+    this.shutdown();
+  }
+
+  // ─── Private Helpers ──────────────────────────────────────────────
+
+  private typeToFactCategory(
+    type: MemoryType,
+  ): UserFact['category'] {
+    switch (type) {
+      case 'preference':
+        return 'preference';
+      case 'contact':
+        return 'contact';
+      case 'workflow':
+        return 'skill';
+      case 'fact':
+      case 'opinion':
+        return 'fact';
+      default:
+        return 'fact';
+    }
+  }
+
+  private scoreContentMatch(
+    memory: Memory,
+    queryTerms: string[],
+  ): number {
+    if (queryTerms.length === 0) return 0;
+
+    const text =
+      `${memory.content} ${memory.summary ?? ''} ${memory.tags.join(' ')}`.toLowerCase();
+    let hits = 0;
+    for (const term of queryTerms) {
+      if (text.includes(term)) hits++;
+    }
+    return hits / queryTerms.length;
+  }
+
+  private scoreRecency(memory: Memory): number {
+    const created =
+      typeof memory.createdAt === 'string'
+        ? new Date(memory.createdAt).getTime()
+        : Date.now();
+    const ageMs = Date.now() - created;
+    const ageHours = ageMs / (1000 * 60 * 60);
+    return Math.exp(-0.0144 * ageHours);
+  }
+}
+
+// ─── Re-exports ───────────────────────────────────────────────────
+
+export { closeDatabase, getDatabase } from './database.js';
+export { ShortTermMemory } from './short-term.js';
+export type { BufferEntry } from './short-term.js';
+export { EpisodicMemory } from './episodic.js';
+export type {
+  StoreOptions,
+  SearchOptions,
+} from './episodic.js';
+export { SemanticMemory } from './semantic.js';
+export type { StoreFactOptions } from './semantic.js';
+export { ProceduralMemory } from './procedural.js';
+export { MemoryConsolidation } from './consolidation.js';
+export type {
+  ConsolidationReport,
+  ConsolidationStats,
+} from './consolidation.js';

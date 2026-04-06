@@ -1,0 +1,76 @@
+import 'dotenv/config';
+import { loadConfig } from './config.js';
+import { createLogger } from './utils/logger.js';
+import { Orchestrator } from './core/orchestrator.js';
+import { MemoryManager } from './memory/index.js';
+import { MemoryCortex } from './memory/cortex.js';
+import { PersonalityEngine } from './personality/index.js';
+import { AgentManager } from './agents/index.js';
+import { AIManager } from './ai/index.js';
+import { TelegramGateway } from './telegram/index.js';
+import { MacOSController } from './macos/index.js';
+import { LearningSystem } from './learning/index.js';
+
+const log = createLogger('Main');
+
+async function main() {
+  log.info('Initializing NEXUS...');
+
+  // Load configuration
+  const config = loadConfig();
+
+  // Initialize subsystems
+  log.info('Initializing memory system...');
+  const memory = new MemoryManager(config.memory.maxShortTerm);
+
+  log.info('Initializing personality engine...');
+  const personality = new PersonalityEngine(config);
+
+  log.info('Initializing AI providers...');
+  const ai = new AIManager(config.ai.provider);
+
+  log.info('Initializing macOS controller...');
+  const macos = new MacOSController();
+
+  log.info('Initializing agents...');
+  const agents = new AgentManager();
+
+  log.info('Initializing learning system...');
+  const cortex = new MemoryCortex();
+  const learning = new LearningSystem(cortex);
+
+  log.info('Initializing Telegram bot...');
+  const telegram = new TelegramGateway({
+    botToken: config.telegram.botToken,
+    chatId: config.telegram.botToken ? (process.env.NEXUS_CHAT_ID ?? '') : '',
+  });
+
+  // Create and wire up orchestrator
+  const orchestrator = new Orchestrator();
+  orchestrator.init({ memory, personality, agents, ai, telegram, macos, learning });
+
+  // Wire orchestrator into gateway for command handlers
+  telegram.setOrchestrator(orchestrator);
+
+  // Handle graceful shutdown
+  const shutdown = async () => {
+    log.info('Received shutdown signal');
+    await orchestrator.stop();
+    process.exit(0);
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+
+  // Start everything
+  await orchestrator.start();
+
+  log.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  log.info('  NEXUS is alive. Waiting for messages...');
+  log.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+}
+
+main().catch((err) => {
+  log.fatal({ err }, 'Failed to start NEXUS');
+  process.exit(1);
+});
