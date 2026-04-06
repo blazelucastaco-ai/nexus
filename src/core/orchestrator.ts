@@ -4,8 +4,10 @@
 // personality + memory + reasoning + agent delegation = response.
 
 import { homedir } from 'node:os';
+import { mkdir as mkdirFS, writeFile as writeFileFS } from 'node:fs/promises';
+import { dirname as dirnameFS } from 'node:path';
 import { createLogger } from '../utils/logger.js';
-import { generateId, nowISO, truncate } from '../utils/helpers.js';
+import { generateId, nowISO, truncate, extractCleanContent } from '../utils/helpers.js';
 import { loadConfig } from '../config.js';
 import { assembleContext, buildSystemPrompt, parseActions, stripActions } from './context.js';
 import { EventLoop } from './event-loop.js';
@@ -31,9 +33,51 @@ import type { LearningSystem } from '../learning/index.js';
 const log = createLogger('Orchestrator');
 
 // ─── Regex patterns for inline directives the LLM can emit ──────────
-const DELEGATE_PATTERN = /\[DELEGATE:(\w+):([^\]]+)\]/g;
 const REMEMBER_PATTERN = /\[REMEMBER:([^\]]+)\]/g;
 const RECALL_PATTERN = /\[RECALL:([^\]]+)\]/g;
+
+/**
+ * Extract all [DELEGATE:agent:task] blocks using bracket-counting so that
+ * task content can contain ] characters (e.g. Python list access data[0]).
+ * The simple regex /[^\]]+/ would break on any ] inside the task body.
+ */
+function extractDelegations(
+  response: string,
+): Array<{ agent: string; task: string; fullMatch: string }> {
+  const delegations: Array<{ agent: string; task: string; fullMatch: string }> = [];
+  const MARKER = '[DELEGATE:';
+  let i = 0;
+
+  while (i < response.length) {
+    const start = response.indexOf(MARKER, i);
+    if (start === -1) break;
+
+    const agentStart = start + MARKER.length;
+    const agentEnd = response.indexOf(':', agentStart);
+    if (agentEnd === -1) { i = start + 1; continue; }
+
+    const agent = response.slice(agentStart, agentEnd);
+    if (!/^\w+$/.test(agent)) { i = start + 1; continue; }
+
+    // Count brackets to find the matching ]
+    let depth = 1;
+    let j = agentEnd + 1;
+    while (j < response.length && depth > 0) {
+      if (response[j] === '[') depth++;
+      else if (response[j] === ']') depth--;
+      j++;
+    }
+
+    if (depth !== 0) { i = start + 1; continue; } // unmatched
+
+    const task = response.slice(agentEnd + 1, j - 1);
+    const fullMatch = response.slice(start, j);
+    delegations.push({ agent, task, fullMatch });
+    i = j;
+  }
+
+  return delegations;
+}
 
 // ─── Orchestrator ────────────────────────────────────────────────────
 
@@ -263,11 +307,27 @@ export class Orchestrator {
       const allResults = [...agentResults, ...legacyResults];
 
       if (allResults.length > 0) {
-        finalResponse = await this.integrateAgentResults(
+        const integrated = await this.integrateAgentResults(
           finalResponse,
           allResults,
           systemPrompt,
         );
+        // BUG C fix: process any new delegations in the integration response
+        // (e.g., write-after-collect where LLM gathers terminal data then writes a file)
+        const { cleanResponse: intClean, agentResults: intResults } =
+          await this.processDelegations(integrated);
+        if (intResults.length > 0) {
+          finalResponse = await this.integrateAgentResults(intClean, intResults, systemPrompt);
+        } else {
+          // BUG C fallback: if integration produced no new delegations but the
+          // original task asked to save data to a file, write collected results directly.
+          const savedPath = await this.maybeWriteCollectedResults(text, allResults);
+          if (savedPath) {
+            finalResponse = intClean + `\n\n(Results saved to ${savedPath})`;
+          } else {
+            finalResponse = intClean;
+          }
+        }
       }
 
       // ── 11. Store assistant response ──────────────────────────
@@ -398,22 +458,33 @@ appropriate agent using this inline format:
 IMPORTANT — Terminal agent: always include the EXACT shell command to run, not a
 description. The command is passed directly to zsh, so it must be valid syntax.
 
-Examples:
-    [DELEGATE:file:Read the contents of ~/Desktop/notes.txt]
+IMPORTANT — File write agent: use function-call syntax with the ACTUAL code/content
+directly in the content parameter. Use \\n for newlines. Do NOT wrap the content in
+markdown code fences inside the parameter. Do NOT include prose.
+
+File write examples (correct):
+    [DELEGATE:file:write_file(path='~/nexus-workspace/hello.py', content='print("hello")\\n')]
+    [DELEGATE:file:write_file(path='~/nexus-workspace/script.sh', content='#!/bin/bash\\necho "done"\\n')]
+    [DELEGATE:file:read_file(path='~/Desktop/nexus/package.json')]
+    [DELEGATE:file:list_files(path='~/nexus-workspace')]
+
+Other delegation examples:
     [DELEGATE:terminal:docker ps]
     [DELEGATE:terminal:node -v]
     [DELEGATE:terminal:df -h]
     [DELEGATE:terminal:ls -la ~/Desktop]
     [DELEGATE:terminal:du -sh ~/Documents]
     [DELEGATE:browser:Search for the latest Node.js LTS version]
-    [DELEGATE:code:Refactor the function to use async/await]
     [DELEGATE:vision:Take a screenshot and describe what is on screen]
     [DELEGATE:scheduler:Set a reminder for 3pm to review the PR]
 
 WRONG (never do this for terminal):
     [DELEGATE:terminal:check node version]           ← description, not a command
     [DELEGATE:terminal:list running containers]       ← description, not a command
-    [DELEGATE:terminal:show disk space]               ← description, not a command
+
+WRONG (never do this for file writes):
+    Put markdown code fences inside the content parameter — that adds extra backticks to the file!
+    Use a plain text description instead of write_file() function-call syntax!
 
 You may include multiple delegations in a single response. Always include
 conversational text alongside delegations — explain what you are doing and why.
@@ -509,15 +580,9 @@ ${insights.slice(0, 8).join('\n')}`);
       fullMatch: string;
     }> = [];
 
-    // Collect all delegation markers
-    let match: RegExpExecArray | null;
-    DELEGATE_PATTERN.lastIndex = 0;
-    while ((match = DELEGATE_PATTERN.exec(response)) !== null) {
-      delegations.push({
-        agent: match[1]!,
-        task: match[2]!,
-        fullMatch: match[0],
-      });
+    // Collect all delegation markers using bracket-aware extractor
+    for (const d of extractDelegations(response)) {
+      delegations.push(d);
     }
 
     if (delegations.length === 0) {
@@ -532,10 +597,17 @@ ${insights.slice(0, 8).join('\n')}`);
     // Execute each delegation
     for (const delegation of delegations) {
       try {
-        const result = await this.delegateToAgent(
-          delegation.agent as AgentName,
-          delegation.task,
-        );
+        // BUG A fix: for file write delegations with no content param, extract
+        // code from the response and execute directly with clean params
+        const delegationPos = response.indexOf(delegation.fullMatch);
+        const directParams =
+          delegation.agent === 'file' && !delegation.task.includes('content=')
+            ? this.extractFileWriteParams(delegation.task, response, delegationPos)
+            : null;
+
+        const result = directParams
+          ? await this.executeAgentAction('file', 'write_file', directParams)
+          : await this.delegateToAgent(delegation.agent as AgentName, delegation.task);
         const summary = await this.processAgentResult(
           delegation.agent,
           result,
@@ -557,6 +629,46 @@ ${insights.slice(0, 8).join('\n')}`);
     cleanResponse = cleanResponse.replace(/\n{3,}/g, '\n\n').trim();
 
     return { cleanResponse, agentResults: results };
+  }
+
+  /**
+   * For file write delegations that have no content= parameter, scan the LLM
+   * response for code blocks and return direct params with the clean code.
+   * Returns null if no code block can be found or task is not a write op.
+   */
+  private extractFileWriteParams(
+    task: string,
+    response: string,
+    delegationPos: number,
+  ): Record<string, unknown> | null {
+    if (!/write|save|create/i.test(task)) return null;
+
+    // Collect code blocks from the full response
+    const blocks: Array<{ code: string; pos: number }> = [];
+    const re = /```(?:\w*)\n?([\s\S]*?)```/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(response)) !== null) {
+      const code = m[1]!;
+      if (code.trim().length > 0) blocks.push({ code, pos: m.index });
+    }
+    if (blocks.length === 0) return null;
+
+    // Closest code block to the delegation marker
+    let best = blocks[0]!;
+    let bestDist = Math.abs(best.pos - delegationPos);
+    for (const b of blocks.slice(1)) {
+      const d = Math.abs(b.pos - delegationPos);
+      if (d < bestDist) { best = b; bestDist = d; }
+    }
+
+    const code = best.code.endsWith('\n') ? best.code : best.code + '\n';
+
+    // Extract file path from task text
+    const pathMatch = task.match(/(~\/[^\s,)'"[\]]+|\/[^\s,)'"[\]]+)/);
+    if (!pathMatch) return null;
+    const rawPath = pathMatch[1]!.replace(/:+$/, '').replace(/^~/, homedir());
+
+    return { path: rawPath, content: code, createDirs: true };
   }
 
   /**
@@ -623,10 +735,12 @@ ${insights.slice(0, 8).join('\n')}`);
     result: AgentResult,
   ): Promise<string> {
     if (result.success) {
+      // Use a generous limit so terminal output isn't truncated before integration
+      const limit = agentName === 'terminal' ? 8000 : 2000;
       const dataSummary =
         typeof result.data === 'string'
-          ? truncate(result.data, 400)
-          : truncate(JSON.stringify(result.data), 400);
+          ? truncate(result.data, limit)
+          : truncate(JSON.stringify(result.data), limit);
       return `[${agentName}] Completed (${result.duration}ms): ${dataSummary}`;
     }
     return `[${agentName}] Failed (${result.duration}ms): ${result.error ?? 'unknown error'}`;
@@ -746,6 +860,56 @@ ${insights.slice(0, 8).join('\n')}`);
     return processed.replace(/\n{3,}/g, '\n\n').trim();
   }
 
+  // ── Write-after-collect fallback ────────────────────────────────────
+
+  /**
+   * If the user's original message requested saving data to a file AND we have
+   * collected terminal/agent results, write them directly without another LLM call.
+   * Returns the written path, or null if no file-save was detected.
+   */
+  private async maybeWriteCollectedResults(
+    originalText: string,
+    results: string[],
+  ): Promise<string | null> {
+    // Only applies when there are collected results to save
+    if (results.length === 0) return null;
+
+    // Detect file-save intent: look for a path pattern in the original message
+    // Allow dots (for file extensions) but trim trailing punctuation
+    const savePattern =
+      /\bsave\b.*?(~\/[^\s,'")\]]+|\/[^\s,'")\]]+)|(?:to|into)\s+(~\/[^\s,'")\]]+|\/[^\s,'")\]]+)/i;
+    const m = originalText.match(savePattern);
+    if (!m) return null;
+
+    const rawPath = (m[1] ?? m[2] ?? '').replace(/:+$/, '').replace(/[.,;!?]+$/, '');
+    if (!rawPath) return null;
+
+    const filePath = rawPath.startsWith('~/')
+      ? rawPath.replace(/^~/, homedir())
+      : rawPath;
+
+    // Only write markdown/text files (don't accidentally overwrite code)
+    if (!filePath.match(/\.(md|txt|log|csv|json|yaml|yml)$/i) && !filePath.includes('report')) {
+      return null;
+    }
+
+    // Build a clean report from raw results
+    const content =
+      `# System Report\nGenerated: ${nowISO()}\n\n` +
+      results.join('\n\n---\n\n') +
+      '\n';
+
+    try {
+      await mkdirFS(dirnameFS(filePath), { recursive: true });
+      await writeFileFS(filePath, content, 'utf-8');
+      log.info({ path: filePath, size: content.length }, 'Write-after-collect: saved results');
+      return filePath;
+    } catch (err) {
+      log.warn({ err, path: filePath }, 'Write-after-collect: failed to write');
+      return null;
+    }
+  }
+
   // ── Result Integration ────────────────────────────────────────────
 
   /**
@@ -768,7 +932,7 @@ ${insights.slice(0, 8).join('\n')}`);
     });
     this.conversationHistory.push({
       role: 'user',
-      content: `[SYSTEM: Agent results — integrate these into a natural response for the user. Be concise.]\n${resultSummary}`,
+      content: `[SYSTEM: Agent results received. IMPORTANT: If the original task required saving data to a file, you MUST emit a [DELEGATE:file:write_file(path='<target_path>', content='''<full content>''')] block where <full content> contains ALL the raw output from the agents verbatim — do not truncate or summarize. Otherwise just summarize for the user.]\n\nRaw agent output:\n${resultSummary}`,
     });
 
     try {
@@ -776,7 +940,7 @@ ${insights.slice(0, 8).join('\n')}`);
         messages: this.conversationHistory.slice(-10),
         systemPrompt,
         model: this.config.ai.model,
-        maxTokens: 2048,
+        maxTokens: 4096,
         temperature: this.config.ai.temperature,
       });
 
@@ -952,15 +1116,30 @@ ${insights.slice(0, 8).join('\n')}`);
       if (funcCallMatch) {
         const argsStr = funcCallMatch[1]!;
         const parsed: Record<string, unknown> = { ...common };
+
+        // Handle triple-quoted strings first (content='''...''' or content="""...""")
+        const tripleQuotedRe = /(\w+)\s*=\s*(?:'''([\s\S]*?)'''|"""([\s\S]*?)""")/g;
+        let tqm: RegExpExecArray | null;
+        while ((tqm = tripleQuotedRe.exec(argsStr)) !== null) {
+          parsed[tqm[1]!] = tqm[2] ?? tqm[3] ?? '';
+        }
+
+        // Then handle regular single/double-quoted strings for remaining params
         const namedParamRe = /(\w+)\s*=\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")/g;
         let pm: RegExpExecArray | null;
         while ((pm = namedParamRe.exec(argsStr)) !== null) {
           const key = pm[1]!;
+          // Skip if already captured by triple-quote regex
+          if (parsed[key] !== undefined && parsed[key] !== common[key]) continue;
           const val = (pm[2] ?? pm[3] ?? '').replace(/\\'/g, "'").replace(/\\"/g, '"');
           parsed[key] = val;
         }
         if (parsed.path) {
           parsed.path = String(parsed.path).replace(/^~/, homedir()).replace(/:+$/, '');
+        }
+        // BUG A fix: strip markdown fences / decode escape sequences in content param
+        if (parsed.content && typeof parsed.content === 'string') {
+          parsed.content = extractCleanContent(parsed.content as string);
         }
         return parsed;
       }
@@ -1000,6 +1179,23 @@ ${insights.slice(0, 8).join('\n')}`);
         if (kvResult.path) return kvResult;
       }
 
+      // 2d. If task contains a code fence, extract path + code from it (BUG A fix)
+      const taskFenceMatch = cleanTask.match(/```(?:\w*)\n?([\s\S]*?)```/);
+      if (taskFenceMatch) {
+        const codeContent = taskFenceMatch[1]!;
+        const proseSection = cleanTask.slice(0, cleanTask.indexOf('```'));
+        const pathInProse =
+          proseSection.match(/(?:^|[\s:=])(~\/\S+|\/\S+)/)?.[1] ??
+          proseSection.match(/(?:"([^"]+)"|'([^']+)')/)?.[1];
+        if (pathInProse) {
+          return {
+            ...common,
+            path: pathInProse.replace(/:+$/, '').replace(/^~/, homedir()),
+            content: codeContent.endsWith('\n') ? codeContent : codeContent + '\n',
+          };
+        }
+      }
+
       // 3. Extract path — prefer tilde/absolute paths over quoted strings
       const absPathMatch = cleanTask.match(/(?:^|[\s:=])(~\/\S+|\/\S+)/);
       const quotedMatch = cleanTask.match(/(?:^|[\s:=])(?:"([^"]+)"|'([^']+)')/);
@@ -1017,10 +1213,13 @@ ${insights.slice(0, 8).join('\n')}`);
         extractedPath = extractedPath.replace(/^~/, homedir());
       }
 
+      // BUG A fix: if the task itself has code fences or escape sequences, clean it
+      const cleanedContent = extractCleanContent(cleanTask);
+
       return {
         ...common,
         path: extractedPath ?? cleanTask,
-        content: cleanTask,
+        content: cleanedContent,
       };
     }
 
@@ -1145,8 +1344,7 @@ ${insights.slice(0, 8).join('\n')}`);
     }
 
     // Agent delegations indicate substantive work
-    DELEGATE_PATTERN.lastIndex = 0;
-    if (DELEGATE_PATTERN.test(response) || /```action/.test(response)) {
+    if (response.includes('[DELEGATE:') || /```action/.test(response)) {
       importance += 0.15;
     }
 

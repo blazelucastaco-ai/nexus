@@ -13,7 +13,7 @@ import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import type { AgentResult } from '../types.js';
 import { BaseAgent } from './base-agent.js';
-import { nowISO } from '../utils/helpers.js';
+import { nowISO, extractCleanContent } from '../utils/helpers.js';
 
 function expandPath(p: string): string {
   if (p.startsWith('~')) return p.replace(/^~/, homedir());
@@ -108,10 +108,20 @@ export class FileAgent extends BaseAgent {
     if (funcCallMatch) {
       // Function-call format: write_file(path='X', content='Y')
       const argsStr = funcCallMatch[1]!;
+
+      // Handle triple-quoted strings first (content='''...''' or content="""...""")
+      const tripleQuotedRe = /(\w+)\s*=\s*(?:'''([\s\S]*?)'''|"""([\s\S]*?)""")/g;
+      let tqm: RegExpExecArray | null;
+      while ((tqm = tripleQuotedRe.exec(argsStr)) !== null) {
+        p[tqm[1]!] = tqm[2] ?? tqm[3] ?? '';
+      }
+
+      // Then handle regular single/double-quoted strings
       const namedParamRe = /(\w+)\s*=\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")/g;
       let pm: RegExpExecArray | null;
       while ((pm = namedParamRe.exec(argsStr)) !== null) {
         const key = pm[1]!;
+        if (p[key] != null && p[key] !== '') continue; // skip if triple-quote already set
         const val = (pm[2] ?? pm[3] ?? '').replace(/\\'/g, "'").replace(/\\"/g, '"');
         p[key] = val;
       }
@@ -230,7 +240,10 @@ export class FileAgent extends BaseAgent {
 
   private async writeFile(params: Record<string, unknown>, start: number): Promise<AgentResult> {
     const filePath = expandPath(String(params.path));
-    const content = String(params.content ?? '');
+    // BUG A fix: clean content to remove any markdown fences or LLM prose that
+    // leaked into the content parameter
+    const rawContent = String(params.content ?? '');
+    const content = extractCleanContent(rawContent);
     const createDirs = Boolean(params.createDirs ?? true);
 
     if (createDirs) {
