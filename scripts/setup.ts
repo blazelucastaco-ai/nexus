@@ -274,6 +274,7 @@ interface AIConfig {
   providers: string[];
   anthropicKey: string;
   openaiKey: string;
+  geminiKey: string;
   ollamaEnabled: boolean;
 }
 
@@ -314,6 +315,13 @@ async function setupAI(): Promise<AIConfig> {
       },
       {
         name:
+          chalk.bold("Google Gemini") +
+          chalk.dim(" — gemini-2.5-flash via OpenAI-compat endpoint"),
+        value: "gemini",
+        checked: false,
+      },
+      {
+        name:
           chalk.bold("Ollama (Local)") + chalk.dim(" — Free, runs on device"),
         value: "ollama",
         checked: false,
@@ -323,6 +331,7 @@ async function setupAI(): Promise<AIConfig> {
 
   let anthropicKey = "";
   let openaiKey = "";
+  let geminiKey = "";
   let ollamaEnabled = false;
 
   if (providers.includes("anthropic")) {
@@ -343,6 +352,20 @@ async function setupAI(): Promise<AIConfig> {
     console.log("");
     openaiKey = await password({
       message: chalk.magenta("OpenAI API Key:"),
+      mask: "•",
+      validate: (val: string) => {
+        if (!val || val.length < 10) {
+          return "API key looks too short.";
+        }
+        return true;
+      },
+    });
+  }
+
+  if (providers.includes("gemini")) {
+    console.log("");
+    geminiKey = await password({
+      message: chalk.magenta("Google Gemini API Key:"),
       mask: "•",
       validate: (val: string) => {
         if (!val || val.length < 10) {
@@ -374,7 +397,7 @@ async function setupAI(): Promise<AIConfig> {
     }
   }
 
-  if (!anthropicKey && !openaiKey && !ollamaEnabled) {
+  if (!anthropicKey && !openaiKey && !geminiKey && !ollamaEnabled) {
     console.log("");
     console.log(
       boxen(
@@ -394,7 +417,7 @@ async function setupAI(): Promise<AIConfig> {
     );
   }
 
-  return { providers, anthropicKey, openaiKey, ollamaEnabled };
+  return { providers, anthropicKey, openaiKey, geminiKey, ollamaEnabled };
 }
 
 // ─── Step 4: Agent Selection ────────────────────────────────────────
@@ -895,12 +918,19 @@ async function writeConfiguration(opts: {
         ? "anthropic"
         : opts.ai.openaiKey
           ? "openai"
-          : "ollama",
+          : opts.ai.geminiKey
+            ? "gemini"
+            : "ollama",
       model: opts.ai.anthropicKey
         ? "claude-sonnet-4-20250514"
         : opts.ai.openaiKey
           ? "gpt-4o"
-          : "llama3",
+          : opts.ai.geminiKey
+            ? "gemini-2.5-flash"
+            : "llama3",
+      baseURL: opts.ai.geminiKey
+        ? "https://generativelanguage.googleapis.com/v1beta/openai/"
+        : undefined,
       fallbackModel: opts.ai.openaiKey
         ? "gpt-4o-mini"
         : "claude-haiku-4-5-20251001",
@@ -943,6 +973,9 @@ async function writeConfiguration(opts: {
     opts.ai.openaiKey
       ? `OPENAI_API_KEY=${opts.ai.openaiKey}`
       : "# OPENAI_API_KEY=",
+    opts.ai.geminiKey
+      ? `GEMINI_API_KEY=${opts.ai.geminiKey}`
+      : "# GEMINI_API_KEY=",
     opts.ai.ollamaEnabled
       ? "OLLAMA_BASE_URL=http://localhost:11434"
       : "# OLLAMA_BASE_URL=http://localhost:11434",
@@ -1077,9 +1110,11 @@ function showCelebration(opts: {
     ? "Anthropic Claude"
     : opts.ai.openaiKey
       ? "OpenAI GPT-4"
-      : opts.ai.ollamaEnabled
-        ? "Ollama (local)"
-        : "None configured";
+      : opts.ai.geminiKey
+        ? "Google Gemini 2.5 Flash"
+        : opts.ai.ollamaEnabled
+          ? "Ollama (local)"
+          : "None configured";
 
   console.log(
     boxen(

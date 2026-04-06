@@ -30,18 +30,24 @@ NEXUS is a persistent, opinionated AI assistant that runs locally on your Mac an
 - 🖥️ **Full macOS control** -- Screenshots, mouse/keyboard automation, app management
 - 🤖 **10 pre-built sub-agents** -- Vision, File, Browser, Terminal, Code, Research, System, Creative, Comms, Scheduler
 - 📚 **Learning system** -- Tracks your preferences, mistakes, and behavioral patterns
-- 🔌 **Multi-provider AI** -- Claude, GPT, and Ollama for local models
+- 🔌 **Multi-provider AI** -- Claude, GPT, Gemini, and Ollama for local models
 - ✨ **Beautiful CLI setup** -- Interactive installer that gets you running in minutes
 
 ## Quick Start
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/blazelucastaco-ai/nexus/main/remote-install.sh | bash
+```
+
+That's it. The installer clones the repo, checks your system, installs dependencies, and walks you through setup interactively.
+
+**Or install manually:**
 
 ```bash
 git clone https://github.com/blazelucastaco-ai/nexus.git
 cd nexus
 ./install.sh
 ```
-
-The installer will walk you through setting up your Telegram bot, choosing an AI provider, and configuring your preferences.
 
 ## Architecture
 
@@ -122,7 +128,7 @@ pnpm lint
 - **Node.js 22+**
 - **pnpm**
 - **Telegram account** (for the bot interface)
-- At least one AI provider API key (Anthropic, OpenAI, or local Ollama)
+- At least one AI provider API key (Anthropic, OpenAI, Google Gemini, or local Ollama)
 
 ## License
 
