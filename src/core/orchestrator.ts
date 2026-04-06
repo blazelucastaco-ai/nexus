@@ -3,6 +3,7 @@
 // This is the heart of NEXUS. Every user message flows through here:
 // personality + memory + reasoning + agent delegation = response.
 
+import { homedir } from 'node:os';
 import { createLogger } from '../utils/logger.js';
 import { generateId, nowISO, truncate } from '../utils/helpers.js';
 import { loadConfig } from '../config.js';
@@ -938,20 +939,88 @@ ${insights.slice(0, 8).join('\n')}`);
     };
 
     if (agentName === 'terminal') {
-      return { ...common, command: task };
+      // Strip any descriptive prefix that isn't a real command
+      let command = task;
+      const termPrefixMatch = command.match(/^(?:run|execute|run_command|get_output):\s*/i);
+      if (termPrefixMatch) command = command.slice(termPrefixMatch[0].length);
+      return { ...common, command };
     }
 
     if (agentName === 'file') {
-      // Extract a path-like token from the task description if present
-      const pathMatch = task.match(/(?:^|\s)(~\/\S+|\/\S+|"[^"]+"|'[^']+')/);
-      const extractedPath = pathMatch
-        ? pathMatch[1].replace(/^['"]|['"]$/g, '')
-        : undefined;
+      // 1. Try function-call syntax: write_file(path='X', content='Y')
+      const funcCallMatch = task.match(/^\w+\s*\(\s*([\s\S]+)\s*\)\s*$/);
+      if (funcCallMatch) {
+        const argsStr = funcCallMatch[1]!;
+        const parsed: Record<string, unknown> = { ...common };
+        const namedParamRe = /(\w+)\s*=\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")/g;
+        let pm: RegExpExecArray | null;
+        while ((pm = namedParamRe.exec(argsStr)) !== null) {
+          const key = pm[1]!;
+          const val = (pm[2] ?? pm[3] ?? '').replace(/\\'/g, "'").replace(/\\"/g, '"');
+          parsed[key] = val;
+        }
+        if (parsed.path) {
+          parsed.path = String(parsed.path).replace(/^~/, homedir()).replace(/:+$/, '');
+        }
+        return parsed;
+      }
+
+      // 2. Strip action prefix like "write_file:", "read_file:", "list:"
+      let cleanTask = task;
+      const actionPrefixRe = /^(?:write_file|read_file|list_files|search_files|move_file|delete_file|disk_usage|organize|list):\s*/i;
+      const actionPrefixMatch = cleanTask.match(actionPrefixRe);
+      if (actionPrefixMatch) cleanTask = cleanTask.slice(actionPrefixMatch[0].length);
+
+      // 2b. If remaining looks like JSON, parse it directly
+      if (cleanTask.trimStart().startsWith('{')) {
+        try {
+          const jsonParsed = JSON.parse(cleanTask.trim()) as Record<string, unknown>;
+          if (typeof jsonParsed.path === 'string') {
+            jsonParsed.path = jsonParsed.path.replace(/^~/, homedir()).replace(/:+$/, '');
+          }
+          return { ...common, ...jsonParsed };
+        } catch {
+          // Not valid JSON, fall through to path extraction
+        }
+      }
+
+      // 2c. If remaining looks like key=value pairs: "path=/foo/bar, content=hello"
+      if (/^\w+=/.test(cleanTask)) {
+        const kvResult: Record<string, unknown> = { ...common };
+        // Extract path= value (up to next ", word=" or end)
+        const pathKvMatch = cleanTask.match(/(?:^|,\s*)path=([^,]+?)(?=\s*,\s*\w+=|$)/);
+        if (pathKvMatch) {
+          kvResult.path = pathKvMatch[1]!.trim().replace(/^~/, homedir()).replace(/:+$/, '');
+        }
+        // Extract content= value (greedy to end, since it may contain commas)
+        const contentKvMatch = cleanTask.match(/(?:^|,\s*)content=(.+)$/s);
+        if (contentKvMatch) {
+          kvResult.content = contentKvMatch[1]!.trim();
+        }
+        if (kvResult.path) return kvResult;
+      }
+
+      // 3. Extract path — prefer tilde/absolute paths over quoted strings
+      const absPathMatch = cleanTask.match(/(?:^|[\s:=])(~\/\S+|\/\S+)/);
+      const quotedMatch = cleanTask.match(/(?:^|[\s:=])(?:"([^"]+)"|'([^']+)')/);
+      let extractedPath: string | undefined;
+      if (absPathMatch) {
+        extractedPath = absPathMatch[1]!;
+      } else if (quotedMatch) {
+        extractedPath = quotedMatch[1] ?? quotedMatch[2];
+      }
+
+      // 4. Strip trailing colons/punctuation from path
+      if (extractedPath) {
+        extractedPath = extractedPath.replace(/:+$/, '');
+        // Expand tilde
+        extractedPath = extractedPath.replace(/^~/, homedir());
+      }
+
       return {
         ...common,
-        path: extractedPath ?? task,
-        // write_file needs both path and content
-        content: task,
+        path: extractedPath ?? cleanTask,
+        content: cleanTask,
       };
     }
 
@@ -978,9 +1047,17 @@ ${insights.slice(0, 8).join('\n')}`);
 
     const taskLower = task.toLowerCase();
 
-    // Try to match a capability name in the task text
+    // Try to match a capability name in the task text (exact)
     for (const cap of agentInfo.capabilities) {
       if (taskLower.includes(cap.toLowerCase())) {
+        return cap;
+      }
+    }
+
+    // Try keyword prefix matching: "write" matches "write_file", "read" matches "read_file", etc.
+    for (const cap of agentInfo.capabilities) {
+      const primaryKeyword = cap.split('_')[0];
+      if (primaryKeyword && taskLower.includes(primaryKeyword)) {
         return cap;
       }
     }

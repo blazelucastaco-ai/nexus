@@ -57,6 +57,11 @@ export class FileAgent extends BaseAgent {
 
   async execute(action: string, params: Record<string, unknown>): Promise<AgentResult> {
     const start = Date.now();
+
+    // Defensive normalisation — the orchestrator's delegation parser may pass
+    // malformed params if the LLM used an unexpected format.
+    params = this.normaliseParams(action, params);
+
     this.log.info({ action, params }, 'FileAgent executing');
 
     try {
@@ -85,6 +90,50 @@ export class FileAgent extends BaseAgent {
       this.log.error({ action, error: msg }, 'FileAgent failed');
       return this.createResult(false, null, msg, start);
     }
+  }
+
+  /**
+   * Clean up params that may arrive malformed from the orchestrator parser.
+   * Handles: function-call strings as path, action prefixes, trailing colons.
+   */
+  private normaliseParams(
+    action: string,
+    params: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const p = { ...params };
+
+    // If path looks like a function call write_file(path='X', content='Y'), parse it
+    const rawPath = p.path != null ? String(p.path) : '';
+    const funcCallMatch = rawPath.match(/^\w+\s*\(\s*([\s\S]+)\s*\)\s*$/);
+    if (funcCallMatch) {
+      // Function-call format: write_file(path='X', content='Y')
+      const argsStr = funcCallMatch[1]!;
+      const namedParamRe = /(\w+)\s*=\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")/g;
+      let pm: RegExpExecArray | null;
+      while ((pm = namedParamRe.exec(argsStr)) !== null) {
+        const key = pm[1]!;
+        const val = (pm[2] ?? pm[3] ?? '').replace(/\\'/g, "'").replace(/\\"/g, '"');
+        p[key] = val;
+      }
+    } else if (rawPath.trimStart().startsWith('{')) {
+      // JSON format: {"path": "...", "content": "..."}
+      try {
+        const jsonParsed = JSON.parse(rawPath.trim()) as Record<string, unknown>;
+        Object.assign(p, jsonParsed);
+      } catch { /* not valid JSON, fall through */ }
+    } else if (rawPath) {
+      // Strip action prefix: "read_file:~/path" → "~/path"
+      let cleanPath = rawPath.replace(/^(?:write_file|read_file|list_files|search_files|move_file|delete_file|disk_usage|organize|list):\s*/i, '');
+      // Strip trailing colons
+      cleanPath = cleanPath.replace(/:+$/, '');
+      p.path = cleanPath;
+    }
+    // Expand tilde in path
+    if (p.path && typeof p.path === 'string') {
+      p.path = p.path.replace(/^~/, homedir());
+    }
+
+    return p;
   }
 
   private async listFiles(params: Record<string, unknown>, start: number): Promise<AgentResult> {
