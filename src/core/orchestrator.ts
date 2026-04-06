@@ -128,8 +128,18 @@ function extractDelegations(
       try {
         const json = JSON.parse(m[1]!.trim()) as Record<string, unknown>;
         const agent = typeof json.agent === 'string' ? json.agent : null;
+        // If params present, extract the meaningful task from them so downstream
+        // parsers (parseFileParams, parseTerminalParams) get the right data.
+        const params = json.params && typeof json.params === 'object'
+          ? json.params as Record<string, unknown>
+          : null;
         const task =
-          typeof json.command === 'string' ? json.command
+          // Terminal: params.command takes priority
+          (params?.command && typeof params.command === 'string') ? params.command
+          // File: params with path → serialize as JSON so parseFileParams step 2b handles it
+          : (params?.path && typeof params.path === 'string') ? JSON.stringify(params)
+          // Fallback: top-level fields
+          : typeof json.command === 'string' ? json.command
           : typeof json.action === 'string' ? json.action
           : typeof json.task === 'string' ? json.task
           : null;
