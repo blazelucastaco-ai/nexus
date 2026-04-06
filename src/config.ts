@@ -40,6 +40,12 @@ export function loadConfig(): NexusConfig {
       allowedUsers: [process.env.TELEGRAM_CHAT_ID],
     };
   }
+  if (process.env.NEXUS_AI_PROVIDER) {
+    parsed.ai = { ...parsed.ai, provider: process.env.NEXUS_AI_PROVIDER };
+  }
+  if (process.env.NEXUS_AI_MODEL) {
+    parsed.ai = { ...parsed.ai, model: process.env.NEXUS_AI_MODEL };
+  }
 
   return NexusConfigSchema.parse(parsed);
 }

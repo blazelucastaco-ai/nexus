@@ -14,7 +14,8 @@ export class OpenAIProvider {
 
   constructor(apiKey?: string) {
     this.apiKey = apiKey ?? process.env.OPENAI_API_KEY ?? '';
-    this.client = new OpenAI({ apiKey: this.apiKey });
+    const baseURL = process.env.OPENAI_BASE_URL;
+    this.client = new OpenAI({ apiKey: this.apiKey, ...(baseURL ? { baseURL } : {}) });
   }
 
   isAvailable(): boolean {

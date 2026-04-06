@@ -3,9 +3,10 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import pino, { type Logger } from 'pino';
 
-const LOG_DIR = join(homedir(), '.nexus', 'logs');
+const NEXUS_DIR = join(homedir(), '.nexus');
+const LOG_DIR = join(NEXUS_DIR, 'logs');
 
-// Ensure log directory exists
+// Ensure log directories exist
 mkdirSync(LOG_DIR, { recursive: true });
 
 const level = process.env.LOG_LEVEL ?? 'info';
@@ -28,7 +29,7 @@ const rootLogger: Logger = pino({
         target: 'pino/file',
         level,
         options: {
-          destination: join(LOG_DIR, 'nexus.log'),
+          destination: join(NEXUS_DIR, 'nexus.log'),
           mkdir: true,
         },
       },

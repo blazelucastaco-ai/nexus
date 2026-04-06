@@ -82,12 +82,6 @@ export class Orchestrator {
     this.macos = subsystems.macos;
     this.learning = subsystems.learning;
 
-    // Route every Telegram message through handleMessage
-    this.telegram.onMessage(async (text: string, ctx: unknown) => {
-      const chatId = String((ctx as any)?.chat?.id ?? '');
-      await this.handleMessage(chatId, text);
-    });
-
     this.initialized = true;
     log.info('Orchestrator initialized with all subsystems');
   }
@@ -168,6 +162,8 @@ export class Orchestrator {
     log.info({ chatId, textLen: text.length }, 'Processing message');
 
     try {
+      log.info({ chatId, text: truncate(text, 200) }, 'Incoming message');
+
       // ── 1. Personality event + short-term memory ──────────────
       this.personality.processEvent('user_message');
       this.memory.addToBuffer('user', text);
@@ -199,11 +195,16 @@ export class Orchestrator {
       const aiResponse = await this.ai.complete({
         messages: this.conversationHistory.slice(-20),
         systemPrompt,
+        model: this.config.ai.model,
         maxTokens: this.config.ai.maxTokens,
         temperature: this.config.ai.temperature,
       });
 
       let responseContent = aiResponse.content;
+      log.info(
+        { provider: aiResponse.provider, model: aiResponse.model, response: truncate(responseContent, 200) },
+        'AI response received',
+      );
 
       // ── 8. Process memory directives ──────────────────────────
       responseContent = await this.processMemoryDirectives(responseContent);
@@ -294,7 +295,7 @@ export class Orchestrator {
 
       return finalResponse;
     } catch (err) {
-      log.error({ err }, 'Failed to process message');
+      log.error({ err, chatId, text: truncate(text, 200) }, 'Failed to process message');
       this.personality.processEvent('task_failure');
       return "Something went wrong on my end. I'm looking into it. Try again in a moment.";
     }
@@ -696,6 +697,7 @@ ${insights.slice(0, 8).join('\n')}`);
       const followUp = await this.ai.complete({
         messages: this.conversationHistory.slice(-10),
         systemPrompt,
+        model: this.config.ai.model,
         maxTokens: 2048,
         temperature: this.config.ai.temperature,
       });
