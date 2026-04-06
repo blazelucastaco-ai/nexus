@@ -39,7 +39,9 @@ const RECALL_PATTERN = /\[RECALL:([^\]]+)\]/g;
 /**
  * Extract all [DELEGATE:agent:task] blocks using bracket-counting so that
  * task content can contain ] characters (e.g. Python list access data[0]).
- * The simple regex /[^\]]+/ would break on any ] inside the task body.
+ * Quote-aware: brackets inside single/double/triple-quoted strings are ignored
+ * so that shell test operators, regex patterns, and string literals don't
+ * prematurely close the delegation block.
  */
 function extractDelegations(
   response: string,
@@ -59,12 +61,44 @@ function extractDelegations(
     const agent = response.slice(agentStart, agentEnd);
     if (!/^\w+$/.test(agent)) { i = start + 1; continue; }
 
-    // Count brackets to find the matching ]
+    // Quote-aware bracket scan to find the matching ]
+    // Brackets inside quoted strings are not counted so content like
+    // `if [ -z "$x" ]; then`, `arr[0]`, or `"value]"` don't close early.
     let depth = 1;
     let j = agentEnd + 1;
     while (j < response.length && depth > 0) {
-      if (response[j] === '[') depth++;
-      else if (response[j] === ']') depth--;
+      // Skip triple-quoted strings first (''' or """)
+      const ch = response[j]!;
+      if ((ch === "'" || ch === '"') && response.slice(j, j + 3) === ch.repeat(3)) {
+        const q3 = response.slice(j, j + 3);
+        j += 3;
+        const endQ = response.indexOf(q3, j);
+        if (endQ === -1) { depth = -1; break; } // unmatched
+        j = endQ + 3;
+        continue;
+      }
+      // Skip single-quoted strings
+      if (ch === "'") {
+        j++;
+        while (j < response.length && response[j] !== "'") {
+          if (response[j] === '\\') j++;
+          j++;
+        }
+        j++; // skip closing quote
+        continue;
+      }
+      // Skip double-quoted strings
+      if (ch === '"') {
+        j++;
+        while (j < response.length && response[j] !== '"') {
+          if (response[j] === '\\') j++;
+          j++;
+        }
+        j++; // skip closing quote
+        continue;
+      }
+      if (ch === '[') depth++;
+      else if (ch === ']') depth--;
       j++;
     }
 
@@ -74,6 +108,39 @@ function extractDelegations(
     const fullMatch = response.slice(start, j);
     delegations.push({ agent, task, fullMatch });
     i = j;
+  }
+
+  // Also parse JSON action blocks emitted by the LLM:
+  //   ```action
+  //   {"agent": "terminal", "command": "node -v"}
+  //   ```
+  // or inline: action\n{"agent": "...", "command": "..."}
+  const jsonPatterns: RegExp[] = [
+    /```action\s*\n([\s\S]*?)```/g,
+    /\baction\b\s*\n(\{[^\n]*\})/g,
+  ];
+  const seenMatches = new Set(delegations.map((d) => d.fullMatch));
+  for (const re of jsonPatterns) {
+    let m: RegExpExecArray | null;
+    re.lastIndex = 0;
+    while ((m = re.exec(response)) !== null) {
+      if (seenMatches.has(m[0])) continue;
+      try {
+        const json = JSON.parse(m[1]!.trim()) as Record<string, unknown>;
+        const agent = typeof json.agent === 'string' ? json.agent : null;
+        const task =
+          typeof json.command === 'string' ? json.command
+          : typeof json.action === 'string' ? json.action
+          : typeof json.task === 'string' ? json.task
+          : null;
+        if (agent && task) {
+          delegations.push({ agent, task, fullMatch: m[0] });
+          seenMatches.add(m[0]);
+        }
+      } catch {
+        // Not valid JSON, skip
+      }
+    }
   }
 
   return delegations;
@@ -306,31 +373,36 @@ export class Orchestrator {
         }
       }
 
-      // ── 10. Merge results into final response ─────────────────
+      // ── 10. Merge results into final response (multi-turn loop) ──
       let finalResponse = conversationalPart;
-      const allResults = [...agentResults, ...legacyResults];
+      const initialResults = [...agentResults, ...legacyResults];
+      let pendingResults = initialResults;
+      // Loop up to 5 times so multi-file tasks (generate file 1 → integrate →
+      // generate file 2 → integrate → ...) all complete in one handleMessage call.
+      const MAX_INTEGRATION_TURNS = 5;
+      let integrationTurns = 0;
+      let firstTurnHadDelegations = false;
 
-      if (allResults.length > 0) {
+      while (pendingResults.length > 0 && integrationTurns < MAX_INTEGRATION_TURNS) {
+        integrationTurns++;
         const integrated = await this.integrateAgentResults(
           finalResponse,
-          allResults,
+          pendingResults,
           systemPrompt,
         );
-        // BUG C fix: process any new delegations in the integration response
-        // (e.g., write-after-collect where LLM gathers terminal data then writes a file)
-        const { cleanResponse: intClean, agentResults: intResults } =
+        const { cleanResponse: nextClean, agentResults: nextResults } =
           await this.processDelegations(integrated);
-        if (intResults.length > 0) {
-          finalResponse = await this.integrateAgentResults(intClean, intResults, systemPrompt);
-        } else {
-          // BUG C fallback: if integration produced no new delegations but the
-          // original task asked to save data to a file, write collected results directly.
-          const savedPath = await this.maybeWriteCollectedResults(text, allResults);
-          if (savedPath) {
-            finalResponse = intClean + `\n\n(Results saved to ${savedPath})`;
-          } else {
-            finalResponse = intClean;
-          }
+        finalResponse = nextClean;
+        if (integrationTurns === 1) firstTurnHadDelegations = nextResults.length > 0;
+        pendingResults = nextResults;
+      }
+
+      // Fallback: if no write_file delegation was ever emitted by the integration
+      // but the original task asked to save data to a file, write results directly.
+      if (initialResults.length > 0 && !firstTurnHadDelegations) {
+        const savedPath = await this.maybeWriteCollectedResults(text, initialResults);
+        if (savedPath) {
+          finalResponse = finalResponse + `\n\n(Results saved to ${savedPath})`;
         }
       }
 
@@ -356,7 +428,7 @@ export class Orchestrator {
       );
 
       // ── 13. Update emotional state ────────────────────────────
-      const failCount = allResults.filter(
+      const failCount = initialResults.filter(
         (r) => r.includes('Failed:') || r.includes('Error:'),
       ).length;
       const interactionQuality =
@@ -368,7 +440,7 @@ export class Orchestrator {
         {
           duration,
           provider: aiResponse.provider,
-          agentActions: allResults.length,
+          agentActions: initialResults.length,
         },
         'Message processed',
       );
