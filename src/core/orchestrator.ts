@@ -705,8 +705,13 @@ ${insights.slice(0, 8).join('\n')}`);
         // BUG A fix: for file write delegations with no content param, extract
         // code from the response and execute directly with clean params
         const delegationPos = response.indexOf(delegation.fullMatch);
+        // Skip extractFileWriteParams when task is already JSON (starts with '{') —
+        // the JSON path already has path+content encoded; extractFileWriteParams
+        // would otherwise pick up the ```action block itself as the code content.
         const directParams =
-          delegation.agent === 'file' && !delegation.task.includes('content=')
+          delegation.agent === 'file'
+          && !delegation.task.includes('content=')
+          && !delegation.task.trimStart().startsWith('{')
             ? this.extractFileWriteParams(delegation.task, response, delegationPos)
             : null;
 
