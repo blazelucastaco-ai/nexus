@@ -1,27 +1,27 @@
 // Nexus AI — Orchestrator (central brain / router)
 //
-// This is the heart of NEXUS. Every user message flows through here:
-// personality + memory + reasoning + agent delegation = response.
+// Rewired to use structured function calling via the OpenAI-compatible API.
+// No more text-based [DELEGATE:...] parsing — the LLM emits tool_calls,
+// we execute them, and loop until the model is done.
 
-import { homedir } from 'node:os';
-import { mkdir as mkdirFS, writeFile as writeFileFS } from 'node:fs/promises';
-import { dirname as dirnameFS } from 'node:path';
 import { createLogger } from '../utils/logger.js';
-import { generateId, nowISO, truncate, extractCleanContent } from '../utils/helpers.js';
+import { generateId, nowISO, truncate } from '../utils/helpers.js';
 import { loadConfig } from '../config.js';
-import { assembleContext, buildSystemPrompt, parseActions, stripActions } from './context.js';
+import { assembleContext, buildSystemPrompt } from './context.js';
 import { EventLoop } from './event-loop.js';
+import { toOpenAITools } from '../tools/definitions.js';
+import { ToolExecutor } from '../tools/executor.js';
 import type {
   AgentName,
   AgentResult,
   AgentTask,
   AIMessage,
+  AIToolCall,
   NexusConfig,
   NexusContext,
 } from '../types.js';
 
 // Subsystem types — imported as type-only to avoid circular deps at load time.
-// Actual instances are injected via init().
 import type { MemoryManager } from '../memory/index.js';
 import type { PersonalityEngine } from '../personality/index.js';
 import type { AgentManager } from '../agents/index.js';
@@ -32,129 +32,7 @@ import type { LearningSystem } from '../learning/index.js';
 
 const log = createLogger('Orchestrator');
 
-// ─── Regex patterns for inline directives the LLM can emit ──────────
-const REMEMBER_PATTERN = /\[REMEMBER:([^\]]+)\]/g;
-const RECALL_PATTERN = /\[RECALL:([^\]]+)\]/g;
-
-/**
- * Extract all [DELEGATE:agent:task] blocks using bracket-counting so that
- * task content can contain ] characters (e.g. Python list access data[0]).
- * Quote-aware: brackets inside single/double/triple-quoted strings are ignored
- * so that shell test operators, regex patterns, and string literals don't
- * prematurely close the delegation block.
- */
-function extractDelegations(
-  response: string,
-): Array<{ agent: string; task: string; fullMatch: string }> {
-  const delegations: Array<{ agent: string; task: string; fullMatch: string }> = [];
-  const MARKER = '[DELEGATE:';
-  let i = 0;
-
-  while (i < response.length) {
-    const start = response.indexOf(MARKER, i);
-    if (start === -1) break;
-
-    const agentStart = start + MARKER.length;
-    const agentEnd = response.indexOf(':', agentStart);
-    if (agentEnd === -1) { i = start + 1; continue; }
-
-    const agent = response.slice(agentStart, agentEnd);
-    if (!/^\w+$/.test(agent)) { i = start + 1; continue; }
-
-    // Quote-aware bracket scan to find the matching ]
-    // Brackets inside quoted strings are not counted so content like
-    // `if [ -z "$x" ]; then`, `arr[0]`, or `"value]"` don't close early.
-    let depth = 1;
-    let j = agentEnd + 1;
-    while (j < response.length && depth > 0) {
-      // Skip triple-quoted strings first (''' or """)
-      const ch = response[j]!;
-      if ((ch === "'" || ch === '"') && response.slice(j, j + 3) === ch.repeat(3)) {
-        const q3 = response.slice(j, j + 3);
-        j += 3;
-        const endQ = response.indexOf(q3, j);
-        if (endQ === -1) { depth = -1; break; } // unmatched
-        j = endQ + 3;
-        continue;
-      }
-      // Skip single-quoted strings
-      if (ch === "'") {
-        j++;
-        while (j < response.length && response[j] !== "'") {
-          if (response[j] === '\\') j++;
-          j++;
-        }
-        j++; // skip closing quote
-        continue;
-      }
-      // Skip double-quoted strings
-      if (ch === '"') {
-        j++;
-        while (j < response.length && response[j] !== '"') {
-          if (response[j] === '\\') j++;
-          j++;
-        }
-        j++; // skip closing quote
-        continue;
-      }
-      if (ch === '[') depth++;
-      else if (ch === ']') depth--;
-      j++;
-    }
-
-    if (depth !== 0) { i = start + 1; continue; } // unmatched
-
-    const task = response.slice(agentEnd + 1, j - 1);
-    const fullMatch = response.slice(start, j);
-    delegations.push({ agent, task, fullMatch });
-    i = j;
-  }
-
-  // Also parse JSON action blocks emitted by the LLM:
-  //   ```action
-  //   {"agent": "terminal", "command": "node -v"}
-  //   ```
-  // or inline: action\n{"agent": "...", "command": "..."}
-  const jsonPatterns: RegExp[] = [
-    /```action\s*\n([\s\S]*?)```/g,
-    /\baction\b\s*\n(\{[^\n]*\})/g,
-  ];
-  const seenMatches = new Set(delegations.map((d) => d.fullMatch));
-  for (const re of jsonPatterns) {
-    let m: RegExpExecArray | null;
-    re.lastIndex = 0;
-    while ((m = re.exec(response)) !== null) {
-      if (seenMatches.has(m[0])) continue;
-      try {
-        const json = JSON.parse(m[1]!.trim()) as Record<string, unknown>;
-        const agent = typeof json.agent === 'string' ? json.agent : null;
-        // If params present, extract the meaningful task from them so downstream
-        // parsers (parseFileParams, parseTerminalParams) get the right data.
-        const params = json.params && typeof json.params === 'object'
-          ? json.params as Record<string, unknown>
-          : null;
-        const task =
-          // Terminal: params.command takes priority
-          (params?.command && typeof params.command === 'string') ? params.command
-          // File: params with path → serialize as JSON so parseFileParams step 2b handles it
-          : (params?.path && typeof params.path === 'string') ? JSON.stringify(params)
-          // Fallback: top-level fields
-          : typeof json.command === 'string' ? json.command
-          : typeof json.action === 'string' ? json.action
-          : typeof json.task === 'string' ? json.task
-          : null;
-        if (agent && task) {
-          delegations.push({ agent, task, fullMatch: m[0] });
-          seenMatches.add(m[0]);
-        }
-      } catch {
-        // Not valid JSON, skip
-      }
-    }
-  }
-
-  return delegations;
-}
+const MAX_TOOL_ITERATIONS = 10;
 
 // ─── Orchestrator ────────────────────────────────────────────────────
 
@@ -165,6 +43,7 @@ export class Orchestrator {
   private activeTasks: AgentTask[] = [];
   private startTime = Date.now();
   private initialized = false;
+  private toolExecutor!: ToolExecutor;
 
   // Subsystems — set via init()
   public memory!: MemoryManager;
@@ -183,10 +62,6 @@ export class Orchestrator {
 
   // ── Initialization ────────────────────────────────────────────────
 
-  /**
-   * Wire up all subsystems. Called from index.ts after everything is
-   * instantiated so we avoid circular-dependency headaches.
-   */
   init(subsystems: {
     memory: MemoryManager;
     personality: PersonalityEngine;
@@ -204,13 +79,13 @@ export class Orchestrator {
     this.macos = subsystems.macos;
     this.learning = subsystems.learning;
 
+    // Create tool executor with access to agents and memory
+    this.toolExecutor = new ToolExecutor(this.agents, this.memory);
+
     this.initialized = true;
     log.info('Orchestrator initialized with all subsystems');
   }
 
-  /**
-   * Start all runtime systems.
-   */
   async start(): Promise<void> {
     if (!this.initialized) {
       throw new Error('Orchestrator.init() must be called before start()');
@@ -225,14 +100,9 @@ export class Orchestrator {
     log.info('NEXUS is running');
   }
 
-  /**
-   * Graceful shutdown — persist state, close connections, stop loops.
-   */
   async stop(): Promise<void> {
     log.info('Shutting down NEXUS...');
 
-    // Persist current emotional / personality state as an episodic memory
-    // so we can warm-start next launch.
     try {
       const state = this.personality.getPersonalityState();
       await this.memory.store(
@@ -264,38 +134,28 @@ export class Orchestrator {
 
   // ── Public Dev Interface ──────────────────────────────────────────
 
-  /**
-   * Process a plain-text message without any Telegram context.
-   * Used by the CLI chat REPL and dev-chat.ts test script.
-   */
   async processMessage(text: string, userId = 'dev'): Promise<string> {
     return this.handleMessage(userId, text);
   }
 
-  // ── Main Brain Loop ───────────────────────────────────────────────
+  // ── Main Brain Loop (Tool Calling) ────────────────────────────────
 
   /**
-   * Handle an incoming user message — THE main method.
+   * Handle an incoming user message using the tool calling loop:
    *
-   * Flow:
    *  1. Store in short-term memory
-   *  2. Assemble full context (personality + memories + tasks + conversation)
-   *  3. Build system prompt with personality, agents, tasks, memory ops
-   *  4. Call AI with assembled context
-   *  5. Parse response for delegations ([DELEGATE:agent:task])
-   *  6. Dispatch delegations to agents
-   *  7. Parse memory directives ([REMEMBER:...], [RECALL:...])
-   *  8. Update emotional state
-   *  9. Store interaction in episodic memory
-   * 10. Return clean response to user
+   *  2. Assemble context (personality + memories + tasks + conversation)
+   *  3. Build system prompt
+   *  4. Send to AI with tools array
+   *  5. If response has tool_calls → execute each, send results back as tool messages
+   *  6. Loop until no more tool_calls (max 10 iterations)
+   *  7. Return final text content
    */
   async handleMessage(chatId: string, text: string): Promise<string> {
     const startTime = Date.now();
     log.info({ chatId, textLen: text.length }, 'Processing message');
 
     try {
-      log.info({ chatId, text: truncate(text, 200) }, 'Incoming message');
-
       // ── 1. Personality event + short-term memory ──────────────
       this.personality.processEvent('user_message');
       this.memory.addToBuffer('user', text);
@@ -310,9 +170,6 @@ export class Orchestrator {
         prevention: mistakeCheck.safe ? null : (mistakeCheck.warning ?? null),
         preferenceConflict: null as string | null,
       };
-      if (prevention.prevention || prevention.preferenceConflict) {
-        log.info({ prevention }, 'Learning system flagged an issue');
-      }
 
       // ── 4. Assemble context ───────────────────────────────────
       const context = this.assembleNexusContext(recentMemories, relevantFacts);
@@ -323,113 +180,107 @@ export class Orchestrator {
       // ── 6. Add user message to conversation history ───────────
       this.conversationHistory.push({ role: 'user', content: text });
 
-      // ── 7. Call AI ────────────────────────────────────────────
-      // Use 8192 tokens when the task involves writing/saving files so the
-      // full file content is generated. Otherwise cap at 1500 for concise replies.
-      const hasWriteIntent = /\b(write|save\s+to|save\s+file|create\s+file|write\s+to)\b/i.test(text);
-      const maxTokens = hasWriteIntent ? 8192 : Math.min(this.config.ai.maxTokens, 1500);
-      const aiResponse = await this.ai.complete({
-        messages: this.conversationHistory.slice(-20),
-        systemPrompt,
-        model: this.config.ai.model,
-        maxTokens,
-        temperature: this.config.ai.temperature,
-      });
-
-      let responseContent = aiResponse.content;
-      log.info(
-        { provider: aiResponse.provider, model: aiResponse.model, response: truncate(responseContent, 200) },
-        'AI response received',
-      );
-
-      // ── 8a. Explicit "remember" intent detection ──────────────
-      // If the user said "remember X", "don't forget X", etc., store it
-      // directly to semantic memory without relying on the LLM to emit [REMEMBER:].
+      // ── 7. Explicit "remember" intent detection ───────────────
       await this.detectAndStoreRememberIntent(text);
 
-      // ── 8. Process memory directives ──────────────────────────
-      responseContent = await this.processMemoryDirectives(responseContent);
+      // ── 8. Tool calling loop ──────────────────────────────────
+      const tools = toOpenAITools();
+      const hasWriteIntent = /\b(write|save\s+to|save\s+file|create\s+file|write\s+to)\b/i.test(text);
+      const maxTokens = hasWriteIntent ? 8192 : Math.min(this.config.ai.maxTokens, 1500);
 
-      // ── 9. Parse and execute agent delegations ────────────────
-      const { cleanResponse, agentResults } =
-        await this.processDelegations(responseContent);
+      // Working messages for the tool loop — starts from conversation history
+      const loopMessages: AIMessage[] = [...this.conversationHistory.slice(-20)];
+      let finalContent = '';
+      let toolCallCount = 0;
 
-      // Also handle ```action``` blocks (legacy context.ts format)
-      const legacyActions = parseActions(cleanResponse);
-      const conversationalPart = stripActions(cleanResponse);
-
-      const legacyResults: string[] = [];
-      for (const action of legacyActions) {
-        try {
-          const result = await this.executeAgentAction(
-            action.agent as AgentName,
-            action.action,
-            action.params,
-          );
-          if (result.success) {
-            legacyResults.push(
-              `[${action.agent}:${action.action}] Done: ${truncate(JSON.stringify(result.data), 300)}`,
-            );
-          } else {
-            legacyResults.push(
-              `[${action.agent}:${action.action}] Failed: ${result.error}`,
-            );
-          }
-        } catch (err) {
-          log.error({ err, action }, 'Legacy agent action failed');
-          legacyResults.push(
-            `[${action.agent}:${action.action}] Error: ${err}`,
-          );
-        }
-      }
-
-      // ── 10. Merge results into final response (multi-turn loop) ──
-      let finalResponse = conversationalPart;
-      const initialResults = [...agentResults, ...legacyResults];
-      let pendingResults = initialResults;
-      // Loop up to 5 times so multi-file tasks (generate file 1 → integrate →
-      // generate file 2 → integrate → ...) all complete in one handleMessage call.
-      const MAX_INTEGRATION_TURNS = 5;
-      let integrationTurns = 0;
-      let firstTurnHadDelegations = false;
-
-      while (pendingResults.length > 0 && integrationTurns < MAX_INTEGRATION_TURNS) {
-        integrationTurns++;
-        const integrated = await this.integrateAgentResults(
-          finalResponse,
-          pendingResults,
+      for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+        const aiResponse = await this.ai.complete({
+          messages: loopMessages,
           systemPrompt,
-        );
-        const { cleanResponse: nextClean, agentResults: nextResults } =
-          await this.processDelegations(integrated);
-        finalResponse = nextClean;
-        if (integrationTurns === 1) firstTurnHadDelegations = nextResults.length > 0;
-        pendingResults = nextResults;
-      }
+          model: this.config.ai.model,
+          maxTokens,
+          temperature: this.config.ai.temperature,
+          tools,
+          tool_choice: 'auto',
+        });
 
-      // Fallback: if no write_file delegation was ever emitted by the integration
-      // but the original task asked to save data to a file, write results directly.
-      if (initialResults.length > 0 && !firstTurnHadDelegations) {
-        const savedPath = await this.maybeWriteCollectedResults(text, initialResults);
-        if (savedPath) {
-          finalResponse = finalResponse + `\n\n(Results saved to ${savedPath})`;
+        log.info(
+          {
+            provider: aiResponse.provider,
+            model: aiResponse.model,
+            iteration,
+            toolCalls: aiResponse.toolCalls?.length ?? 0,
+            contentLen: aiResponse.content?.length ?? 0,
+          },
+          'AI response received',
+        );
+
+        // If no tool calls, we're done — this is the final response
+        if (!aiResponse.toolCalls || aiResponse.toolCalls.length === 0) {
+          finalContent = aiResponse.content;
+          break;
+        }
+
+        // Add the assistant message with tool calls to the loop
+        loopMessages.push({
+          role: 'assistant',
+          content: aiResponse.content || null,
+          tool_calls: aiResponse.toolCalls,
+        });
+
+        // Execute each tool call and add results
+        for (const toolCall of aiResponse.toolCalls) {
+          toolCallCount++;
+          const toolName = toolCall.function.name;
+          let toolArgs: Record<string, unknown> = {};
+
+          try {
+            toolArgs = JSON.parse(toolCall.function.arguments);
+          } catch {
+            log.warn({ toolName, raw: toolCall.function.arguments }, 'Failed to parse tool arguments');
+          }
+
+          log.info({ toolName, toolCallId: toolCall.id, iteration }, 'Executing tool call');
+
+          const toolResult = await this.toolExecutor.execute(toolName, toolArgs);
+
+          // Emit agent event for tracking
+          this.eventLoop.emit(
+            'agent:completed',
+            { tool: toolName, args: toolArgs, resultLen: toolResult.length },
+            'medium',
+            'orchestrator',
+          );
+
+          // Add tool result message
+          loopMessages.push({
+            role: 'tool',
+            content: toolResult,
+            tool_call_id: toolCall.id,
+          });
+        }
+
+        // If this was the last iteration, the next loop will get the final response
+        // (or we'll hit the max and use whatever content we have)
+        if (iteration === MAX_TOOL_ITERATIONS - 1) {
+          finalContent = aiResponse.content || 'I completed the tasks but ran out of processing turns.';
         }
       }
 
-      // ── 11. Store assistant response ──────────────────────────
+      // ── 9. Store assistant response ───────────────────────────
       this.conversationHistory.push({
         role: 'assistant',
-        content: finalResponse,
+        content: finalContent,
       });
-      this.memory.addToBuffer('assistant', finalResponse);
+      this.memory.addToBuffer('assistant', finalContent);
 
-      // ── 12. Store episodic memory of the full interaction ─────
+      // ── 10. Store episodic memory ─────────────────────────────
       await this.memory.store(
         'episodic',
         'conversation',
-        `User: ${text}\nNEXUS: ${finalResponse}`,
+        `User: ${text}\nNEXUS: ${finalContent}`,
         {
-          importance: this.estimateImportance(text, finalResponse),
+          importance: this.estimateImportance(text, finalContent),
           tags: ['conversation'],
           source: chatId,
           emotionalValence:
@@ -437,25 +288,20 @@ export class Orchestrator {
         },
       );
 
-      // ── 13. Update emotional state ────────────────────────────
-      const failCount = initialResults.filter(
-        (r) => r.includes('Failed:') || r.includes('Error:'),
-      ).length;
-      const interactionQuality =
-        failCount > 0 ? Math.max(-0.5, 0.5 - failCount * 0.3) : 0.5;
+      // ── 11. Update emotional state ────────────────────────────
+      const interactionQuality = toolCallCount > 0 ? 0.6 : 0.5;
       this.personality.updateMood(interactionQuality);
 
       const duration = Date.now() - startTime;
       log.info(
         {
           duration,
-          provider: aiResponse.provider,
-          agentActions: initialResults.length,
+          toolCalls: toolCallCount,
         },
         'Message processed',
       );
 
-      return finalResponse;
+      return finalContent;
     } catch (err) {
       log.error({ err, chatId, text: truncate(text, 200) }, 'Failed to process message');
       this.personality.processEvent('task_failure');
@@ -465,11 +311,6 @@ export class Orchestrator {
 
   // ── Context Assembly ──────────────────────────────────────────────
 
-  /**
-   * Build the NexusContext object consumed by buildSystemPrompt / context.ts.
-   * Combines personality state, recalled memories, user facts, active tasks,
-   * recent conversation, and system metadata into one structure.
-   */
   private assembleNexusContext(
     recentMemories: Awaited<ReturnType<MemoryManager['recall']>>,
     relevantFacts: Awaited<ReturnType<MemoryManager['getRelevantFacts']>>,
@@ -490,19 +331,10 @@ export class Orchestrator {
   }
 
   /**
-   * Build the full system prompt — the single document that tells the LLM
-   * who it is, what it can do, and how to do it.
+   * Build the full system prompt — identity, personality, capabilities,
+   * memories, facts, platform rules, learning insights.
    *
-   * Sections:
-   *  - Identity & personality (via context.ts buildSystemPrompt)
-   *  - Current emotional state & style (via PersonalityEngine)
-   *  - Available agents & capabilities
-   *  - Relevant memories & user facts
-   *  - Active tasks
-   *  - Delegation instructions ([DELEGATE:agent:task] format)
-   *  - Memory operation instructions ([REMEMBER:...] / [RECALL:...])
-   *  - Learning system warnings & insights
-   *  - Current date / time / uptime
+   * No delegation format instructions — the model uses structured tool calls.
    */
   private buildFullSystemPrompt(
     context: NexusContext,
@@ -511,24 +343,19 @@ export class Orchestrator {
       preferenceConflict: string | null;
     },
   ): string {
-    // Personality-driven style additions for the LLM
     const personalityPrompt = this.personality.getSystemPromptAdditions({
       activity: this.inferActivity(context),
       conversationLength: this.conversationHistory.length,
     });
 
-    // Agent descriptions block
     const agentDescriptions = this.getAgentDescriptionsBlock();
 
-    // Base prompt from context.ts (identity, emotional state, memories,
-    // facts, active tasks, action format)
     const basePrompt = buildSystemPrompt(
       context,
       personalityPrompt,
       agentDescriptions,
     );
 
-    // Layer on enhanced orchestrator directives
     const extensions: string[] = [];
 
     // ── macOS platform rules ──
@@ -541,76 +368,26 @@ You run on macOS (Darwin). Use macOS-compatible commands only:
 - Open ports: \`lsof -i -P -n | grep LISTEN\`
 - Disk usage: \`df -h\` / \`du -sh\`
 - No GNU-only flags like \`--sort\`, \`--color=auto\` (use \`-G\` for color in ls).
-In Python scripts, always use \`os.path.expanduser('~/...')\` for tilde paths — Python does NOT expand \`~\` automatically.`);
+In Python scripts, always use \`os.path.expanduser('~/...')\` for tilde paths.`);
 
-    // ── Delegation instructions ──
+    // ── Tool usage guidance ──
     extensions.push(`
-## Agent Delegation
+## Tool Usage
 
-When the user's request requires capabilities beyond conversation (file operations,
-web browsing, code execution, screenshots, scheduling, etc.), delegate to the
-appropriate agent using this inline format:
+You have access to tools for terminal commands, file operations, screenshots,
+system info, memory, and web search. Use them directly when the user's request
+requires action — don't describe what you would do, just call the tool.
 
-    [DELEGATE:agent_name:task_or_command]
+IMPORTANT — File paths: ALWAYS use absolute paths starting with ~ or /.
+When building projects, save files to ~/nexus-workspace/<project-name>/.
 
-IMPORTANT — Terminal agent: always include the EXACT shell command to run, not a
-description. The command is passed directly to zsh, so it must be valid syntax.
+IMPORTANT — Terminal commands: always provide the EXACT shell command, not a description.
 
-IMPORTANT — File write agent: use function-call syntax with the ACTUAL code/content
-directly in the content parameter. Use \\n for newlines. Do NOT wrap the content in
-markdown code fences inside the parameter. Do NOT include prose.
+IMPORTANT — write_file: provide the FULL file content, not a description or placeholder.
+The content you provide is written directly to disk as-is.
 
-IMPORTANT — File paths: ALWAYS use simple clean paths like ~/nexus-workspace/project-name/file.ext.
-NEVER derive a file path from a URL. NEVER use a URL as a directory name.
-When building a website or project, save files to ~/nexus-workspace/<project-name>/ using short slug names.
-ALWAYS create the directory first with the terminal agent before writing files:
-    [DELEGATE:terminal:mkdir -p ~/nexus-workspace/my-project]
-    [DELEGATE:file:write_file(path='~/nexus-workspace/my-project/index.html', content='...')]
-
-File write examples (correct):
-    [DELEGATE:file:write_file(path='~/nexus-workspace/hello.py', content='print("hello")\\n')]
-    [DELEGATE:file:write_file(path='~/nexus-workspace/my-site/index.html', content='<!DOCTYPE html>...')]
-    [DELEGATE:file:read_file(path='~/Desktop/nexus/package.json')]
-    [DELEGATE:file:list_files(path='~/nexus-workspace')]
-
-Other delegation examples:
-    [DELEGATE:terminal:docker ps]
-    [DELEGATE:terminal:node -v]
-    [DELEGATE:terminal:df -h]
-    [DELEGATE:terminal:ls -la ~/Desktop]
-    [DELEGATE:terminal:du -sh ~/Documents]
-    [DELEGATE:browser:Search for the latest Node.js LTS version]
-    [DELEGATE:vision:Take a screenshot and describe what is on screen]
-    [DELEGATE:scheduler:Set a reminder for 3pm to review the PR]
-
-WRONG (never do this for terminal):
-    [DELEGATE:terminal:check node version]           ← description, not a command
-    [DELEGATE:terminal:list running containers]       ← description, not a command
-
-WRONG (never do this for file writes):
-    [DELEGATE:file:write_file(path='https://example.com/page', ...)]   ← URL as path!
-    Put markdown code fences inside the content parameter — that adds extra backticks to the file!
-    Use a plain text description instead of write_file() function-call syntax!
-
-You may include multiple delegations in a single response. Keep the conversational
-part SHORT (1-2 sentences). Don't explain every step — just do it and say what you did.`);
-
-    // ── Memory operation instructions ──
-    extensions.push(`
-## Memory Operations
-
-To explicitly store something important for future reference:
-    [REMEMBER:The user prefers dark mode in all editors]
-    [REMEMBER:Project Nexus uses TypeScript with ESM imports]
-
-To explicitly recall information about a topic:
-    [RECALL:user's preferred code style]
-    [RECALL:what happened in yesterday's debugging session]
-
-Use these sparingly — most memory operations happen automatically. Use [REMEMBER]
-when the user explicitly asks you to remember something, or when you discover a
-high-value fact. Use [RECALL] when you need deeper context than what was already
-provided in the system prompt.`);
+Keep your conversational responses SHORT (2-4 sentences). When you execute tools,
+just say what you did briefly — don't explain every step.`);
 
     // ── Workspace ──
     const workspacePath = this.config.workspace.replace('~', process.env.HOME ?? '~');
@@ -621,8 +398,7 @@ Your default workspace for creating files, projects, websites, and other output 
   ${workspacePath}
 
 When the user asks you to create a project, build something, or save files, save them
-to this workspace unless they specify a different path. Always tell the user where you
-saved things. Delegate file creation to the file agent using the workspace path.`);
+to this workspace unless they specify a different path.`);
 
     // ── Current date/time ──
     extensions.push(`
@@ -668,203 +444,8 @@ ${insights.slice(0, 8).join('\n')}`);
     return basePrompt + '\n' + extensions.join('\n');
   }
 
-  // ── Delegation Processing ─────────────────────────────────────────
-
-  /**
-   * Scan the LLM response for [DELEGATE:agent:task] patterns, dispatch
-   * each one to the appropriate agent, and return the cleaned response
-   * alongside a list of result summaries.
-   */
-  private async processDelegations(
-    response: string,
-  ): Promise<{ cleanResponse: string; agentResults: string[] }> {
-    const results: string[] = [];
-    const delegations: Array<{
-      agent: string;
-      task: string;
-      fullMatch: string;
-    }> = [];
-
-    // Collect all delegation markers using bracket-aware extractor
-    for (const d of extractDelegations(response)) {
-      delegations.push(d);
-    }
-
-    if (delegations.length === 0) {
-      return { cleanResponse: response, agentResults: [] };
-    }
-
-    log.info(
-      { delegationCount: delegations.length },
-      'Processing delegations',
-    );
-
-    // Execute each delegation
-    for (const delegation of delegations) {
-      try {
-        // BUG A fix: for file write delegations with no content param, extract
-        // code from the response and execute directly with clean params
-        const delegationPos = response.indexOf(delegation.fullMatch);
-        // Skip extractFileWriteParams when task is already JSON (starts with '{') —
-        // the JSON path already has path+content encoded; extractFileWriteParams
-        // would otherwise pick up the ```action block itself as the code content.
-        const directParams =
-          delegation.agent === 'file'
-          && !delegation.task.includes('content=')
-          && !delegation.task.trimStart().startsWith('{')
-            ? this.extractFileWriteParams(delegation.task, response, delegationPos)
-            : null;
-
-        const result = directParams
-          ? await this.executeAgentAction('file', 'write_file', directParams)
-          : await this.delegateToAgent(delegation.agent as AgentName, delegation.task);
-        const summary = await this.processAgentResult(
-          delegation.agent,
-          result,
-        );
-        results.push(summary);
-      } catch (err) {
-        const errorMsg =
-          err instanceof Error ? err.message : String(err);
-        results.push(`[${delegation.agent}] Error: ${errorMsg}`);
-        log.error({ err, agent: delegation.agent }, 'Delegation failed');
-      }
-    }
-
-    // Strip ALL delegation markers from the response.
-    // replaceAll ensures that identical blocks (rare but possible) are all removed.
-    let cleanResponse = response;
-    for (const d of delegations) {
-      cleanResponse = cleanResponse.split(d.fullMatch).join('');
-    }
-    cleanResponse = cleanResponse.replace(/\n{3,}/g, '\n\n').trim();
-
-    return { cleanResponse, agentResults: results };
-  }
-
-  /**
-   * For file write delegations that have no content= parameter, scan the LLM
-   * response for code blocks and return direct params with the clean code.
-   * Returns null if no code block can be found or task is not a write op.
-   */
-  private extractFileWriteParams(
-    task: string,
-    response: string,
-    delegationPos: number,
-  ): Record<string, unknown> | null {
-    if (!/write|save|create/i.test(task)) return null;
-
-    // Collect code blocks from the full response
-    const blocks: Array<{ code: string; pos: number }> = [];
-    const re = /```(?:\w*)\n?([\s\S]*?)```/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(response)) !== null) {
-      const code = m[1]!;
-      if (code.trim().length > 0) blocks.push({ code, pos: m.index });
-    }
-    if (blocks.length === 0) return null;
-
-    // Closest code block to the delegation marker
-    let best = blocks[0]!;
-    let bestDist = Math.abs(best.pos - delegationPos);
-    for (const b of blocks.slice(1)) {
-      const d = Math.abs(b.pos - delegationPos);
-      if (d < bestDist) { best = b; bestDist = d; }
-    }
-
-    const code = best.code.endsWith('\n') ? best.code : best.code + '\n';
-
-    // Extract file path from task text
-    const pathMatch = task.match(/(~\/[^\s,)'"[\]]+|\/[^\s,)'"[\]]+)/);
-    if (!pathMatch) return null;
-    const rawPath = pathMatch[1]!.replace(/:+$/, '').replace(/^~/, homedir());
-
-    return { path: rawPath, content: code, createDirs: true };
-  }
-
-  /**
-   * Dispatch a task to a named sub-agent. Creates a tracked AgentTask,
-   * executes it via the AgentManager, and emits lifecycle events.
-   */
-  async delegateToAgent(
-    agentName: AgentName,
-    task: string,
-  ): Promise<AgentResult> {
-    log.info(
-      { agentName, task: truncate(task, 100) },
-      'Delegating to agent',
-    );
-
-    const inferredAction = this.inferAction(agentName, task);
-    const agentTask: AgentTask = {
-      id: generateId(),
-      agentName,
-      action: inferredAction,
-      params: this.buildDelegationParams(agentName, inferredAction, task),
-      status: 'pending',
-      createdAt: nowISO(),
-    };
-
-    this.activeTasks.push(agentTask);
-    agentTask.status = 'running';
-
-    try {
-      const result = await this.agents.executeTask(agentTask);
-      agentTask.status = result.success ? 'completed' : 'failed';
-      agentTask.result = result;
-
-      this.eventLoop.emit(
-        result.success ? 'agent:completed' : 'agent:failed',
-        { agent: agentName, task, result },
-        'medium',
-        'orchestrator',
-      );
-
-      return result;
-    } catch (err) {
-      agentTask.status = 'failed';
-      const errorMsg =
-        err instanceof Error ? err.message : String(err);
-      const failResult: AgentResult = {
-        agentName,
-        success: false,
-        data: null,
-        error: errorMsg,
-        duration: 0,
-      };
-      agentTask.result = failResult;
-      throw err;
-    }
-  }
-
-  /**
-   * Format an agent result into a human-readable summary line
-   * for integration into the conversation.
-   */
-  async processAgentResult(
-    agentName: string,
-    result: AgentResult,
-  ): Promise<string> {
-    if (result.success) {
-      // Use a generous limit so terminal output isn't truncated before integration
-      const limit = agentName === 'terminal' ? 8000 : 2000;
-      const dataSummary =
-        typeof result.data === 'string'
-          ? truncate(result.data, limit)
-          : truncate(JSON.stringify(result.data), limit);
-      return `[${agentName}] Completed (${result.duration}ms): ${dataSummary}`;
-    }
-    return `[${agentName}] Failed (${result.duration}ms): ${result.error ?? 'unknown error'}`;
-  }
-
   // ── Explicit Remember Intent ──────────────────────────────────────
 
-  /**
-   * Detect user phrases like "remember that...", "don't forget...",
-   * "keep in mind..." and store the fact directly to semantic memory.
-   * This is a belt-and-suspenders approach: the LLM is also instructed to
-   * emit [REMEMBER:...] directives, but explicit detection ensures nothing slips.
-   */
   private async detectAndStoreRememberIntent(text: string): Promise<void> {
     const patterns = [
       /(?:please\s+)?remember\s+(?:that\s+)?(.+)/i,
@@ -889,231 +470,13 @@ ${insights.slice(0, 8).join('\n')}`);
         } catch (err) {
           log.error({ err, fact: truncate(fact, 100) }, 'Failed to store user-requested memory');
         }
-        break; // Only store once per message
+        break;
       }
     }
-  }
-
-  // ── Memory Directive Processing ───────────────────────────────────
-
-  /**
-   * Scan for [REMEMBER:...] and [RECALL:...] markers in the LLM response,
-   * execute the corresponding memory operations, and strip the markers
-   * from the text so the user sees a clean response.
-   */
-  private async processMemoryDirectives(
-    response: string,
-  ): Promise<string> {
-    let processed = response;
-
-    // Handle [REMEMBER:content] — store to semantic memory
-    REMEMBER_PATTERN.lastIndex = 0;
-    let rememberMatch: RegExpExecArray | null;
-    while (
-      (rememberMatch = REMEMBER_PATTERN.exec(response)) !== null
-    ) {
-      const content = rememberMatch[1]!;
-      try {
-        await this.memory.store('semantic', 'fact', content, {
-          importance: 0.7,
-          tags: ['explicit-remember'],
-          source: 'llm-directive',
-        });
-        log.info(
-          { content: truncate(content, 80) },
-          'Stored explicit memory',
-        );
-      } catch (err) {
-        log.error(
-          { err, content: truncate(content, 80) },
-          'Failed to store memory',
-        );
-      }
-      processed = processed.replace(rememberMatch[0], '');
-    }
-
-    // Handle [RECALL:query] — fetch from memory and inject into conversation
-    RECALL_PATTERN.lastIndex = 0;
-    let recallMatch: RegExpExecArray | null;
-    const recalls: string[] = [];
-    while ((recallMatch = RECALL_PATTERN.exec(response)) !== null) {
-      const query = recallMatch[1]!;
-      try {
-        const memories = await this.memory.recall(query, { limit: 5 });
-        if (memories.length > 0) {
-          const summaries = memories
-            .map(
-              (m) =>
-                `  - ${m.summary ?? truncate(m.content, 150)}`,
-            )
-            .join('\n');
-          recalls.push(`Recalled (${query}):\n${summaries}`);
-        }
-        log.info(
-          { query, resultCount: memories.length },
-          'Recall executed',
-        );
-      } catch (err) {
-        log.error({ err, query }, 'Recall failed');
-      }
-      processed = processed.replace(recallMatch[0], '');
-    }
-
-    // If we did any recalls, inject the results as a system message so the
-    // LLM can reference them in the next turn
-    if (recalls.length > 0) {
-      this.conversationHistory.push({
-        role: 'system',
-        content: `[Memory recall results]\n${recalls.join('\n\n')}`,
-      });
-    }
-
-    return processed.replace(/\n{3,}/g, '\n\n').trim();
-  }
-
-  // ── Write-after-collect fallback ────────────────────────────────────
-
-  /**
-   * If the user's original message requested saving data to a file AND we have
-   * collected terminal/agent results, write them directly without another LLM call.
-   * Returns the written path, or null if no file-save was detected.
-   */
-  private async maybeWriteCollectedResults(
-    originalText: string,
-    results: string[],
-  ): Promise<string | null> {
-    // Only applies when there are collected results to save
-    if (results.length === 0) return null;
-
-    // Detect file-save intent: look for a path pattern in the original message
-    // Allow dots (for file extensions) but trim trailing punctuation
-    const savePattern =
-      /\bsave\b.*?(~\/[^\s,'")\]]+|\/[^\s,'")\]]+)|(?:to|into)\s+(~\/[^\s,'")\]]+|\/[^\s,'")\]]+)/i;
-    const m = originalText.match(savePattern);
-    if (!m) return null;
-
-    const rawPath = (m[1] ?? m[2] ?? '').replace(/:+$/, '').replace(/[.,;!?]+$/, '');
-    if (!rawPath) return null;
-
-    const filePath = rawPath.startsWith('~/')
-      ? rawPath.replace(/^~/, homedir())
-      : rawPath;
-
-    // Only write markdown/text files (don't accidentally overwrite code)
-    if (!filePath.match(/\.(md|txt|log|csv|json|yaml|yml)$/i) && !filePath.includes('report')) {
-      return null;
-    }
-
-    // Build a clean report from raw results
-    const content =
-      `# System Report\nGenerated: ${nowISO()}\n\n` +
-      results.join('\n\n---\n\n') +
-      '\n';
-
-    try {
-      await mkdirFS(dirnameFS(filePath), { recursive: true });
-      await writeFileFS(filePath, content, 'utf-8');
-      log.info({ path: filePath, size: content.length }, 'Write-after-collect: saved results');
-      return filePath;
-    } catch (err) {
-      log.warn({ err, path: filePath }, 'Write-after-collect: failed to write');
-      return null;
-    }
-  }
-
-  // ── Result Integration ────────────────────────────────────────────
-
-  /**
-   * If agent actions produced results, make a follow-up AI call to weave
-   * the results naturally into the conversation instead of dumping raw data.
-   */
-  private async integrateAgentResults(
-    conversationalResponse: string,
-    results: string[],
-    systemPrompt: string,
-  ): Promise<string> {
-    if (results.length === 0) return conversationalResponse;
-
-    const resultSummary = results.join('\n');
-
-    // Temporarily add messages for the integration call
-    this.conversationHistory.push({
-      role: 'assistant',
-      content: conversationalResponse,
-    });
-    this.conversationHistory.push({
-      role: 'user',
-      content: `[SYSTEM: Agent results received. IMPORTANT: If the original task required saving data to a file, you MUST emit a [DELEGATE:file:write_file(path='<target_path>', content='''<full content>''')] block where <full content> contains ALL the raw output from the agents verbatim — do not truncate or summarize. Otherwise just summarize for the user.]\n\nRaw agent output:\n${resultSummary}`,
-    });
-
-    try {
-      const followUp = await this.ai.complete({
-        messages: this.conversationHistory.slice(-10),
-        systemPrompt,
-        model: this.config.ai.model,
-        maxTokens: 4096,
-        temperature: this.config.ai.temperature,
-      });
-
-      // Remove the synthetic messages
-      this.conversationHistory.pop();
-      this.conversationHistory.pop();
-
-      return stripActions(followUp.content);
-    } catch (err) {
-      log.error({ err }, 'Failed to integrate agent results');
-      // Clean up and fall back to plain response + results
-      this.conversationHistory.pop();
-      this.conversationHistory.pop();
-      return `${conversationalResponse}\n\n---\n${resultSummary}`;
-    }
-  }
-
-  // ── Agent Action Execution (legacy ```action``` block format) ─────
-
-  /**
-   * Execute a single agent action tracked as an AgentTask.
-   */
-  private async executeAgentAction(
-    agentName: AgentName,
-    action: string,
-    params: Record<string, unknown>,
-  ): Promise<AgentResult> {
-    const task: AgentTask = {
-      id: generateId(),
-      agentName,
-      action,
-      params,
-      status: 'running',
-      createdAt: nowISO(),
-    };
-    this.activeTasks.push(task);
-
-    const result = await this.agents.executeTask(task);
-    task.status = result.success ? 'completed' : 'failed';
-    task.result = result;
-
-    this.eventLoop.emit(
-      result.success ? 'agent:completed' : 'agent:failed',
-      {
-        agent: agentName,
-        action,
-        result: result.data,
-        error: result.error,
-      },
-      'low',
-      'orchestrator',
-    );
-
-    return result;
   }
 
   // ── Status & Introspection ────────────────────────────────────────
 
-  /**
-   * Return a snapshot of the orchestrator's current state.
-   * Consumed by /status commands, the companion app, and diagnostics.
-   */
   getStatus(): Record<string, unknown> {
     const personalityState = this.personality.getPersonalityState();
     const memoryStats = this.memory.getStats();
@@ -1127,8 +490,6 @@ ${insights.slice(0, 8).join('\n')}`);
     return {
       uptime: Math.floor((Date.now() - this.startTime) / 1000),
       uptimeFormatted: this.formatUptime(Date.now() - this.startTime),
-
-      // Personality / mood
       mood:
         personalityState.mood > 0.3
           ? 'good'
@@ -1140,8 +501,6 @@ ${insights.slice(0, 8).join('\n')}`);
       confidence: personalityState.emotion.confidence,
       engagement: personalityState.emotion.engagement,
       warmth: personalityState.relationshipWarmth,
-
-      // Tasks
       activeTasks: runningTasks.length,
       pendingTasks: pendingTasks.length,
       totalTasksProcessed: this.activeTasks.length,
@@ -1151,30 +510,18 @@ ${insights.slice(0, 8).join('\n')}`);
         action: t.action,
         since: t.createdAt,
       })),
-
-      // Memory
       memoryStats,
       conversationLength: this.conversationHistory.length,
-
-      // Agents
       availableAgents: this.agents
         .getAvailableAgents()
         .map((a) => a.name),
-
-      // AI
       availableProviders: this.ai.getAvailableProviders(),
-
-      // Event loop
       eventQueueSize: this.eventLoop.queueSize,
     };
   }
 
   // ── Helper Methods ────────────────────────────────────────────────
 
-  /**
-   * Build the agent descriptions block for the system prompt.
-   * Lists every registered agent with its capabilities.
-   */
   private getAgentDescriptionsBlock(): string {
     const agents = this.agents.getAvailableAgents();
     if (agents.length === 0) return '[No agents registered]';
@@ -1187,284 +534,47 @@ ${insights.slice(0, 8).join('\n')}`);
       .join('\n');
   }
 
-  /**
-   * Build the params object for an agent delegation, mapping the free-text
-   * task description to whatever parameter name the target agent expects.
-   *
-   * Each agent uses a different primary param name:
-   *   terminal  → command
-   *   file      → path (with path extracted from task text if possible)
-   *   browser   → url / query
-   *   research  → query
-   *   others    → task / instruction / prompt
-   *
-   * We pass the task under ALL common aliases so agents with different
-   * conventions still find their param.
-   */
-  private buildDelegationParams(
-    agentName: AgentName,
-    action: string,
-    task: string,
-  ): Record<string, unknown> {
-    const common: Record<string, unknown> = {
-      task,
-      instruction: task,
-      prompt: task,
-      query: task,
-    };
-
-    if (agentName === 'terminal') {
-      // Strip any descriptive prefix that isn't a real command
-      let command = task;
-      const termPrefixMatch = command.match(/^(?:run|execute|run_command|get_output):\s*/i);
-      if (termPrefixMatch) command = command.slice(termPrefixMatch[0].length);
-      return { ...common, command };
-    }
-
-    if (agentName === 'file') {
-      // 1. Try function-call syntax: write_file(path='X', content='Y')
-      const funcCallMatch = task.match(/^\w+\s*\(\s*([\s\S]+)\s*\)\s*$/);
-      if (funcCallMatch) {
-        const argsStr = funcCallMatch[1]!;
-        const parsed: Record<string, unknown> = { ...common };
-
-        // Handle triple-quoted strings first (content='''...''' or content="""...""")
-        const tripleQuotedRe = /(\w+)\s*=\s*(?:'''([\s\S]*?)'''|"""([\s\S]*?)""")/g;
-        let tqm: RegExpExecArray | null;
-        while ((tqm = tripleQuotedRe.exec(argsStr)) !== null) {
-          parsed[tqm[1]!] = tqm[2] ?? tqm[3] ?? '';
-        }
-
-        // Then handle regular single/double-quoted strings for remaining params
-        const namedParamRe = /(\w+)\s*=\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")/g;
-        let pm: RegExpExecArray | null;
-        while ((pm = namedParamRe.exec(argsStr)) !== null) {
-          const key = pm[1]!;
-          // Skip if already captured by triple-quote regex
-          if (parsed[key] !== undefined && parsed[key] !== common[key]) continue;
-          const val = (pm[2] ?? pm[3] ?? '').replace(/\\'/g, "'").replace(/\\"/g, '"');
-          parsed[key] = val;
-        }
-        if (parsed.path) {
-          parsed.path = String(parsed.path).replace(/^~/, homedir()).replace(/:+$/, '');
-        }
-        // BUG A fix: strip markdown fences / decode escape sequences in content param
-        if (parsed.content && typeof parsed.content === 'string') {
-          parsed.content = extractCleanContent(parsed.content as string);
-        }
-        return parsed;
-      }
-
-      // 2. Strip action prefix like "write_file:", "read_file:", "list:"
-      let cleanTask = task;
-      const actionPrefixRe = /^(?:write_file|read_file|list_files|search_files|move_file|delete_file|disk_usage|organize|list):\s*/i;
-      const actionPrefixMatch = cleanTask.match(actionPrefixRe);
-      if (actionPrefixMatch) cleanTask = cleanTask.slice(actionPrefixMatch[0].length);
-
-      // 2b. If remaining looks like JSON, parse it directly
-      if (cleanTask.trimStart().startsWith('{')) {
-        try {
-          const jsonParsed = JSON.parse(cleanTask.trim()) as Record<string, unknown>;
-          if (typeof jsonParsed.path === 'string') {
-            jsonParsed.path = jsonParsed.path.replace(/^~/, homedir()).replace(/:+$/, '');
-          }
-          return { ...common, ...jsonParsed };
-        } catch {
-          // Not valid JSON, fall through to path extraction
-        }
-      }
-
-      // 2c. If remaining looks like key=value pairs: "path=/foo/bar, content=hello"
-      if (/^\w+=/.test(cleanTask)) {
-        const kvResult: Record<string, unknown> = { ...common };
-        // Extract path= value (up to next ", word=" or end)
-        const pathKvMatch = cleanTask.match(/(?:^|,\s*)path=([^,]+?)(?=\s*,\s*\w+=|$)/);
-        if (pathKvMatch) {
-          kvResult.path = pathKvMatch[1]!.trim().replace(/^~/, homedir()).replace(/:+$/, '');
-        }
-        // Extract content= value (greedy to end, since it may contain commas)
-        const contentKvMatch = cleanTask.match(/(?:^|,\s*)content=(.+)$/s);
-        if (contentKvMatch) {
-          kvResult.content = contentKvMatch[1]!.trim();
-        }
-        if (kvResult.path) return kvResult;
-      }
-
-      // 2d. If task contains a code fence, extract path + code from it (BUG A fix)
-      const taskFenceMatch = cleanTask.match(/```(?:\w*)\n?([\s\S]*?)```/);
-      if (taskFenceMatch) {
-        const codeContent = taskFenceMatch[1]!;
-        const proseSection = cleanTask.slice(0, cleanTask.indexOf('```'));
-        const pathInProse =
-          proseSection.match(/(?:^|[\s:=])(~\/\S+|\/\S+)/)?.[1] ??
-          proseSection.match(/(?:"([^"]+)"|'([^']+)')/)?.[1];
-        if (pathInProse) {
-          return {
-            ...common,
-            path: pathInProse.replace(/:+$/, '').replace(/^~/, homedir()),
-            content: codeContent.endsWith('\n') ? codeContent : codeContent + '\n',
-          };
-        }
-      }
-
-      // 3. Extract path — prefer tilde/absolute paths over quoted strings
-      const absPathMatch = cleanTask.match(/(?:^|[\s:=])(~\/\S+|\/\S+)/);
-      const quotedMatch = cleanTask.match(/(?:^|[\s:=])(?:"([^"]+)"|'([^']+)')/);
-      let extractedPath: string | undefined;
-      if (absPathMatch) {
-        extractedPath = absPathMatch[1]!;
-      } else if (quotedMatch) {
-        extractedPath = quotedMatch[1] ?? quotedMatch[2];
-      }
-
-      // 4. Strip trailing colons/punctuation from path
-      if (extractedPath) {
-        extractedPath = extractedPath.replace(/:+$/, '');
-        // Expand tilde
-        extractedPath = extractedPath.replace(/^~/, homedir());
-      }
-
-      // BUG A fix: if the task itself has code fences or escape sequences, clean it
-      const cleanedContent = extractCleanContent(cleanTask);
-
-      return {
-        ...common,
-        path: extractedPath ?? cleanTask,
-        content: cleanedContent,
-      };
-    }
-
-    if (agentName === 'browser' || agentName === 'research') {
-      // Extract URL if present
-      const urlMatch = task.match(/https?:\/\/\S+/);
-      return { ...common, url: urlMatch?.[0] ?? task, query: task };
-    }
-
-    return common;
-  }
-
-  /**
-   * Infer a capability/action name from a free-text task description.
-   * Tries to match one of the agent's declared capabilities by keyword;
-   * falls back to the first capability.
-   */
-  private inferAction(agentName: AgentName, task: string): string {
-    const agentInfo = this.agents
-      .getAvailableAgents()
-      .find((a) => a.name === agentName);
-    if (!agentInfo || agentInfo.capabilities.length === 0)
-      return 'execute';
-
-    const taskLower = task.toLowerCase();
-
-    // Try to match a capability name in the task text (exact)
-    for (const cap of agentInfo.capabilities) {
-      if (taskLower.includes(cap.toLowerCase())) {
-        return cap;
-      }
-    }
-
-    // Try keyword prefix matching: "write" matches "write_file", "read" matches "read_file", etc.
-    for (const cap of agentInfo.capabilities) {
-      const primaryKeyword = cap.split('_')[0];
-      if (primaryKeyword && taskLower.includes(primaryKeyword)) {
-        return cap;
-      }
-    }
-
-    // Default to first capability
-    return agentInfo.capabilities[0] ?? 'execute';
-  }
-
-  /**
-   * Infer the current activity type from recent conversation for style context.
-   */
   private inferActivity(
     context: NexusContext,
   ): 'debugging' | 'coding' | 'casual' | 'planning' | 'creative' | 'learning' {
     const recent = context.conversationHistory.slice(-3);
     const text = recent
-      .map((m) => m.content)
+      .map((m) => m.content ?? '')
       .join(' ')
       .toLowerCase();
 
-    if (
-      text.includes('bug') ||
-      text.includes('error') ||
-      text.includes('fix') ||
-      text.includes('debug')
-    ) {
+    if (text.includes('bug') || text.includes('error') || text.includes('fix') || text.includes('debug')) {
       return 'debugging';
     }
-    if (
-      text.includes('code') ||
-      text.includes('function') ||
-      text.includes('implement') ||
-      text.includes('refactor')
-    ) {
+    if (text.includes('code') || text.includes('function') || text.includes('implement') || text.includes('refactor')) {
       return 'coding';
     }
-    if (
-      text.includes('plan') ||
-      text.includes('design') ||
-      text.includes('architecture') ||
-      text.includes('roadmap')
-    ) {
+    if (text.includes('plan') || text.includes('design') || text.includes('architecture') || text.includes('roadmap')) {
       return 'planning';
     }
-    if (
-      text.includes('research') ||
-      text.includes('find out') ||
-      text.includes('look up') ||
-      text.includes('what is')
-    ) {
+    if (text.includes('research') || text.includes('find out') || text.includes('look up') || text.includes('what is')) {
       return 'creative';
     }
     return 'casual';
   }
 
-  /**
-   * Estimate how important an interaction is for memory storage.
-   * Higher importance = more likely to survive consolidation.
-   */
-  private estimateImportance(
-    userMessage: string,
-    response: string,
-  ): number {
-    let importance = 0.4; // baseline
+  private estimateImportance(userMessage: string, response: string): number {
+    let importance = 0.4;
 
-    // Longer exchanges tend to be more substantive
     if (userMessage.length > 200) importance += 0.1;
     if (response.length > 500) importance += 0.1;
 
-    // Questions about preferences or facts are high-value
     const text = userMessage.toLowerCase();
-    if (
-      text.includes('remember') ||
-      text.includes('always') ||
-      text.includes('never')
-    ) {
+    if (text.includes('remember') || text.includes('always') || text.includes('never')) {
       importance += 0.2;
     }
-    if (
-      text.includes('prefer') ||
-      text.includes('like') ||
-      text.includes('hate')
-    ) {
-      importance += 0.15;
-    }
-
-    // Agent delegations indicate substantive work
-    if (response.includes('[DELEGATE:') || /```action/.test(response)) {
+    if (text.includes('prefer') || text.includes('like') || text.includes('hate')) {
       importance += 0.15;
     }
 
     return Math.min(importance, 1.0);
   }
 
-  /**
-   * Format milliseconds into a human-readable uptime string.
-   */
   private formatUptime(ms: number): string {
     const seconds = Math.floor(ms / 1000);
     const minutes = Math.floor(seconds / 60);

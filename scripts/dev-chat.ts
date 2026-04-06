@@ -64,27 +64,10 @@ function printResponse(response: string, agentLines: string[]) {
   console.log('');
 }
 
-// ─── Intercept agent results for debug output ─────────────────────────────
+// ─── Debug log (tool calls are now logged by the ToolExecutor) ───────────
 
-function wrapOrchestratorForDebug(orchestrator: Orchestrator) {
-  const originalDelegate = orchestrator.delegateToAgent.bind(orchestrator);
+function createDebugLog() {
   const agentLog: string[] = [];
-
-  // Patch delegateToAgent to capture debug info
-  (orchestrator as any).delegateToAgent = async (agentName: string, task: string) => {
-    agentLog.push(`→ [${agentName}] delegated: ${task.slice(0, 80)}${task.length > 80 ? '…' : ''}`);
-    const result = await originalDelegate(agentName as any, task);
-    if (result.success) {
-      const dataSummary = typeof result.data === 'string'
-        ? result.data.slice(0, 100)
-        : JSON.stringify(result.data).slice(0, 100);
-      agentLog.push(`  ✓ [${agentName}] (${result.duration}ms): ${dataSummary}`);
-    } else {
-      agentLog.push(`  ✗ [${agentName}] failed: ${result.error ?? 'unknown'}`);
-    }
-    return result;
-  };
-
   return { agentLog };
 }
 
@@ -155,7 +138,7 @@ async function main() {
     process.exit(1);
   }
 
-  const { agentLog } = wrapOrchestratorForDebug(orchestrator);
+  const { agentLog } = createDebugLog();
 
   // ── Single message mode ──────────────────────────────────────────────
   if (!isInteractive && singleMessage) {

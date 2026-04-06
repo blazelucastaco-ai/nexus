@@ -149,9 +149,20 @@ export interface NexusEvent {
 // ─── AI Providers ──────────────────────────────────────────────────
 export type AIProvider = 'anthropic' | 'openai' | 'ollama';
 
+export interface AIToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string; // JSON string
+  };
+}
+
 export interface AIMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string | null;
+  tool_calls?: AIToolCall[];
+  tool_call_id?: string; // for role='tool' messages
 }
 
 export interface AIResponse {
@@ -160,6 +171,7 @@ export interface AIResponse {
   model: string;
   tokensUsed: { input: number; output: number };
   duration: number;
+  toolCalls?: AIToolCall[];
 }
 
 export interface AICompletionOptions {
@@ -168,6 +180,8 @@ export interface AICompletionOptions {
   maxTokens?: number;
   temperature?: number;
   systemPrompt?: string;
+  tools?: Array<{ type: 'function'; function: { name: string; description: string; parameters: Record<string, unknown> } }>;
+  tool_choice?: 'auto' | 'none';
 }
 
 // ─── Context ───────────────────────────────────────────────────────

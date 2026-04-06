@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import type { AICompletionOptions, AIResponse } from '../types.js';
+import type { AICompletionOptions, AIResponse, AIToolCall } from '../types.js';
 import { createLogger } from '../utils/logger.js';
 import { retry } from '../utils/retry.js';
 
@@ -35,21 +35,63 @@ export class OpenAIProvider {
     }
 
     for (const msg of options.messages) {
-      messages.push({ role: msg.role, content: msg.content });
+      if (msg.role === 'tool') {
+        // Tool result message
+        messages.push({
+          role: 'tool',
+          content: msg.content ?? '',
+          tool_call_id: msg.tool_call_id ?? '',
+        });
+      } else if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+        // Assistant message with tool calls
+        messages.push({
+          role: 'assistant',
+          content: msg.content ?? null,
+          tool_calls: msg.tool_calls.map((tc) => ({
+            id: tc.id,
+            type: 'function' as const,
+            function: {
+              name: tc.function.name,
+              arguments: tc.function.arguments,
+            },
+          })),
+        });
+      } else {
+        messages.push({
+          role: msg.role as 'user' | 'assistant' | 'system',
+          content: msg.content ?? '',
+        });
+      }
     }
 
-    log.info({ model, messageCount: messages.length }, 'Sending completion request to OpenAI');
+    // Build request params
+    const requestParams: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming = {
+      model,
+      max_tokens: maxTokens,
+      temperature,
+      messages,
+    };
+
+    // Add tools if provided
+    if (options.tools && options.tools.length > 0) {
+      requestParams.tools = options.tools.map((t) => ({
+        type: 'function' as const,
+        function: {
+          name: t.function.name,
+          description: t.function.description,
+          parameters: t.function.parameters,
+        },
+      }));
+      requestParams.tool_choice = options.tool_choice ?? 'auto';
+    }
+
+    log.info({ model, messageCount: messages.length, hasTools: !!options.tools }, 'Sending completion request to OpenAI');
 
     const start = performance.now();
 
     const response = await retry(
       async () => {
-        return this.client.chat.completions.create({
-          model,
-          max_tokens: maxTokens,
-          temperature,
-          messages,
-        });
+        return this.client.chat.completions.create(requestParams);
       },
       {
         maxRetries: MAX_RETRIES,
@@ -62,7 +104,21 @@ export class OpenAIProvider {
 
     const duration = Math.round(performance.now() - start);
 
-    const content = response.choices[0]?.message?.content ?? '';
+    const message = response.choices[0]?.message;
+    const content = message?.content ?? '';
+
+    // Extract tool calls if present
+    let toolCalls: AIToolCall[] | undefined;
+    if (message?.tool_calls && message.tool_calls.length > 0) {
+      toolCalls = message.tool_calls.map((tc) => ({
+        id: tc.id,
+        type: 'function' as const,
+        function: {
+          name: tc.function.name,
+          arguments: tc.function.arguments,
+        },
+      }));
+    }
 
     const result: AIResponse = {
       content,
@@ -73,6 +129,7 @@ export class OpenAIProvider {
         output: response.usage?.completion_tokens ?? 0,
       },
       duration,
+      toolCalls,
     };
 
     log.info(
@@ -80,6 +137,7 @@ export class OpenAIProvider {
         model: result.model,
         inputTokens: result.tokensUsed.input,
         outputTokens: result.tokensUsed.output,
+        toolCalls: toolCalls?.length ?? 0,
         duration,
       },
       'OpenAI completion finished',

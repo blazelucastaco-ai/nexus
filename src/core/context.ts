@@ -90,49 +90,5 @@ You communicate exclusively via Telegram. Be conversational, opinionated, and he
     }
   }
 
-  // Instructions for action
-  parts.push(`\n## Action Format
-When you need to use an agent, respond with a JSON action block:
-\`\`\`action
-{"agent": "agent_name", "action": "capability_name", "params": {...}}
-\`\`\`
-You can include multiple action blocks in one response. Always include conversational text alongside actions.
-If no action is needed, just respond conversationally.`);
-
   return parts.join('\n');
-}
-
-/**
- * Parse action blocks from the LLM response.
- */
-export function parseActions(
-  response: string,
-): Array<{ agent: string; action: string; params: Record<string, unknown> }> {
-  const actions: Array<{ agent: string; action: string; params: Record<string, unknown> }> = [];
-  const actionRegex = /```action\s*\n([\s\S]*?)```/g;
-  let match: RegExpExecArray | null;
-
-  while ((match = actionRegex.exec(response)) !== null) {
-    try {
-      const parsed = JSON.parse(match[1]!.trim());
-      if (parsed.agent && parsed.action) {
-        actions.push({
-          agent: parsed.agent,
-          action: parsed.action,
-          params: parsed.params ?? {},
-        });
-      }
-    } catch {
-      // Skip malformed action blocks
-    }
-  }
-
-  return actions;
-}
-
-/**
- * Strip action blocks from response to get the conversational text.
- */
-export function stripActions(response: string): string {
-  return response.replace(/```action\s*\n[\s\S]*?```/g, '').trim();
 }
