@@ -8,6 +8,9 @@ import { getDataDir } from '../config.js';
 const execFileAsync = promisify(execFile);
 const logger = createLogger('Screenshots');
 
+// Use the full path — more reliable when launched via launchd
+const SCREENCAPTURE = '/usr/sbin/screencapture';
+
 const SCREENSHOT_DIR = join(getDataDir(), 'screenshots');
 
 let dirReady = false;
@@ -24,8 +27,23 @@ function generateTimestampPath(prefix = 'screenshot'): string {
   return join(SCREENSHOT_DIR, `${prefix}-${ts}.png`);
 }
 
+function permissionHint(msg: string): string {
+  if (msg.includes('could not create image from display')) {
+    return (
+      ' — Screen Recording permission is missing. ' +
+      'Grant it to the node binary in System Settings → Privacy & Security → Screen Recording, ' +
+      'then restart NEXUS.'
+    );
+  }
+  return '';
+}
+
 /**
  * Capture the entire screen and save to disk.
+ *
+ * IMPORTANT: The process running this code (node) must have Screen Recording
+ * permission in System Settings → Privacy & Security → Screen Recording.
+ *
  * @param outputPath - Where to save; defaults to ~/.nexus/screenshots/<timestamp>.png
  * @returns Absolute path to the saved screenshot
  */
@@ -35,12 +53,14 @@ export async function captureScreen(outputPath?: string): Promise<string> {
 
   try {
     // -x suppresses the shutter sound, -t png sets format
-    await execFileAsync('screencapture', ['-x', '-t', 'png', dest]);
+    await execFileAsync(SCREENCAPTURE, ['-x', '-t', 'png', dest]);
     logger.info({ path: dest }, 'Full screen captured');
     return dest;
   } catch (err) {
-    logger.error({ err, path: dest }, 'Failed to capture screen');
-    throw new Error(`Screen capture failed: ${(err as Error).message}`);
+    const msg = (err as Error).message;
+    const hint = permissionHint(msg);
+    logger.error({ err, path: dest }, `Failed to capture screen${hint}`);
+    throw new Error(`Screen capture failed: ${msg}${hint}`);
   }
 }
 
@@ -64,26 +84,20 @@ export async function captureRegion(
   const dest = outputPath ?? generateTimestampPath('region');
 
   try {
-    await execFileAsync('screencapture', [
-      '-x',
-      '-t',
-      'png',
-      '-R',
-      `${x},${y},${w},${h}`,
-      dest,
-    ]);
+    await execFileAsync(SCREENCAPTURE, ['-x', '-t', 'png', '-R', `${x},${y},${w},${h}`, dest]);
     logger.info({ x, y, w, h, path: dest }, 'Region captured');
     return dest;
   } catch (err) {
-    logger.error({ err, x, y, w, h }, 'Failed to capture region');
-    throw new Error(`Region capture failed: ${(err as Error).message}`);
+    const msg = (err as Error).message;
+    const hint = permissionHint(msg);
+    logger.error({ err, x, y, w, h }, `Failed to capture region${hint}`);
+    throw new Error(`Region capture failed: ${msg}${hint}`);
   }
 }
 
 /**
  * Capture the frontmost window.
- * Uses AppleScript to get the window ID of the frontmost app, then
- * screencapture -l <windowId> to capture just that window.
+ * Uses JXA to get the window ID, then screencapture -l <windowId>.
  * @param outputPath - Where to save; defaults to ~/.nexus/screenshots/<timestamp>.png
  * @returns Absolute path to the saved screenshot
  */
@@ -92,12 +106,9 @@ export async function captureWindow(outputPath?: string): Promise<string> {
   const dest = outputPath ?? generateTimestampPath('window');
 
   try {
-    // Get the window ID of the frontmost window via JXA
     const jxaScript = `
       const app = Application("System Events");
       const frontApp = app.processes.whose({frontmost: true})[0];
-      const win = frontApp.windows[0];
-      // CGWindowListCopyWindowInfo approach via JXA
       ObjC.import('CoreGraphics');
       const list = $.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, $.kCGNullWindowID);
       const count = ObjC.unwrap($.CFArrayGetCount(list));
@@ -123,7 +134,7 @@ export async function captureWindow(outputPath?: string): Promise<string> {
         windowIdArg = id;
       }
     } catch {
-      logger.warn('Could not get window ID via JXA, falling back to interactive window capture');
+      logger.warn('Could not get window ID via JXA, falling back to full-screen capture');
     }
 
     const args = ['-x', '-t', 'png'];
@@ -135,11 +146,13 @@ export async function captureWindow(outputPath?: string): Promise<string> {
     }
     args.push(dest);
 
-    await execFileAsync('screencapture', args);
+    await execFileAsync(SCREENCAPTURE, args);
     logger.info({ path: dest, windowId: windowIdArg }, 'Window captured');
     return dest;
   } catch (err) {
-    logger.error({ err, path: dest }, 'Failed to capture window');
-    throw new Error(`Window capture failed: ${(err as Error).message}`);
+    const msg = (err as Error).message;
+    const hint = permissionHint(msg);
+    logger.error({ err, path: dest }, `Failed to capture window${hint}`);
+    throw new Error(`Window capture failed: ${msg}${hint}`);
   }
 }

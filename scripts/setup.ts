@@ -645,30 +645,171 @@ async function setupPersonality(): Promise<{
 
 // ─── Step 6: Permissions ────────────────────────────────────────────
 
+interface PermCheck {
+  name: string;
+  key: string;
+  prefsUrl: string;
+  description: string;
+  test: () => Promise<boolean>;
+}
+
+async function runPermissionTest(fn: () => Promise<boolean>): Promise<boolean> {
+  try {
+    return await fn();
+  } catch {
+    return false;
+  }
+}
+
 async function setupPermissions(): Promise<void> {
   stepHeader(6, 8, "macOS Permissions");
 
   console.log(
     boxen(
-      chalk.bold.white("Required macOS Permissions") +
-        "\n\n" +
-        chalk.yellow("  Screen Recording") +
-        "\n" +
-        chalk.dim(
-          "  System Settings → Privacy & Security → Screen Recording\n"
-        ) +
-        chalk.dim("  Enable for your Terminal app (Terminal / iTerm / Warp)") +
-        "\n\n" +
-        chalk.yellow("  Accessibility") +
-        "\n" +
-        chalk.dim(
-          "  System Settings → Privacy & Security → Accessibility\n"
-        ) +
-        chalk.dim("  Enable for your Terminal app") +
+      chalk.bold.white("Checking macOS Permissions") +
         "\n\n" +
         chalk.dim(
-          "These permissions allow NEXUS to capture screenshots\n" +
-            "and interact with the system on your behalf."
+          "NEXUS needs these permissions to work properly.\n" +
+            "We'll test each one and open System Settings for any that are missing."
+        ),
+      {
+        padding: 1,
+        margin: { left: 2, right: 0, top: 0, bottom: 0 },
+        borderStyle: "round",
+        borderColor: "cyan",
+      }
+    )
+  );
+  console.log("");
+
+  const NODE_BIN = process.execPath;
+
+  const checks: PermCheck[] = [
+    {
+      name: "Screen Recording",
+      key: "screenRecording",
+      prefsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+      description: `Enable for: ${NODE_BIN}`,
+      test: async () => {
+        const { execFileSync } = await import("node:child_process");
+        const { join } = await import("node:path");
+        const { tmpdir } = await import("node:os");
+        const { unlinkSync, existsSync } = await import("node:fs");
+        const testPath = join(tmpdir(), `nexus-setup-test-${Date.now()}.png`);
+        try {
+          execFileSync("/usr/sbin/screencapture", ["-x", testPath], { timeout: 5000 });
+          if (existsSync(testPath)) {
+            unlinkSync(testPath);
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
+      },
+    },
+    {
+      name: "Accessibility",
+      key: "accessibility",
+      prefsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+      description: `Enable for: ${NODE_BIN}`,
+      test: async () => {
+        const { execFileSync } = await import("node:child_process");
+        try {
+          const result = execFileSync(
+            "osascript",
+            ["-l", "JavaScript", "-e", "ObjC.import('ApplicationServices'); $.AXIsProcessTrusted()"],
+            { timeout: 3000, encoding: "utf-8" }
+          );
+          return result.trim() === "true";
+        } catch {
+          return false;
+        }
+      },
+    },
+    {
+      name: "Full Disk Access",
+      key: "fullDiskAccess",
+      prefsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+      description: `Enable for: ${NODE_BIN} (optional — needed for protected file access)`,
+      test: async () => {
+        const { execFileSync } = await import("node:child_process");
+        try {
+          execFileSync("sqlite3", ["/Library/Application Support/com.apple.TCC/TCC.db", ".tables"], {
+            timeout: 3000,
+          });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    },
+    {
+      name: "Automation",
+      key: "automation",
+      prefsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
+      description: `Enable for: ${NODE_BIN}`,
+      test: async () => {
+        const { execFileSync } = await import("node:child_process");
+        try {
+          execFileSync("osascript", ["-e", 'tell application "Finder" to return name'], {
+            timeout: 3000,
+          });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    },
+  ];
+
+  const results: Record<string, boolean> = {};
+
+  for (const check of checks) {
+    const spin = ora({
+      text: chalk.dim(`Checking ${check.name}...`),
+      color: "cyan",
+      indent: 2,
+    }).start();
+
+    const granted = await runPermissionTest(check.test);
+    results[check.key] = granted;
+
+    if (granted) {
+      spin.succeed(chalk.green(check.name) + chalk.dim(" — granted"));
+    } else {
+      spin.warn(chalk.yellow(check.name) + chalk.dim(" — not granted"));
+    }
+  }
+
+  const missing = checks.filter((c) => !results[c.key]);
+
+  if (missing.length === 0) {
+    console.log("");
+    console.log(
+      chalk.dim("  ") + chalk.green("All permissions granted. NEXUS is ready to go!")
+    );
+    return;
+  }
+
+  console.log("");
+  console.log(
+    boxen(
+      chalk.yellow.bold(`${missing.length} permission(s) need your attention`) +
+        "\n\n" +
+        missing
+          .map(
+            (c) =>
+              chalk.bold(c.name) +
+              "\n" +
+              chalk.dim(`  ${c.description}`) +
+              "\n" +
+              chalk.cyan(`  System Settings → Privacy & Security → ${c.name}`)
+          )
+          .join("\n\n") +
+        "\n\n" +
+        chalk.dim(
+          `The key thing: grant permission to the node binary at:\n  ${NODE_BIN}`
         ),
       {
         padding: 1,
@@ -680,11 +821,22 @@ async function setupPermissions(): Promise<void> {
   );
   console.log("");
 
+  // Open System Settings panes for missing permissions
+  const { execSync } = await import("node:child_process");
+  for (const check of missing) {
+    try {
+      execSync(`open "${check.prefsUrl}"`, { timeout: 3000 });
+      await sleep(500);
+    } catch {
+      // ignore
+    }
+  }
+
   await select({
     message: chalk.magenta("Permission status:"),
     choices: [
       {
-        name: chalk.green("I've configured both permissions"),
+        name: chalk.green("I've granted the missing permissions"),
         value: "done",
       },
       {

@@ -10,6 +10,7 @@ import { AIManager } from './ai/index.js';
 import { TelegramGateway } from './telegram/index.js';
 import { MacOSController } from './macos/index.js';
 import { LearningSystem } from './learning/index.js';
+import { checkPermissions, warnMissingPermissions } from './macos/permissions.js';
 
 const log = createLogger('Main');
 
@@ -37,6 +38,7 @@ async function main() {
 
   log.info('Initializing learning system...');
   const cortex = new MemoryCortex();
+  cortex.initialize();
   const learning = new LearningSystem(cortex);
 
   log.info('Initializing Telegram bot...');
@@ -68,6 +70,24 @@ async function main() {
   log.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   log.info('  NEXUS is alive. Waiting for messages...');
   log.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+  // Check macOS permissions and warn via Telegram if anything is missing
+  const chatId = process.env.NEXUS_CHAT_ID ?? process.env.TELEGRAM_CHAT_ID ?? '';
+  if (chatId) {
+    try {
+      const permStatus = await checkPermissions();
+      const warnings = await warnMissingPermissions(permStatus);
+      if (warnings.length > 0) {
+        const msg =
+          '⚠️ *NEXUS permission check*\n\n' +
+          warnings.join('\n\n') +
+          '\n\nRestart NEXUS after granting permissions.';
+        await telegram.sendMessage(chatId, msg, { parseMode: 'Markdown' }).catch(() => {});
+      }
+    } catch (err) {
+      log.warn({ err }, 'Permission check failed — skipping');
+    }
+  }
 }
 
 main().catch((err) => {
