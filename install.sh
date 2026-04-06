@@ -320,6 +320,9 @@ section "Setting Up Directories"
 mkdir -p ~/.nexus/{logs,screenshots,data}
 animated_check "Created ~/.nexus/ directory structure" 0.3
 
+mkdir -p ~/nexus-workspace
+animated_check "Created ~/nexus-workspace/ (default workspace for NEXUS output)" 0.3
+
 # ─── 6. Launch Setup Wizard ─────────────────────────────────────────
 
 section "Interactive Setup"

@@ -15,6 +15,7 @@ import {
   handleMood,
   handleAgents,
   handleSettings,
+  handleWorkspace,
   handleThink,
   handleStop,
   handleHelp,
@@ -257,6 +258,8 @@ export class TelegramGateway {
     });
 
     this.bot.command('settings', (ctx) => handleSettings(ctx));
+
+    this.bot.command('workspace', (ctx) => handleWorkspace(ctx));
 
     this.bot.command('think', (ctx) => {
       if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');

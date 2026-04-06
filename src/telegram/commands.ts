@@ -37,6 +37,7 @@ export const commands: BotCommand[] = [
   { command: 'mood', description: 'Current emotional state' },
   { command: 'agents', description: 'List available agents and status' },
   { command: 'settings', description: 'Show current configuration' },
+  { command: 'workspace', description: 'List contents of the NEXUS workspace folder' },
   { command: 'think', description: 'Inner monologue on a topic' },
   { command: 'stop', description: 'Graceful shutdown' },
   { command: 'help', description: 'Show all available commands' },
@@ -305,6 +306,56 @@ export async function handleStop(ctx: Context): Promise<void> {
   } catch (err) {
     log.error({ err }, 'Error in /stop');
     await ctx.reply('Failed to initiate shutdown.');
+  }
+}
+
+// ─── /workspace ──────────────────────────────────────────────────────
+
+export async function handleWorkspace(ctx: Context): Promise<void> {
+  try {
+    const { readdir, stat, mkdir } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { homedir } = await import('node:os');
+    const { existsSync } = await import('node:fs');
+
+    const workspacePath = join(homedir(), 'nexus-workspace');
+
+    // Create if missing
+    if (!existsSync(workspacePath)) {
+      await mkdir(workspacePath, { recursive: true });
+    }
+
+    const entries = await readdir(workspacePath, { withFileTypes: true });
+
+    if (entries.length === 0) {
+      await ctx.reply(
+        `<b>Workspace</b>\n\n<code>${escapeHtml(workspacePath)}</code>\n\n<i>Empty — nothing here yet.</i>\n\nAsk me to create a project and I'll put it here.`,
+        { parse_mode: 'HTML' },
+      );
+      return;
+    }
+
+    const lines: string[] = [
+      `<b>Workspace</b> — <code>${escapeHtml(workspacePath)}</code>`,
+      '',
+    ];
+
+    for (const entry of entries.slice(0, 30)) {
+      const icon = entry.isDirectory() ? '📁' : '📄';
+      lines.push(`${icon} ${escapeHtml(entry.name)}`);
+    }
+
+    if (entries.length > 30) {
+      lines.push(`\n<i>… and ${entries.length - 30} more items</i>`);
+    }
+
+    lines.push('', `<i>${entries.length} item(s) total</i>`);
+
+    await ctx.reply(truncateMessage(lines.join('\n')), { parse_mode: 'HTML' });
+    log.info({ chatId: ctx.chat?.id, itemCount: entries.length }, '/workspace command');
+  } catch (err) {
+    log.error({ err }, 'Error in /workspace');
+    await ctx.reply('Failed to read workspace folder.');
   }
 }
 

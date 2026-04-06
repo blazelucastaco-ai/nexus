@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { execSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -778,6 +778,92 @@ program
     console.log(chalk.dim('  NEXUS has left the building.'));
     console.log(chalk.dim('  To reinstall: git clone && ./install.sh'));
     console.log('');
+  });
+
+// ── nexus chat ────────────────────────────────────────────────────────────────
+
+program
+  .command('chat')
+  .description('Open an interactive REPL to chat with NEXUS (dev mode — no Telegram needed)')
+  .action(() => {
+    showLogo();
+    console.log(chalk.dim('  Interactive dev chat. Type ') + chalk.cyan('/quit') + chalk.dim(' to exit.'));
+    showPhrase();
+
+    // Spawn dev-chat.ts in interactive mode via tsx
+    const devChat = spawn(
+      'pnpm',
+      ['exec', 'tsx', join(PROJECT_DIR, 'scripts', 'dev-chat.ts'), '--interactive'],
+      { stdio: 'inherit', shell: true },
+    );
+
+    devChat.on('exit', (code) => {
+      if (code !== 0 && code !== null) {
+        console.log('');
+        console.log(chalk.dim('  dev-chat exited.'));
+      }
+      process.exit(code ?? 0);
+    });
+  });
+
+// ── nexus workspace ───────────────────────────────────────────────────────────
+
+program
+  .command('workspace')
+  .description('Open the NEXUS workspace folder in Finder')
+  .action(() => {
+    showLogo(true);
+
+    const workspacePath = join(HOME, 'nexus-workspace');
+
+    console.log(chalk.bold('  NEXUS Workspace'));
+    console.log(chalk.dim('  ─────────────────────────'));
+    console.log('');
+    console.log(`  ${chalk.dim('Path:')}   ${chalk.cyan(workspacePath)}`);
+    console.log('');
+
+    // Create if missing
+    if (!existsSync(workspacePath)) {
+      try {
+        mkdirSync(workspacePath, { recursive: true });
+        console.log(chalk.green('  ✓ Workspace directory created'));
+      } catch {
+        console.log(chalk.yellow('  ⚠  Could not create workspace directory'));
+      }
+    }
+
+    // List contents
+    try {
+      const entries = readdirSync(workspacePath);
+      if (entries.length === 0) {
+        console.log(chalk.dim('  (workspace is empty)'));
+      } else {
+        console.log(chalk.dim(`  ${entries.length} item(s):\n`));
+        for (const entry of entries.slice(0, 20)) {
+          const fullPath = join(workspacePath, entry);
+          const isDir = statSync(fullPath).isDirectory();
+          const icon = isDir ? '📁' : '📄';
+          console.log(`  ${icon}  ${entry}`);
+        }
+        if (entries.length > 20) {
+          console.log(chalk.dim(`  … and ${entries.length - 20} more`));
+        }
+      }
+    } catch {
+      console.log(chalk.dim('  (could not read workspace)'));
+    }
+
+    console.log('');
+
+    // Open in Finder
+    try {
+      execSync(`open "${workspacePath}"`, { stdio: 'pipe' });
+      console.log(chalk.green('  ✓ Opened in Finder'));
+    } catch {
+      console.log(chalk.dim(`  Run: open "${workspacePath}"`));
+    }
+
+    showPhrase();
   });
 
 program.parse(process.argv);

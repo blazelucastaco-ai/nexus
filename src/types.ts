@@ -243,6 +243,7 @@ export const NexusConfigSchema = z.object({
       timeoutSeconds: z.number().default(300),
     })
     .default({}),
+  workspace: z.string().default('~/nexus-workspace'),
 });
 
 export type NexusConfig = z.infer<typeof NexusConfigSchema>;

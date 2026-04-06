@@ -140,6 +140,16 @@ export class Orchestrator {
     log.info('NEXUS stopped');
   }
 
+  // ── Public Dev Interface ──────────────────────────────────────────
+
+  /**
+   * Process a plain-text message without any Telegram context.
+   * Used by the CLI chat REPL and dev-chat.ts test script.
+   */
+  async processMessage(text: string, userId = 'dev'): Promise<string> {
+    return this.handleMessage(userId, text);
+  }
+
   // ── Main Brain Loop ───────────────────────────────────────────────
 
   /**
@@ -408,6 +418,18 @@ when the user explicitly asks you to remember something, or when you discover a
 high-value fact. Use [RECALL] when you need deeper context than what was already
 provided in the system prompt.`);
 
+    // ── Workspace ──
+    const workspacePath = this.config.workspace.replace('~', process.env.HOME ?? '~');
+    extensions.push(`
+## Workspace
+
+Your default workspace for creating files, projects, websites, and other output is:
+  ${workspacePath}
+
+When the user asks you to create a project, build something, or save files, save them
+to this workspace unless they specify a different path. Always tell the user where you
+saved things. Delegate file creation to the file agent using the workspace path.`);
+
     // ── Current date/time ──
     extensions.push(`
 ## System Info
@@ -532,11 +554,12 @@ ${insights.slice(0, 8).join('\n')}`);
       'Delegating to agent',
     );
 
+    const inferredAction = this.inferAction(agentName, task);
     const agentTask: AgentTask = {
       id: generateId(),
       agentName,
-      action: this.inferAction(agentName, task),
-      params: { task, raw: true },
+      action: inferredAction,
+      params: this.buildDelegationParams(agentName, inferredAction, task),
       status: 'pending',
       createdAt: nowISO(),
     };
@@ -832,6 +855,59 @@ ${insights.slice(0, 8).join('\n')}`);
         return `- **${a.name}**: ${a.description}\n  Capabilities: ${caps}`;
       })
       .join('\n');
+  }
+
+  /**
+   * Build the params object for an agent delegation, mapping the free-text
+   * task description to whatever parameter name the target agent expects.
+   *
+   * Each agent uses a different primary param name:
+   *   terminal  → command
+   *   file      → path (with path extracted from task text if possible)
+   *   browser   → url / query
+   *   research  → query
+   *   others    → task / instruction / prompt
+   *
+   * We pass the task under ALL common aliases so agents with different
+   * conventions still find their param.
+   */
+  private buildDelegationParams(
+    agentName: AgentName,
+    action: string,
+    task: string,
+  ): Record<string, unknown> {
+    const common: Record<string, unknown> = {
+      task,
+      instruction: task,
+      prompt: task,
+      query: task,
+    };
+
+    if (agentName === 'terminal') {
+      return { ...common, command: task };
+    }
+
+    if (agentName === 'file') {
+      // Extract a path-like token from the task description if present
+      const pathMatch = task.match(/(?:^|\s)(~\/\S+|\/\S+|"[^"]+"|'[^']+')/);
+      const extractedPath = pathMatch
+        ? pathMatch[1].replace(/^['"]|['"]$/g, '')
+        : undefined;
+      return {
+        ...common,
+        path: extractedPath ?? task,
+        // write_file needs both path and content
+        content: task,
+      };
+    }
+
+    if (agentName === 'browser' || agentName === 'research') {
+      // Extract URL if present
+      const urlMatch = task.match(/https?:\/\/\S+/);
+      return { ...common, url: urlMatch?.[0] ?? task, query: task };
+    }
+
+    return common;
   }
 
   /**

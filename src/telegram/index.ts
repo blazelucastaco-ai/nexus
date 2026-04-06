@@ -16,6 +16,7 @@ export {
   handleMood,
   handleAgents,
   handleSettings,
+  handleWorkspace,
   handleThink,
   handleStop,
   handleHelp,
