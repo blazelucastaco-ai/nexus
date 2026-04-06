@@ -20,6 +20,7 @@ import { loadConfig } from '../src/config.js';
 import { Orchestrator } from '../src/core/orchestrator.js';
 import { MemoryManager } from '../src/memory/index.js';
 import { MemoryCortex } from '../src/memory/cortex.js';
+import { closeDatabase } from '../src/memory/database.js';
 import { PersonalityEngine } from '../src/personality/index.js';
 import { AgentManager } from '../src/agents/index.js';
 import { AIManager } from '../src/ai/index.js';
@@ -98,8 +99,13 @@ async function initNexus() {
   const macos = new MacOSController();
   const agents = new AgentManager();
   const cortex = new MemoryCortex();
-  cortex.initialize();
+  cortex.initialize(); // creates tables in memory.db (mistakes, preferences, etc.)
   const learning = new LearningSystem(cortex);
+
+  // Ensure SQLite WAL is checkpointed and memories are flushed on exit.
+  process.once('exit', () => closeDatabase());
+  process.once('SIGINT', () => process.exit(0));
+  process.once('SIGTERM', () => process.exit(0));
 
   // Stub telegram — orchestrator's handleMessage never calls telegram directly.
   // We only need the type to satisfy TypeScript; no methods will be invoked.

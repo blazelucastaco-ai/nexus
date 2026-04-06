@@ -247,13 +247,15 @@ export class Orchestrator {
       this.conversationHistory.push({ role: 'user', content: text });
 
       // ── 7. Call AI ────────────────────────────────────────────
-      // Cap at 1500 tokens for Telegram — keeps responses concise.
-      // Agent integration calls use higher limits separately.
+      // Use 8192 tokens when the task involves writing/saving files so the
+      // full file content is generated. Otherwise cap at 1500 for concise replies.
+      const hasWriteIntent = /\b(write|save\s+to|save\s+file|create\s+file|write\s+to)\b/i.test(text);
+      const maxTokens = hasWriteIntent ? 8192 : Math.min(this.config.ai.maxTokens, 1500);
       const aiResponse = await this.ai.complete({
         messages: this.conversationHistory.slice(-20),
         systemPrompt,
         model: this.config.ai.model,
-        maxTokens: Math.min(this.config.ai.maxTokens, 1500),
+        maxTokens,
         temperature: this.config.ai.temperature,
       });
 
@@ -447,6 +449,18 @@ export class Orchestrator {
     // Layer on enhanced orchestrator directives
     const extensions: string[] = [];
 
+    // ── macOS platform rules ──
+    extensions.push(`
+## Platform: macOS
+
+You run on macOS (Darwin). Use macOS-compatible commands only:
+- Process listing: \`ps aux | sort -k3 -rn\` (no GNU --sort flag)
+- System load: \`top -l 1 -s 0 | head -20\`
+- Open ports: \`lsof -i -P -n | grep LISTEN\`
+- Disk usage: \`df -h\` / \`du -sh\`
+- No GNU-only flags like \`--sort\`, \`--color=auto\` (use \`-G\` for color in ls).
+In Python scripts, always use \`os.path.expanduser('~/...')\` for tilde paths — Python does NOT expand \`~\` automatically.`);
+
     // ── Delegation instructions ──
     extensions.push(`
 ## Agent Delegation
@@ -630,10 +644,11 @@ ${insights.slice(0, 8).join('\n')}`);
       }
     }
 
-    // Strip delegation markers from the response
+    // Strip ALL delegation markers from the response.
+    // replaceAll ensures that identical blocks (rare but possible) are all removed.
     let cleanResponse = response;
     for (const d of delegations) {
-      cleanResponse = cleanResponse.replace(d.fullMatch, '');
+      cleanResponse = cleanResponse.split(d.fullMatch).join('');
     }
     cleanResponse = cleanResponse.replace(/\n{3,}/g, '\n\n').trim();
 

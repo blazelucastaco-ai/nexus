@@ -6,6 +6,16 @@ import { nowISO } from '../utils/helpers.js';
 
 const execFileAsync = promisify(execFile);
 
+const MAX_OUTPUT_BYTES = 200_000; // 200 KB — truncate cleanly at last newline
+
+function cleanTruncate(text: string): string {
+  if (text.length <= MAX_OUTPUT_BYTES) return text;
+  const slice = text.slice(0, MAX_OUTPUT_BYTES);
+  const lastNl = slice.lastIndexOf('\n');
+  const truncated = lastNl > 0 ? slice.slice(0, lastNl) : slice;
+  return truncated + `\n… [output truncated at ${MAX_OUTPUT_BYTES} bytes]`;
+}
+
 const DANGEROUS_PATTERNS = [
   /rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?(-[a-zA-Z]*r[a-zA-Z]*\s+)?\/\s*$/,
   /rm\s+(-[a-zA-Z]*r[a-zA-Z]*\s+)?(-[a-zA-Z]*f[a-zA-Z]*\s+)?\/\s*$/,
@@ -82,8 +92,8 @@ export class TerminalAgent extends BaseAgent {
       true,
       {
         command,
-        stdout: stdout.trim(),
-        stderr: stderr.trim(),
+        stdout: cleanTruncate(stdout.trim()),
+        stderr: cleanTruncate(stderr.trim()),
         executedAt: nowISO(),
       },
       undefined,
