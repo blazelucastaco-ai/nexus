@@ -3,7 +3,7 @@ import { defineConfig } from 'tsup';
 export default defineConfig([
   {
     entry: ['src/index.ts'],
-    format: ['esm'],
+    format: ['esm', 'cjs'],
     target: 'node22',
     outDir: 'dist',
     clean: true,
@@ -11,6 +11,7 @@ export default defineConfig([
     dts: true,
     splitting: false,
     treeshake: true,
+    noExternal: [/^(?!better-sqlite3|grammy).*/],
   },
   {
     entry: { cli: 'src/cli.ts' },
