@@ -106,6 +106,31 @@ All configuration lives in `~/.nexus/`:
 
 Environment variables can be set in `.env` at the project root. See `.env.example` for all available options.
 
+## CLI Commands
+
+After installation, the `nexus` command is available globally:
+
+```bash
+nexus start        # Start the NEXUS service
+nexus stop         # Stop the NEXUS service
+nexus restart      # Restart the NEXUS service
+nexus status       # Show status, uptime, and memory usage
+nexus logs         # Tail logs in real-time (Ctrl+C to stop)
+nexus config       # Show current configuration (secrets redacted)
+nexus verify       # Verify installation and connectivity
+nexus setup        # Re-run the interactive setup wizard
+nexus update       # Pull latest from GitHub and rebuild
+nexus agents       # List all agents and their status
+nexus memory       # Show memory system statistics
+nexus screenshot   # Take a screenshot and save to Desktop
+nexus health       # Full system health check
+nexus version      # Show version and environment info
+nexus uninstall    # Remove NEXUS from this system
+nexus help         # Show all available commands
+```
+
+Each command displays a random branded phrase. Because NEXUS has opinions.
+
 ## Development
 
 ```bash

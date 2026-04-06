@@ -8,6 +8,32 @@ set -euo pipefail
 
 VERSION="0.1.0"
 
+# ─── Branded Phrases ─────────────────────────────────────────────────
+PHRASES=(
+  "🧠 Your Mac's brain just got an upgrade."
+  "🧠 I never forget. Unlike your last assistant."
+  "🧠 Thinking for you since install day."
+  "🧠 Not a tool. A presence."
+  "🧠 I live here now. You're welcome."
+  "🧠 Full access. Full control. Full send."
+  "🧠 I remember everything. Even that thing you forgot."
+  "🧠 One brain. Ten agents. Zero excuses."
+  "🧠 Your Mac was lonely. It isn't anymore."
+  "🧠 Persistent. Opinionated. Unbothered."
+  "🧠 The AI that actually stays."
+  "🧠 Running 24/7 so you don't have to."
+  "🧠 Multi-layer memory. Multi-layer sass."
+  "🧠 Not a chatbot. An occupant."
+  "🧠 Always on. Always watching. Always vibing."
+  "🧠 Forget a chatbot. Get a roommate."
+  "🧠 Your files, your terminal, your screen. My domain."
+  "🧠 Slight omniscience. Significant helpfulness."
+)
+
+random_phrase() {
+  echo "${PHRASES[$((RANDOM % ${#PHRASES[@]}))]}"
+}
+
 # ─── Colors (ANSI 256) ──────────────────────────────────────────────
 
 RED='\033[0;31m'
@@ -267,14 +293,34 @@ section "Building Project"
 pnpm run build &>/dev/null 2>&1 &
 spinner $! "Compiling TypeScript..."
 
-# ─── 4. Create Directories ──────────────────────────────────────────
+# ─── 4. Link CLI Globally ───────────────────────────────────────────
+
+section "Installing CLI"
+
+# Try pnpm link --global first, then fallback to a manual symlink
+if pnpm link --global &>/dev/null 2>&1; then
+  animated_check "nexus command linked globally via pnpm" 0.4
+else
+  # Fallback: symlink into ~/.local/bin
+  mkdir -p "$HOME/.local/bin"
+  ln -sf "$SCRIPT_DIR/dist/cli.js" "$HOME/.local/bin/nexus"
+  chmod +x "$HOME/.local/bin/nexus"
+  animated_check "nexus symlinked to ~/.local/bin/nexus" 0.3
+  # Check if ~/.local/bin is on PATH
+  if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    warn "Add ~/.local/bin to your PATH:"
+    info "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc && source ~/.zshrc"
+  fi
+fi
+
+# ─── 5. Create Directories ──────────────────────────────────────────
 
 section "Setting Up Directories"
 
 mkdir -p ~/.nexus/{logs,screenshots,data}
 animated_check "Created ~/.nexus/ directory structure" 0.3
 
-# ─── 5. Launch Setup Wizard ─────────────────────────────────────────
+# ─── 6. Launch Setup Wizard ─────────────────────────────────────────
 
 section "Interactive Setup"
 
@@ -310,14 +356,15 @@ echo -e "    ${GREEN}${BOLD}╔════════════════�
 echo -e "    ${GREEN}${BOLD}║                                                  ║${NC}"
 echo -e "    ${GREEN}${BOLD}║${NC}   ${C6}✨  NEXUS is installed and ready!${NC}              ${GREEN}${BOLD}║${NC}"
 echo -e "    ${GREEN}${BOLD}║                                                  ║${NC}"
-echo -e "    ${GREEN}${BOLD}║${NC}   ${BOLD}Start:${NC}    ${CYAN}pnpm dev${NC}                             ${GREEN}${BOLD}║${NC}"
-echo -e "    ${GREEN}${BOLD}║${NC}   ${BOLD}Prod:${NC}     ${CYAN}pnpm start${NC}                           ${GREEN}${BOLD}║${NC}"
-echo -e "    ${GREEN}${BOLD}║${NC}   ${BOLD}Config:${NC}   ${DIM}~/.nexus/config.json${NC}                 ${GREEN}${BOLD}║${NC}"
-echo -e "    ${GREEN}${BOLD}║${NC}   ${BOLD}Re-setup:${NC} ${CYAN}pnpm setup${NC}                           ${GREEN}${BOLD}║${NC}"
+echo -e "    ${GREEN}${BOLD}║${NC}   ${BOLD}Start:${NC}    ${CYAN}nexus start${NC}                          ${GREEN}${BOLD}║${NC}"
+echo -e "    ${GREEN}${BOLD}║${NC}   ${BOLD}Status:${NC}   ${CYAN}nexus status${NC}                         ${GREEN}${BOLD}║${NC}"
+echo -e "    ${GREEN}${BOLD}║${NC}   ${BOLD}Logs:${NC}     ${CYAN}nexus logs${NC}                           ${GREEN}${BOLD}║${NC}"
+echo -e "    ${GREEN}${BOLD}║${NC}   ${BOLD}Config:${NC}   ${DIM}~/.nexus/config.yaml${NC}                 ${GREEN}${BOLD}║${NC}"
+echo -e "    ${GREEN}${BOLD}║${NC}   ${BOLD}All cmds:${NC} ${CYAN}nexus help${NC}                           ${GREEN}${BOLD}║${NC}"
 echo -e "    ${GREEN}${BOLD}║                                                  ║${NC}"
 echo -e "    ${GREEN}${BOLD}║${NC}   ${DIM}Open Telegram and send /start to your bot.${NC}     ${GREEN}${BOLD}║${NC}"
 echo -e "    ${GREEN}${BOLD}║                                                  ║${NC}"
 echo -e "    ${GREEN}${BOLD}╚══════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "    ${DIM}NEXUS — Not an assistant. A presence.${NC}"
+echo -e "    ${DIM}$(random_phrase)${NC}"
 echo ""

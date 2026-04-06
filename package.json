@@ -4,6 +4,9 @@
   "description": "NEXUS — A personal AI that lives on your Mac, communicates via Telegram",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "nexus": "dist/cli.js"
+  },
   "scripts": {
     "build": "tsup",
     "dev": "tsx watch src/index.ts",
