@@ -289,10 +289,19 @@ export class SemanticMemory {
    * Keyword search across facts (key + value + category).
    */
   searchFacts(query: string, limit = 50): UserFact[] {
+    const STOP_WORDS = new Set([
+      'a','an','the','is','are','was','were','be','been','being',
+      'have','has','had','do','does','did','will','would','could','should','may','might',
+      'i','me','my','we','our','you','your','he','she','his','her','they','their','it','its',
+      'what','which','who','whom','this','that','these','those',
+      'am','at','by','for','in','of','on','or','to','up','and','but','not','so',
+      'how','when','where','why','there','here',
+    ]);
     const terms = query
       .toLowerCase()
+      .replace(/[^\w\s]/g, '') // strip punctuation
       .split(/\s+/)
-      .filter(Boolean);
+      .filter((t) => t.length > 1 && !STOP_WORDS.has(t));
     if (terms.length === 0) return [];
 
     const conditions = terms.map(

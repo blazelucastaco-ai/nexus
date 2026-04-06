@@ -303,10 +303,19 @@ export class EpisodicMemory {
     }
 
     if (options.query) {
+      const STOP_WORDS = new Set([
+        'a','an','the','is','are','was','were','be','been','being',
+        'have','has','had','do','does','did','will','would','could','should','may','might',
+        'i','me','my','we','our','you','your','he','she','his','her','they','their','it','its',
+        'what','which','who','whom','this','that','these','those',
+        'am','at','by','for','in','of','on','or','to','up','and','but','not','so',
+        'how','when','where','why','there','here',
+      ]);
       const terms = options.query
         .toLowerCase()
+        .replace(/[^\w\s]/g, '')
         .split(/\s+/)
-        .filter(Boolean);
+        .filter((t) => t.length > 1 && !STOP_WORDS.has(t));
       for (const term of terms) {
         conditions.push(
           '(LOWER(content) LIKE ? OR LOWER(summary) LIKE ?)',

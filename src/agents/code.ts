@@ -2,9 +2,15 @@ import { execFile } from 'node:child_process';
 import { readFile, readdir, stat, mkdir, writeFile } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { promisify } from 'node:util';
+import { homedir } from 'node:os';
 import type { AgentResult } from '../types.js';
 import { BaseAgent } from './base-agent.js';
 import { nowISO } from '../utils/helpers.js';
+
+function expandPath(p: string): string {
+  if (p.startsWith('~')) return p.replace(/^~/, homedir());
+  return p;
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -49,7 +55,7 @@ export class CodeAgent extends BaseAgent {
   }
 
   private async analyzeCode(params: Record<string, unknown>, start: number): Promise<AgentResult> {
-    const filePath = String(params.path);
+    const filePath = expandPath(String(params.path));
     const content = await readFile(filePath, 'utf-8');
     const lines = content.split('\n');
     const ext = extname(filePath);
@@ -115,7 +121,7 @@ export class CodeAgent extends BaseAgent {
   }
 
   private async runTests(params: Record<string, unknown>, start: number): Promise<AgentResult> {
-    const cwd = String(params.path ?? params.cwd ?? '.');
+    const cwd = expandPath(String(params.path ?? params.cwd ?? '.'));
     const runner = String(params.runner ?? 'npm test');
 
     const { stdout, stderr } = await execFileAsync('/bin/zsh', ['-c', runner], {
@@ -140,7 +146,7 @@ export class CodeAgent extends BaseAgent {
   }
 
   private async gitStatus(params: Record<string, unknown>, start: number): Promise<AgentResult> {
-    const cwd = String(params.path ?? params.cwd ?? '.');
+    const cwd = expandPath(String(params.path ?? params.cwd ?? '.'));
 
     const [status, branch, log] = await Promise.all([
       execFileAsync('git', ['status', '--porcelain'], { cwd, timeout: 5_000 }),
@@ -179,7 +185,7 @@ export class CodeAgent extends BaseAgent {
   }
 
   private async gitCommit(params: Record<string, unknown>, start: number): Promise<AgentResult> {
-    const cwd = String(params.path ?? params.cwd ?? '.');
+    const cwd = expandPath(String(params.path ?? params.cwd ?? '.'));
     const message = String(params.message);
     const files = params.files as string[] | undefined;
 
@@ -207,7 +213,7 @@ export class CodeAgent extends BaseAgent {
   private async scaffoldProject(params: Record<string, unknown>, start: number): Promise<AgentResult> {
     const name = String(params.name);
     const template = String(params.template ?? 'typescript');
-    const baseDir = String(params.path ?? '.');
+    const baseDir = expandPath(String(params.path ?? '.'));
     const projectDir = join(baseDir, name);
 
     const structures: Record<string, Record<string, string>> = {
@@ -289,7 +295,7 @@ export class CodeAgent extends BaseAgent {
   }
 
   private async lint(params: Record<string, unknown>, start: number): Promise<AgentResult> {
-    const cwd = String(params.path ?? params.cwd ?? '.');
+    const cwd = expandPath(String(params.path ?? params.cwd ?? '.'));
     const tool = String(params.tool ?? 'eslint');
     const target = params.target ? String(params.target) : '.';
 

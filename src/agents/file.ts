@@ -10,9 +10,15 @@ import {
 import { join, extname, basename, dirname } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { homedir } from 'node:os';
 import type { AgentResult } from '../types.js';
 import { BaseAgent } from './base-agent.js';
 import { nowISO } from '../utils/helpers.js';
+
+function expandPath(p: string): string {
+  if (p.startsWith('~')) return p.replace(/^~/, homedir());
+  return p;
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -82,7 +88,7 @@ export class FileAgent extends BaseAgent {
   }
 
   private async listFiles(params: Record<string, unknown>, start: number): Promise<AgentResult> {
-    const dir = String(params.path ?? '.');
+    const dir = expandPath(String(params.path ?? '.'));
     const showHidden = Boolean(params.showHidden);
 
     const entries = await readdir(dir, { withFileTypes: true });
@@ -106,7 +112,7 @@ export class FileAgent extends BaseAgent {
   }
 
   private async searchFiles(params: Record<string, unknown>, start: number): Promise<AgentResult> {
-    const dir = String(params.path ?? '.');
+    const dir = expandPath(String(params.path ?? '.'));
     const pattern = String(params.pattern ?? '*');
     const maxDepth = Number(params.maxDepth ?? 10);
     const maxResults = Number(params.maxResults ?? 100);
@@ -149,7 +155,7 @@ export class FileAgent extends BaseAgent {
   }
 
   private async readFile(params: Record<string, unknown>, start: number): Promise<AgentResult> {
-    const filePath = String(params.path);
+    const filePath = expandPath(String(params.path));
     const encoding = (params.encoding as BufferEncoding) ?? 'utf-8';
     const maxSize = Number(params.maxSize ?? 1_000_000); // 1MB default
 
@@ -174,7 +180,7 @@ export class FileAgent extends BaseAgent {
   }
 
   private async writeFile(params: Record<string, unknown>, start: number): Promise<AgentResult> {
-    const filePath = String(params.path);
+    const filePath = expandPath(String(params.path));
     const content = String(params.content ?? '');
     const createDirs = Boolean(params.createDirs ?? true);
 
@@ -190,8 +196,8 @@ export class FileAgent extends BaseAgent {
   }
 
   private async moveFile(params: Record<string, unknown>, start: number): Promise<AgentResult> {
-    const source = String(params.source ?? params.from);
-    const destination = String(params.destination ?? params.to);
+    const source = expandPath(String(params.source ?? params.from));
+    const destination = expandPath(String(params.destination ?? params.to));
 
     await mkdir(dirname(destination), { recursive: true });
     await rename(source, destination);
@@ -201,7 +207,7 @@ export class FileAgent extends BaseAgent {
   }
 
   private async deleteFile(params: Record<string, unknown>, start: number): Promise<AgentResult> {
-    const filePath = String(params.path);
+    const filePath = expandPath(String(params.path));
 
     const info = await stat(filePath);
     if (info.isDirectory()) {
@@ -214,7 +220,7 @@ export class FileAgent extends BaseAgent {
   }
 
   private async diskUsage(params: Record<string, unknown>, start: number): Promise<AgentResult> {
-    const targetPath = String(params.path ?? '.');
+    const targetPath = expandPath(String(params.path ?? '.'));
     const { stdout } = await execFileAsync('du', ['-sh', targetPath], { timeout: 10_000 });
     const [size, path] = stdout.trim().split('\t');
 
@@ -222,7 +228,7 @@ export class FileAgent extends BaseAgent {
   }
 
   private async organize(params: Record<string, unknown>, start: number): Promise<AgentResult> {
-    const dir = String(params.path);
+    const dir = expandPath(String(params.path));
     const dryRun = Boolean(params.dryRun ?? false);
 
     const entries = await readdir(dir, { withFileTypes: true });

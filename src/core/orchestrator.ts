@@ -216,6 +216,11 @@ export class Orchestrator {
         'AI response received',
       );
 
+      // ── 8a. Explicit "remember" intent detection ──────────────
+      // If the user said "remember X", "don't forget X", etc., store it
+      // directly to semantic memory without relying on the LLM to emit [REMEMBER:].
+      await this.detectAndStoreRememberIntent(text);
+
       // ── 8. Process memory directives ──────────────────────────
       responseContent = await this.processMemoryDirectives(responseContent);
 
@@ -387,15 +392,27 @@ When the user's request requires capabilities beyond conversation (file operatio
 web browsing, code execution, screenshots, scheduling, etc.), delegate to the
 appropriate agent using this inline format:
 
-    [DELEGATE:agent_name:description of the task to perform]
+    [DELEGATE:agent_name:task_or_command]
+
+IMPORTANT — Terminal agent: always include the EXACT shell command to run, not a
+description. The command is passed directly to zsh, so it must be valid syntax.
 
 Examples:
     [DELEGATE:file:Read the contents of ~/Desktop/notes.txt]
-    [DELEGATE:terminal:List all running Docker containers]
+    [DELEGATE:terminal:docker ps]
+    [DELEGATE:terminal:node -v]
+    [DELEGATE:terminal:df -h]
+    [DELEGATE:terminal:ls -la ~/Desktop]
+    [DELEGATE:terminal:du -sh ~/Documents]
     [DELEGATE:browser:Search for the latest Node.js LTS version]
     [DELEGATE:code:Refactor the function to use async/await]
     [DELEGATE:vision:Take a screenshot and describe what is on screen]
     [DELEGATE:scheduler:Set a reminder for 3pm to review the PR]
+
+WRONG (never do this for terminal):
+    [DELEGATE:terminal:check node version]           ← description, not a command
+    [DELEGATE:terminal:list running containers]       ← description, not a command
+    [DELEGATE:terminal:show disk space]               ← description, not a command
 
 You may include multiple delegations in a single response. Always include
 conversational text alongside delegations — explain what you are doing and why.
@@ -612,6 +629,43 @@ ${insights.slice(0, 8).join('\n')}`);
       return `[${agentName}] Completed (${result.duration}ms): ${dataSummary}`;
     }
     return `[${agentName}] Failed (${result.duration}ms): ${result.error ?? 'unknown error'}`;
+  }
+
+  // ── Explicit Remember Intent ──────────────────────────────────────
+
+  /**
+   * Detect user phrases like "remember that...", "don't forget...",
+   * "keep in mind..." and store the fact directly to semantic memory.
+   * This is a belt-and-suspenders approach: the LLM is also instructed to
+   * emit [REMEMBER:...] directives, but explicit detection ensures nothing slips.
+   */
+  private async detectAndStoreRememberIntent(text: string): Promise<void> {
+    const patterns = [
+      /(?:please\s+)?remember\s+(?:that\s+)?(.+)/i,
+      /don['']t\s+forget\s+(?:that\s+)?(.+)/i,
+      /keep\s+in\s+mind\s+(?:that\s+)?(.+)/i,
+      /note\s+(?:that\s+)?(.+)/i,
+      /make\s+a\s+note\s+(?:that\s+)?(.+)/i,
+      /save\s+(?:the\s+fact\s+)?that\s+(.+)/i,
+    ];
+
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match) {
+        const fact = match[1]!.trim().replace(/[.!?]+$/, '');
+        try {
+          await this.memory.store('semantic', 'fact', fact, {
+            importance: 0.8,
+            tags: ['user-requested', 'explicit-remember'],
+            source: 'user-intent-detection',
+          });
+          log.info({ fact: truncate(fact, 100) }, 'Stored user-requested memory');
+        } catch (err) {
+          log.error({ err, fact: truncate(fact, 100) }, 'Failed to store user-requested memory');
+        }
+        break; // Only store once per message
+      }
+    }
   }
 
   // ── Memory Directive Processing ───────────────────────────────────
