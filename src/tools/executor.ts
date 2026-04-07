@@ -16,6 +16,7 @@ import { promisify } from 'node:util';
 import { createLogger } from '../utils/logger.js';
 import { nowISO, truncate } from '../utils/helpers.js';
 import { detectInjection, sanitizeInput } from '../brain/injection-guard.js';
+import type { SelfAwareness } from '../brain/self-awareness.js';
 
 import type { AgentManager } from '../agents/index.js';
 import type { MemoryManager } from '../memory/index.js';
@@ -59,6 +60,7 @@ export class ToolExecutor {
   constructor(
     private agents: AgentManager,
     private memory: MemoryManager,
+    private selfAwareness?: SelfAwareness,
   ) {}
 
   /**
@@ -105,6 +107,9 @@ export class ToolExecutor {
           break;
         case 'check_injection':
           result = this.checkInjection(args);
+          break;
+        case 'introspect':
+          result = this.introspect();
           break;
         default:
           result = `Error: Unknown tool "${toolName}"`;
@@ -320,6 +325,15 @@ export class ToolExecutor {
 
     log.info({ detected: result.detected, confidence: result.confidence }, 'check_injection tool called');
     return lines.join('\n');
+  }
+
+  // ── introspect ─────────────────────────────────────────────────────
+
+  private introspect(): string {
+    if (!this.selfAwareness) {
+      return 'Self-awareness module not initialized.';
+    }
+    return this.selfAwareness.getSelfReport();
   }
 
   // ── web_search ─────────────────────────────────────────────────────

@@ -17,6 +17,7 @@ import {
   wrapUntrustedContent,
   sanitizeEnvVars,
 } from '../brain/injection-guard.js';
+import { SelfAwareness } from '../brain/self-awareness.js';
 import type {
   AgentName,
   AgentResult,
@@ -50,6 +51,7 @@ export class Orchestrator {
   private startTime = Date.now();
   private initialized = false;
   private toolExecutor!: ToolExecutor;
+  private selfAwareness!: SelfAwareness;
 
   // Subsystems — set via init()
   public memory!: MemoryManager;
@@ -85,8 +87,9 @@ export class Orchestrator {
     this.macos = subsystems.macos;
     this.learning = subsystems.learning;
 
-    // Create tool executor with access to agents and memory
-    this.toolExecutor = new ToolExecutor(this.agents, this.memory);
+    // Create self-awareness layer and tool executor
+    this.selfAwareness = new SelfAwareness(this.memory, this.personality);
+    this.toolExecutor = new ToolExecutor(this.agents, this.memory, this.selfAwareness);
 
     this.initialized = true;
     log.info('Orchestrator initialized with all subsystems');
@@ -381,6 +384,12 @@ export class Orchestrator {
     );
 
     const extensions: string[] = [];
+
+    // ── Self-awareness status ──
+    extensions.push(`
+## Self-Awareness
+You are NEXUS, a digital mind running on this Mac. You are aware of your own processes, files, and emotional state.
+${this.selfAwareness.getCompactStatus()}`);
 
     // ── macOS platform rules ──
     extensions.push(`

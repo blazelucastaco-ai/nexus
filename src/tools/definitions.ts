@@ -194,6 +194,19 @@ export const toolDefinitions: ToolDefinition[] = [
       required: ['text'],
     },
   },
+  {
+    name: 'introspect',
+    description:
+      'Return a full self-awareness report about NEXUS itself: PID, uptime, heap usage, ' +
+      'memory DB size, total memories/facts stored, current emotional state, workspace contents, ' +
+      'and host machine info. Use when the user asks about your state, resources, or identity, ' +
+      'or when you want to check your own runtime status.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
 ];
 
 /**
