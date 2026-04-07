@@ -168,9 +168,9 @@ export class ToolExecutor {
 
   private async writeFile(args: Record<string, unknown>): Promise<string> {
     const rawPath = String(args.path ?? '');
-    // Unescape literal backslash-escaped sequences from LLM output
-    let content = String(args.content ?? '');
-    content = content.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r');
+    // Content arrives via JSON.parse() so actual newlines are already real newlines.
+    // Do NOT unescape \n — that would corrupt Python/bash string literals like print("hello\nworld").
+    const content = String(args.content ?? '');
     const executable = args.executable === true || args.executable === 'true';
 
     if (!rawPath) return 'Error: No path provided';
@@ -271,20 +271,24 @@ export class ToolExecutor {
 
   private async remember(args: Record<string, unknown>): Promise<string> {
     const content = String(args.content ?? '');
-    const importance = Number(args.importance ?? 0.7);
+    const importance = Number(args.importance ?? 0.9);
 
     if (!content) return 'Error: No content to remember';
 
-    const result = this.memory.store('semantic', 'fact', content, {
+    // Store episodically so generic recall queries ("what do you remember?") find it.
+    // Semantic (user_facts) only retrieves with specific keyword matches — episodic
+    // retrieval falls back to importance-sorted results when no keywords match.
+    const episodicContent = `REMEMBER: ${content}`;
+    const result = this.memory.store('episodic', 'fact', episodicContent, {
       importance,
-      tags: ['explicit-remember', 'tool-call'],
-      source: 'tool-executor',
+      tags: ['explicit-remember', 'tool-call', 'user-requested'],
+      source: 'remember-tool',
     });
 
     // Generate and store a local TF-IDF embedding for vector search
     if (result && typeof result === 'object' && 'id' in result) {
       try {
-        storeEmbedding(result.id as string, content);
+        storeEmbedding((result as { id: string }).id, episodicContent);
       } catch (err) {
         log.warn({ err }, 'Failed to store embedding for memory');
       }
