@@ -17,6 +17,8 @@ import {
   handleSettings,
   handleWorkspace,
   handleThink,
+  handleQuiet,
+  handleLoud,
   handleStop,
   handleHelp,
 } from './commands.js';
@@ -264,6 +266,16 @@ export class TelegramGateway {
     this.bot.command('think', (ctx) => {
       if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
       return handleThink(ctx, this.orchestrator);
+    });
+
+    this.bot.command('quiet', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      return handleQuiet(ctx, this.orchestrator);
+    });
+
+    this.bot.command('loud', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      return handleLoud(ctx, this.orchestrator);
     });
 
     this.bot.command('stop', (ctx) => handleStop(ctx));

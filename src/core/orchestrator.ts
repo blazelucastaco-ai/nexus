@@ -21,6 +21,7 @@ import { SelfAwareness } from '../brain/self-awareness.js';
 import { summarizeSession, storeSessionSummary } from '../brain/session-summary.js';
 import { InnerMonologue } from '../brain/inner-monologue.js';
 import { DreamingEngine } from '../brain/dreaming.js';
+import { ProactiveEngine } from '../brain/proactive.js';
 import type {
   AgentName,
   AgentResult,
@@ -74,6 +75,7 @@ export class Orchestrator {
   public telegram!: TelegramGateway;
   public macos!: MacOSController;
   public learning!: LearningSystem;
+  public proactive?: ProactiveEngine;
 
   constructor() {
     this.config = loadConfig();
@@ -122,6 +124,15 @@ export class Orchestrator {
     // Schedule dream cycle every 6 hours
     this.scheduleDreamCycle();
 
+    // Start proactive monitoring (alerts to the primary Telegram user)
+    const primaryChatId = this.config.telegram.allowedUsers[0] ?? '';
+    if (primaryChatId) {
+      this.proactive = new ProactiveEngine(async (msg) => {
+        await this.telegram.sendMessage(primaryChatId, msg);
+      });
+      this.proactive.start();
+    }
+
     this.eventLoop.emit('system:started', { timestamp: nowISO() }, 'high', 'orchestrator');
     log.info('NEXUS is running');
   }
@@ -147,6 +158,8 @@ export class Orchestrator {
       clearInterval(this.dreamInterval);
       this.dreamInterval = null;
     }
+
+    this.proactive?.stop();
 
     try {
       const state = this.personality.getPersonalityState();
@@ -742,21 +755,52 @@ ${insights.slice(0, 8).join('\n')}`);
 
   // ── Context Pruning ───────────────────────────────────────────────
 
+  /**
+   * Context Window Pruning (Phase 4.2)
+   *
+   * When the loop message list exceeds maxTokens (≈6 000 tokens / ~24 000 chars),
+   * older messages are replaced with a compact summary:
+   *   "[Earlier: discussed X, Y, Z]"
+   *
+   * Bootstrap protection: the first user message is NEVER pruned, matching
+   * the pattern used in OpenClaw to preserve the original task context.
+   */
   private pruneHistory(messages: any[], maxTokens = 6000): any[] {
-    const estimate = (msg: any) => (msg.content?.length || 0) / 4;
-    let total = messages.reduce((sum, m) => sum + estimate(m), 0);
+    const estimate = (msg: any) => Math.ceil((String(msg.content ?? '')).length / 4);
+    const total = messages.reduce((sum, m) => sum + estimate(m), 0);
     if (total <= maxTokens) return messages;
-    const pruned = [...messages];
-    // Never prune system prompt (index 0) or first user message
-    let firstUserIdx = pruned.findIndex(m => m.role === 'user');
-    if (firstUserIdx < 0) firstUserIdx = 1;
-    while (total > maxTokens && pruned.length > firstUserIdx + 2) {
-      const removed = pruned.splice(firstUserIdx + 1, 1)[0];
-      total -= estimate(removed);
-    }
-    if (total > maxTokens) {
-      pruned.splice(firstUserIdx + 1, 0, { role: 'system', content: '[Earlier conversation was summarized to fit context window]' });
-    }
+
+    // Locate the first user message — it is the bootstrap anchor, never pruned.
+    const firstUserIdx = Math.max(0, messages.findIndex((m) => m.role === 'user'));
+    // Keep: messages[0..firstUserIdx] + last 6 messages. Summarize the middle.
+    const keepEnd = Math.max(firstUserIdx + 1, messages.length - 6);
+    const middleMessages = messages.slice(firstUserIdx + 1, keepEnd);
+    if (middleMessages.length === 0) return messages;
+
+    // Extract a handful of topics from the pruned range for the summary line.
+    const topics = middleMessages
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .slice(0, 8)
+      .map((m) => truncate(String(m.content ?? '').replace(/\n+/g, ' '), 60))
+      .filter(Boolean)
+      .join('; ');
+
+    const summaryMsg = {
+      role: 'system' as const,
+      content: `[Earlier: ${topics || 'prior conversation'}]`,
+    };
+
+    const pruned = [
+      ...messages.slice(0, firstUserIdx + 1),
+      summaryMsg,
+      ...messages.slice(keepEnd),
+    ];
+
+    log.debug(
+      { originalLen: messages.length, prunedLen: pruned.length, removedMsgs: middleMessages.length },
+      'Context window pruned',
+    );
+
     return pruned;
   }
 

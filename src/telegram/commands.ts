@@ -39,6 +39,8 @@ export const commands: BotCommand[] = [
   { command: 'settings', description: 'Show current configuration' },
   { command: 'workspace', description: 'List contents of the NEXUS workspace folder' },
   { command: 'think', description: 'Toggle think mode, or /think <topic> for one-shot inner monologue' },
+  { command: 'quiet', description: 'Disable proactive system alerts' },
+  { command: 'loud', description: 'Enable proactive system alerts' },
   { command: 'stop', description: 'Graceful shutdown' },
   { command: 'help', description: 'Show all available commands' },
 ];
@@ -364,6 +366,30 @@ export async function handleWorkspace(ctx: Context): Promise<void> {
   } catch (err) {
     log.error({ err }, 'Error in /workspace');
     await ctx.reply('Failed to read workspace folder.');
+  }
+}
+
+// ─── /quiet ──────────────────────────────────────────────────────────
+
+export async function handleQuiet(ctx: Context, orchestrator: Orchestrator): Promise<void> {
+  try {
+    orchestrator.proactive?.setQuiet(true);
+    await ctx.reply('🔇 <b>Quiet mode on</b> — proactive alerts paused.', { parse_mode: 'HTML' });
+  } catch (err) {
+    log.error({ err }, 'Error in /quiet');
+    await ctx.reply('Failed to enable quiet mode.');
+  }
+}
+
+// ─── /loud ───────────────────────────────────────────────────────────
+
+export async function handleLoud(ctx: Context, orchestrator: Orchestrator): Promise<void> {
+  try {
+    orchestrator.proactive?.setQuiet(false);
+    await ctx.reply('🔔 <b>Alerts on</b> — I\'ll notify you of notable system events.', { parse_mode: 'HTML' });
+  } catch (err) {
+    log.error({ err }, 'Error in /loud');
+    await ctx.reply('Failed to enable alerts.');
   }
 }
 
