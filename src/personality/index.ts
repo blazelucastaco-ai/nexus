@@ -87,6 +87,10 @@ export class PersonalityEngine {
     if (saved.opinionHistory) {
       this.opinions.restoreHistory(saved.opinionHistory);
     }
+    // Phase 2.3: restore disagreement calibration history
+    if (saved.disagreementHistory) {
+      this.opinions.restoreDisagreementHistory(saved.disagreementHistory);
+    }
 
     // Apply time decay based on how long it's been since last save
     const daysSinceLastSave = (Date.now() - new Date(saved.savedAt).getTime()) / 86_400_000;
@@ -110,7 +114,7 @@ export class PersonalityEngine {
 
   private buildStateFile(): BrainStateFile {
     return {
-      version: 3,
+      version: 4,
       savedAt: new Date().toISOString(),
       emotionalState: this.emotions.getState(),
       mood: this.mood,
@@ -125,6 +129,7 @@ export class PersonalityEngine {
       moodHistory: this.moodHistory,
       dailyMoodBaseline: this.getDailyMoodBaseline(),
       opinionHistory: this.opinions.serializeHistory(),
+      disagreementHistory: this.opinions.serializeDisagreementHistory(),
     };
   }
 
@@ -398,6 +403,12 @@ export class PersonalityEngine {
   /** Add evidence for an opinion. Convenience wrapper. */
   addOpinionEvidence(topic: string, evidence: Evidence): void {
     this.opinions.formOpinion(topic, evidence);
+  }
+
+  /** Record how a disagreement interaction resolved. Updates per-topic pushback threshold. */
+  recordDisagreementOutcome(topic: string, userAccepted: boolean): void {
+    this.opinions.recordDisagreementOutcome(topic, userAccepted);
+    this.scheduleSave();
   }
 
   /** Tick decay on emotional state (call between messages or on idle). */

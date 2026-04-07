@@ -38,7 +38,7 @@ export const commands: BotCommand[] = [
   { command: 'agents', description: 'List available agents and status' },
   { command: 'settings', description: 'Show current configuration' },
   { command: 'workspace', description: 'List contents of the NEXUS workspace folder' },
-  { command: 'think', description: 'Inner monologue on a topic' },
+  { command: 'think', description: 'Toggle think mode, or /think <topic> for one-shot inner monologue' },
   { command: 'stop', description: 'Graceful shutdown' },
   { command: 'help', description: 'Show all available commands' },
 ];
@@ -241,17 +241,25 @@ export async function handleThink(ctx: Context, orchestrator: Orchestrator): Pro
     const text = ctx.message?.text ?? '';
     const topic = text.replace(/^\/think\s*/, '').trim();
 
+    // No topic = toggle think mode on/off
     if (!topic) {
-      await ctx.reply(
-        '<b>Usage:</b> <code>/think &lt;topic&gt;</code>\n\nI\'ll share my inner monologue on the given topic.',
-        { parse_mode: 'HTML' },
-      );
+      if (!orchestrator.innerMonologue) {
+        await ctx.reply('Inner monologue module not initialized.', { parse_mode: 'HTML' });
+        return;
+      }
+      const newState = orchestrator.innerMonologue.toggleThinkMode();
+      const icon = newState ? '💭' : '🔇';
+      const statusLine = newState
+        ? '<b>Think mode ON</b> — I\'ll prefix each response with my inner monologue.'
+        : '<b>Think mode OFF</b> — responses are clean again.';
+      await ctx.reply(`${icon} ${statusLine}`, { parse_mode: 'HTML' });
+      log.info({ chatId: ctx.chat?.id, thinkMode: newState }, '/think toggle');
       return;
     }
 
+    // Topic provided = one-shot inner monologue on that topic
     await ctx.replyWithChatAction('typing');
 
-    // Use the orchestrator's AI to generate an inner monologue
     if (!orchestrator.ai) {
       await ctx.reply('AI system not connected.', { parse_mode: 'HTML' });
       return;
@@ -275,13 +283,13 @@ export async function handleThink(ctx: Context, orchestrator: Orchestrator): Pro
     });
 
     const lines = [
-      `<b>Inner Monologue: ${escapeHtml(topic)}</b>`,
+      `💭 <b>Inner Monologue: ${escapeHtml(topic)}</b>`,
       '',
       escapeHtml(response.content),
     ];
 
     await ctx.reply(truncateMessage(lines.join('\n')), { parse_mode: 'HTML' });
-    log.info({ chatId: ctx.chat?.id, topic }, '/think command');
+    log.info({ chatId: ctx.chat?.id, topic }, '/think one-shot');
   } catch (err) {
     log.error({ err }, 'Error in /think');
     await ctx.reply('Failed to generate inner monologue.');

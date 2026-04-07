@@ -207,6 +207,24 @@ export const toolDefinitions: ToolDefinition[] = [
       required: [],
     },
   },
+  {
+    name: 'toggle_think_mode',
+    description:
+      'Enable or disable inner monologue (think mode). When enabled, NEXUS prefixes each response ' +
+      'with a 💭 thought bubble showing its reasoning process before answering. ' +
+      'Use when the user asks to see your thinking, or wants to turn think mode on/off.',
+    parameters: {
+      type: 'object',
+      properties: {
+        enabled: {
+          type: 'string',
+          description: 'Set to "true" to enable, "false" to disable, or omit to toggle the current state.',
+          enum: ['true', 'false'],
+        },
+      },
+      required: [],
+    },
+  },
 ];
 
 /**

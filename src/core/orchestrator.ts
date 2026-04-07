@@ -19,6 +19,7 @@ import {
 } from '../brain/injection-guard.js';
 import { SelfAwareness } from '../brain/self-awareness.js';
 import { summarizeSession, storeSessionSummary } from '../brain/session-summary.js';
+import { InnerMonologue } from '../brain/inner-monologue.js';
 import type {
   AgentName,
   AgentResult,
@@ -53,6 +54,7 @@ export class Orchestrator {
   private initialized = false;
   private toolExecutor!: ToolExecutor;
   private selfAwareness!: SelfAwareness;
+  public innerMonologue!: InnerMonologue;
 
   // Session auto-summary tracking
   private sessionTurnCount = 0;
@@ -95,9 +97,10 @@ export class Orchestrator {
     this.macos = subsystems.macos;
     this.learning = subsystems.learning;
 
-    // Create self-awareness layer and tool executor
+    // Create self-awareness layer, inner monologue, and tool executor
     this.selfAwareness = new SelfAwareness(this.memory, this.personality);
-    this.toolExecutor = new ToolExecutor(this.agents, this.memory, this.selfAwareness);
+    this.innerMonologue = new InnerMonologue(this.ai);
+    this.toolExecutor = new ToolExecutor(this.agents, this.memory, this.selfAwareness, this.innerMonologue);
 
     this.initialized = true;
     log.info('Orchestrator initialized with all subsystems');
@@ -224,6 +227,21 @@ export class Orchestrator {
       // ── 7. Explicit "remember" intent detection ───────────────
       await this.detectAndStoreRememberIntent(text);
 
+      // ── 7b. Inner monologue (think mode) ──────────────────────
+      let innerThought = '';
+      if (this.innerMonologue.isEnabled()) {
+        const pState = this.personality.getPersonalityState();
+        innerThought = await this.innerMonologue.generateThought({
+          task: text,
+          emotion: pState.emotionLabel,
+          memories: recentMemories.slice(0, 3).map((m) => m.summary ?? truncate(m.content, 100)),
+          recentHistory: this.conversationHistory
+            .slice(-4)
+            .map((m) => `${m.role}: ${truncate(String(m.content ?? ''), 120)}`)
+            .join('\n'),
+        });
+      }
+
       // ── 8. Tool calling loop ──────────────────────────────────
       const tools = toOpenAITools();
       const hasWriteIntent = /\b(write|save\s+to|save\s+file|create\s+file|write\s+to)\b/i.test(text);
@@ -312,6 +330,11 @@ export class Orchestrator {
         if (iteration === MAX_TOOL_ITERATIONS - 1) {
           finalContent = aiResponse.content || 'I completed the tasks but ran out of processing turns.';
         }
+      }
+
+      // ── 8b. Prepend inner monologue if think mode active ──────
+      if (innerThought) {
+        finalContent = `💭 ${innerThought}\n\n${finalContent}`;
       }
 
       // ── 9. Store assistant response ───────────────────────────

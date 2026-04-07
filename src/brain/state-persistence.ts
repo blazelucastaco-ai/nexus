@@ -1,6 +1,7 @@
 // Brain Phase 1.2 — Personality State Persistence
 // Brain Phase 2.1 — Mood History, Circadian Baseline, Relationship Score
 // Brain Phase 2.2 — Opinion History with Drift
+// Brain Phase 2.3 — Disagreement Calibration History
 //
 // Saves and loads personality state to/from ~/.nexus/brain-state.json so NEXUS
 // retains its emotional context, warmth, opinions, and interaction history across restarts.
@@ -9,13 +10,13 @@ import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
 import { join, dirname } from 'path';
 import type { EmotionalState } from '../types.js';
-import type { Opinion } from '../personality/opinions.js';
+import type { Opinion, DisagreementRecord } from '../personality/opinions.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('StatePersistence');
 
 const STATE_PATH = join(homedir(), '.nexus', 'brain-state.json');
-const STATE_VERSION = 3;
+const STATE_VERSION = 4;
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -41,6 +42,8 @@ export interface BrainStateFile {
   dailyMoodBaseline: number;           // -1 to 1, computed from time-of-day at save time
   // Phase 2.2: per-topic opinion drift history
   opinionHistory: Record<string, Array<{ stance: number; confidence: number; timestamp: string; reason: string }>>;
+  // Phase 2.3: per-topic disagreement outcome history
+  disagreementHistory: Record<string, DisagreementRecord[]>;
 }
 
 // ── File I/O ───────────────────────────────────────────────────────────────
@@ -69,6 +72,13 @@ export function loadBrainState(): BrainStateFile | null {
       parsed.version = 3;
       parsed.opinionHistory = {};
       log.info({ path: STATE_PATH }, 'Brain state migrated v2→v3');
+    }
+
+    if (parsed.version === 3) {
+      // Migrate v3 → v4: add empty disagreement history
+      parsed.version = 4;
+      parsed.disagreementHistory = {};
+      log.info({ path: STATE_PATH }, 'Brain state migrated v3→v4');
     }
 
     if (parsed.version !== STATE_VERSION) {

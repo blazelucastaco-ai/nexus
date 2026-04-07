@@ -5,6 +5,11 @@ const log = createLogger('OpinionEngine');
 
 export type DisagreementLevel = 'mention' | 'suggest' | 'recommend' | 'warn' | 'refuse';
 
+export interface DisagreementRecord {
+  timestamp: string;
+  userAccepted: boolean; // true = user accepted NEXUS pushback, false = user overrode it
+}
+
 export interface Evidence {
   content: string;
   weight: number; // -1 to 1: negative = against, positive = for
@@ -32,6 +37,8 @@ export interface OpinionSnapshot {
 export class OpinionEngine {
   private opinions: Map<string, Opinion> = new Map();
   private opinionHistory: Map<string, OpinionSnapshot[]> = new Map();
+  private disagreementHistory: Map<string, DisagreementRecord[]> = new Map();
+  private perTopicThreshold: Map<string, number> = new Map();
   private readonly pushbackThreshold: number;
 
   constructor(pushbackThreshold = 0.6) {
@@ -203,8 +210,57 @@ export class OpinionEngine {
     if (!opinion) return false;
 
     const effectiveConfidence = overrideConfidence ?? opinion.confidence;
-    // Push back when confident enough AND stance is negative (disagrees)
-    return effectiveConfidence >= this.pushbackThreshold && opinion.stance < -0.2;
+    // Use per-topic threshold if calibrated, otherwise fall back to global threshold
+    const threshold = this.perTopicThreshold.get(key) ?? this.pushbackThreshold;
+    return effectiveConfidence >= threshold && opinion.stance < -0.2;
+  }
+
+  /**
+   * Record the outcome of a pushback interaction.
+   * Call this after the user responds to NEXUS expressing disagreement.
+   * userAccepted=true means the user agreed with NEXUS; false means they overrode it.
+   */
+  recordDisagreementOutcome(topic: string, userAccepted: boolean): void {
+    const key = topic.toLowerCase().trim();
+    const records = this.disagreementHistory.get(key) ?? [];
+    records.push({ timestamp: nowISO(), userAccepted });
+    // Keep last 20 records per topic
+    if (records.length > 20) records.splice(0, records.length - 20);
+    this.disagreementHistory.set(key, records);
+
+    this.recalibrateThreshold(key, records);
+
+    log.info(
+      {
+        topic: key,
+        userAccepted,
+        totalRecords: records.length,
+        newThreshold: this.perTopicThreshold.get(key),
+      },
+      'Disagreement outcome recorded',
+    );
+  }
+
+  /** Get the effective pushback threshold for a topic (calibrated or global). */
+  getEffectiveThreshold(topic: string): number {
+    return this.perTopicThreshold.get(topic.toLowerCase().trim()) ?? this.pushbackThreshold;
+  }
+
+  /** Recalibrate the per-topic pushback threshold based on disagreement history. */
+  private recalibrateThreshold(key: string, records: DisagreementRecord[]): void {
+    if (records.length < 3) return; // Not enough data yet
+
+    const recent = records.slice(-10);
+    const overrideRate = recent.filter((r) => !r.userAccepted).length / recent.length;
+
+    // overrideRate 0 = user always accepts → NEXUS should push back more (lower threshold)
+    // overrideRate 1 = user always overrides → NEXUS should push back less (higher threshold)
+    // Neutral point: 0.5 → no adjustment
+    const adjustment = (overrideRate - 0.5) * 0.3; // ±0.15 swing
+    const newThreshold = clamp(this.pushbackThreshold + adjustment, 0.3, 0.95);
+    this.perTopicThreshold.set(key, newThreshold);
+
+    log.debug({ key, overrideRate: overrideRate.toFixed(2), newThreshold: newThreshold.toFixed(2) }, 'Threshold recalibrated');
   }
 
   /** Map a confidence level to a disagreement intensity. */
@@ -266,6 +322,33 @@ export class OpinionEngine {
   /** Get raw history for a topic. */
   getHistory(topic: string): OpinionSnapshot[] {
     return this.opinionHistory.get(topic.toLowerCase().trim()) ?? [];
+  }
+
+  /** Get disagreement records for a topic. */
+  getDisagreementHistory(topic: string): DisagreementRecord[] {
+    return this.disagreementHistory.get(topic.toLowerCase().trim()) ?? [];
+  }
+
+  /** Serialize disagreement history for persistence. */
+  serializeDisagreementHistory(): Record<string, DisagreementRecord[]> {
+    const out: Record<string, DisagreementRecord[]> = {};
+    for (const [key, records] of this.disagreementHistory) {
+      out[key] = records;
+    }
+    return out;
+  }
+
+  /** Restore disagreement history from persistence and recalibrate thresholds. */
+  restoreDisagreementHistory(raw: Record<string, DisagreementRecord[]>): void {
+    this.disagreementHistory.clear();
+    this.perTopicThreshold.clear();
+    for (const [key, records] of Object.entries(raw)) {
+      this.disagreementHistory.set(key, records);
+      if (records.length >= 3) {
+        this.recalibrateThreshold(key, records);
+      }
+    }
+    log.debug({ topics: this.disagreementHistory.size }, 'Disagreement history restored from state');
   }
 
   /** Record a snapshot of the current opinion state. */

@@ -17,6 +17,7 @@ import { createLogger } from '../utils/logger.js';
 import { nowISO, truncate } from '../utils/helpers.js';
 import { detectInjection, sanitizeInput } from '../brain/injection-guard.js';
 import type { SelfAwareness } from '../brain/self-awareness.js';
+import type { InnerMonologue } from '../brain/inner-monologue.js';
 
 import type { AgentManager } from '../agents/index.js';
 import type { MemoryManager } from '../memory/index.js';
@@ -61,6 +62,7 @@ export class ToolExecutor {
     private agents: AgentManager,
     private memory: MemoryManager,
     private selfAwareness?: SelfAwareness,
+    private innerMonologue?: InnerMonologue,
   ) {}
 
   /**
@@ -110,6 +112,9 @@ export class ToolExecutor {
           break;
         case 'introspect':
           result = this.introspect();
+          break;
+        case 'toggle_think_mode':
+          result = this.toggleThinkMode(args);
           break;
         default:
           result = `Error: Unknown tool "${toolName}"`;
@@ -334,6 +339,28 @@ export class ToolExecutor {
       return 'Self-awareness module not initialized.';
     }
     return this.selfAwareness.getSelfReport();
+  }
+
+  // ── toggle_think_mode ──────────────────────────────────────────────
+
+  private toggleThinkMode(args: Record<string, unknown>): string {
+    if (!this.innerMonologue) {
+      return 'Inner monologue module not initialized.';
+    }
+
+    let newState: boolean;
+    if (args.enabled === 'true') {
+      newState = this.innerMonologue.toggleThinkMode(true);
+    } else if (args.enabled === 'false') {
+      newState = this.innerMonologue.toggleThinkMode(false);
+    } else {
+      newState = this.innerMonologue.toggleThinkMode();
+    }
+
+    log.info({ thinkMode: newState }, 'Think mode toggled via tool');
+    return newState
+      ? 'Think mode enabled. I\'ll prefix responses with 💭 showing my reasoning process.'
+      : 'Think mode disabled. Responses will be clean without the inner monologue prefix.';
   }
 
   // ── web_search ─────────────────────────────────────────────────────
