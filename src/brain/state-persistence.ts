@@ -1,4 +1,5 @@
 // Brain Phase 1.2 — Personality State Persistence
+// Brain Phase 2.1 — Mood History, Circadian Baseline, Relationship Score
 //
 // Saves and loads personality state to/from ~/.nexus/brain-state.json so NEXUS
 // retains its emotional context, warmth, opinions, and interaction history across restarts.
@@ -13,9 +14,14 @@ import { createLogger } from '../utils/logger.js';
 const log = createLogger('StatePersistence');
 
 const STATE_PATH = join(homedir(), '.nexus', 'brain-state.json');
-const STATE_VERSION = 1;
+const STATE_VERSION = 2;
 
 // ── Types ──────────────────────────────────────────────────────────────────
+
+export interface MoodHistoryEntry {
+  valence: number;
+  timestamp: string; // ISO 8601
+}
 
 export interface BrainStateFile {
   version: number;
@@ -26,6 +32,13 @@ export interface BrainStateFile {
   messageCount: number;
   firstInteraction: string;
   opinions: Opinion[];
+  // Phase 2.1 additions
+  moodHistory: MoodHistoryEntry[];      // last 50 entries with timestamps
+  dailyMoodBaseline: number;            // -1 to 1, computed from time-of-day at save time
+  totalInteractionCount: number;        // lifetime interaction counter
+  firstSeenTimestamp: string;           // ISO — when NEXUS first met this user
+  lastSeenTimestamp: string;            // ISO — most recent interaction
+  relationshipScore: number;            // 0-1, grows with positive interactions
 }
 
 // ── File I/O ───────────────────────────────────────────────────────────────
@@ -35,6 +48,23 @@ export function loadBrainState(): BrainStateFile | null {
   try {
     const raw = readFileSync(STATE_PATH, 'utf8');
     const parsed = JSON.parse(raw) as BrainStateFile;
+
+    if (parsed.version === 1) {
+      // Migrate v1 → v2: fill Phase 2.1 defaults from existing fields
+      const now = new Date().toISOString();
+      const migrated: BrainStateFile = {
+        ...parsed,
+        version: 2,
+        moodHistory: [],
+        dailyMoodBaseline: 0,
+        totalInteractionCount: parsed.messageCount ?? 0,
+        firstSeenTimestamp: parsed.firstInteraction ?? now,
+        lastSeenTimestamp: now,
+        relationshipScore: Math.min((parsed.relationshipWarmth ?? 0) * 0.5, 1),
+      };
+      log.info({ path: STATE_PATH }, 'Brain state migrated v1→v2');
+      return migrated;
+    }
 
     if (parsed.version !== STATE_VERSION) {
       log.warn({ path: STATE_PATH, version: parsed.version }, 'Brain state version mismatch, ignoring');
