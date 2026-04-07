@@ -156,13 +156,7 @@ export class ToolExecutor {
     let content = String(args.content ?? '');
     const executable = args.executable === true || args.executable === 'true';
 
-    // Unescape literal \n and \t that Gemini sends as two-character sequences
-    content = content.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
-
     if (!rawPath) return 'Error: No path provided';
-
-    // Unescape literal backslash-escaped sequences from LLM output
-    content = content.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r');
 
     const filePath = expandPath(rawPath);
 
