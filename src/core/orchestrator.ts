@@ -18,6 +18,7 @@ import {
   sanitizeEnvVars,
 } from '../brain/injection-guard.js';
 import { SelfAwareness } from '../brain/self-awareness.js';
+import { summarizeSession, storeSessionSummary } from '../brain/session-summary.js';
 import type {
   AgentName,
   AgentResult,
@@ -52,6 +53,13 @@ export class Orchestrator {
   private initialized = false;
   private toolExecutor!: ToolExecutor;
   private selfAwareness!: SelfAwareness;
+
+  // Session auto-summary tracking
+  private sessionTurnCount = 0;
+  private lastMessageTime = Date.now();
+  private inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly INACTIVITY_MS = 30 * 60 * 1000; // 30 minutes
+  private readonly SUMMARY_EVERY_N_TURNS = 5;
 
   // Subsystems — set via init()
   public memory!: MemoryManager;
@@ -111,6 +119,20 @@ export class Orchestrator {
 
   async stop(): Promise<void> {
     log.info('Shutting down NEXUS...');
+
+    // Save final session summary before shutdown
+    if (this.sessionTurnCount > 0) {
+      try {
+        await this.generateAndStoreSummary('shutdown');
+      } catch (err) {
+        log.warn({ err }, 'Failed to store shutdown session summary');
+      }
+    }
+
+    if (this.inactivityTimer) {
+      clearTimeout(this.inactivityTimer);
+      this.inactivityTimer = null;
+    }
 
     try {
       const state = this.personality.getPersonalityState();
@@ -312,6 +334,17 @@ export class Orchestrator {
             this.personality.getPersonalityState().emotion.valence,
         },
       );
+
+      // ── 10b. Session turn tracking + auto-summary ─────────────
+      this.sessionTurnCount++;
+      this.lastMessageTime = Date.now();
+      this.resetInactivityTimer();
+
+      if (this.sessionTurnCount % this.SUMMARY_EVERY_N_TURNS === 0) {
+        this.generateAndStoreSummary('periodic').catch((err) =>
+          log.warn({ err }, 'Periodic session summary failed'),
+        );
+      }
 
       // ── 11. Update emotional state ────────────────────────────
       const interactionQuality = toolCallCount > 0 ? 0.6 : 0.5;
@@ -634,6 +667,39 @@ ${insights.slice(0, 8).join('\n')}`);
     if (hours > 0) return `${hours}h ${minutes % 60}m`;
     if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
     return `${seconds}s`;
+  }
+
+  // ── Session Summary ───────────────────────────────────────────────
+
+  private async generateAndStoreSummary(trigger: 'periodic' | 'inactivity' | 'shutdown'): Promise<void> {
+    const messages = this.conversationHistory
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .map((m) => ({ role: m.role, content: String(m.content ?? '') }));
+
+    if (messages.length < 2) return;
+
+    log.info({ trigger, turns: this.sessionTurnCount }, 'Generating session summary');
+
+    const summary = await summarizeSession(messages, this.ai, {
+      model: this.config.ai.model,
+      temperature: this.config.ai.temperature,
+    });
+
+    await storeSessionSummary(summary, this.memory, `session-${trigger}`, this.sessionTurnCount);
+  }
+
+  private resetInactivityTimer(): void {
+    if (this.inactivityTimer) {
+      clearTimeout(this.inactivityTimer);
+    }
+    this.inactivityTimer = setTimeout(() => {
+      if (this.sessionTurnCount > 0) {
+        log.info('Inactivity timeout — generating session summary');
+        this.generateAndStoreSummary('inactivity').catch((err) =>
+          log.warn({ err }, 'Inactivity session summary failed'),
+        );
+      }
+    }, this.INACTIVITY_MS);
   }
 
   // ── Event Handlers ────────────────────────────────────────────────
