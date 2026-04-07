@@ -109,9 +109,10 @@ export class MemoryRetrieval {
       scored.push({ memory, score });
     }
 
-    // Sort descending by score, return top-K
+    // Sort descending by score, then MMR re-rank for diversity
     scored.sort((a, b) => b.score - a.score);
-    const results = scored.slice(0, limit).map((s) => s.memory);
+    const reranked = mmrRerank(scored.map((s) => ({ ...s, content: s.memory.content })));
+    const results = reranked.slice(0, limit).map((s) => s.memory);
 
     // Touch last_accessed on returned memories
     this.touchAccessed(results.map((m) => m.id));
@@ -237,6 +238,30 @@ export class MemoryRetrieval {
       stmt.run(now, id);
     }
   }
+}
+
+// ── MMR Re-ranking ────────────────────────────────────────────────────────────
+
+function mmrRerank(results: any[], lambda = 0.7): any[] {
+  if (results.length <= 1) return results;
+  const tokenize = (s: string) => new Set(s.toLowerCase().split(/\W+/).filter(Boolean));
+  const jaccard = (a: Set<string>, b: Set<string>) => {
+    const inter = [...a].filter(x => b.has(x)).length;
+    return inter / (a.size + b.size - inter || 1);
+  };
+  const selected: any[] = [results[0]];
+  const remaining = results.slice(1);
+  while (remaining.length > 0 && selected.length < results.length) {
+    let bestIdx = 0, bestScore = -Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const rel = remaining[i].score || 0;
+      const maxSim = Math.max(...selected.map(s => jaccard(tokenize(remaining[i].content || ''), tokenize(s.content || ''))));
+      const mmr = lambda * rel - (1 - lambda) * maxSim;
+      if (mmr > bestScore) { bestScore = mmr; bestIdx = i; }
+    }
+    selected.push(remaining.splice(bestIdx, 1)[0]);
+  }
+  return selected;
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────

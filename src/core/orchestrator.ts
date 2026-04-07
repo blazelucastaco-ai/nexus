@@ -258,8 +258,8 @@ export class Orchestrator {
       const hasWriteIntent = /\b(write|save\s+to|save\s+file|create\s+file|write\s+to)\b/i.test(text);
       const maxTokens = hasWriteIntent ? 8192 : Math.min(this.config.ai.maxTokens, 1500);
 
-      // Working messages for the tool loop — starts from conversation history
-      const loopMessages: AIMessage[] = [...this.conversationHistory.slice(-20)];
+      // Working messages for the tool loop — starts from conversation history (pruned to fit context)
+      const loopMessages: AIMessage[] = this.pruneHistory([...this.conversationHistory.slice(-20)]);
       let finalContent = '';
       let toolCallCount = 0;
 
@@ -739,6 +739,26 @@ ${insights.slice(0, 8).join('\n')}`);
   // ── Event Handlers ────────────────────────────────────────────────
 
   // ── Dream Cycle Scheduling ────────────────────────────────────────
+
+  // ── Context Pruning ───────────────────────────────────────────────
+
+  private pruneHistory(messages: any[], maxTokens = 6000): any[] {
+    const estimate = (msg: any) => (msg.content?.length || 0) / 4;
+    let total = messages.reduce((sum, m) => sum + estimate(m), 0);
+    if (total <= maxTokens) return messages;
+    const pruned = [...messages];
+    // Never prune system prompt (index 0) or first user message
+    let firstUserIdx = pruned.findIndex(m => m.role === 'user');
+    if (firstUserIdx < 0) firstUserIdx = 1;
+    while (total > maxTokens && pruned.length > firstUserIdx + 2) {
+      const removed = pruned.splice(firstUserIdx + 1, 1)[0];
+      total -= estimate(removed);
+    }
+    if (total > maxTokens) {
+      pruned.splice(firstUserIdx + 1, 0, { role: 'system', content: '[Earlier conversation was summarized to fit context window]' });
+    }
+    return pruned;
+  }
 
   private scheduleDreamCycle(): void {
     const dreamer = new DreamingEngine(this.ai);
