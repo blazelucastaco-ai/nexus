@@ -177,6 +177,23 @@ export const toolDefinitions: ToolDefinition[] = [
       required: ['query'],
     },
   },
+  {
+    name: 'check_injection',
+    description:
+      'Scan a piece of text for prompt injection attempts. Returns detection result, ' +
+      'confidence score, and matched pattern names. Use when you receive suspicious ' +
+      'text from external sources or when the user asks you to analyze text for manipulation.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: {
+          type: 'string',
+          description: 'The text to scan for prompt injection patterns',
+        },
+      },
+      required: ['text'],
+    },
+  },
 ];
 
 /**

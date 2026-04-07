@@ -15,6 +15,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createLogger } from '../utils/logger.js';
 import { nowISO, truncate } from '../utils/helpers.js';
+import { detectInjection, sanitizeInput } from '../brain/injection-guard.js';
 
 import type { AgentManager } from '../agents/index.js';
 import type { MemoryManager } from '../memory/index.js';
@@ -101,6 +102,9 @@ export class ToolExecutor {
           break;
         case 'web_search':
           result = await this.webSearch(args);
+          break;
+        case 'check_injection':
+          result = this.checkInjection(args);
           break;
         default:
           result = `Error: Unknown tool "${toolName}"`;
@@ -285,6 +289,37 @@ export class ToolExecutor {
     });
 
     return `Found ${memories.length} relevant memories:\n${results.join('\n')}`;
+  }
+
+  // ── check_injection ────────────────────────────────────────────────
+
+  private checkInjection(args: Record<string, unknown>): string {
+    const text = String(args.text ?? '');
+    if (!text) return 'Error: No text provided';
+
+    const sanitized = sanitizeInput(text);
+    const strippedCount = text.length - sanitized.length;
+    const result = detectInjection(sanitized);
+
+    const lines: string[] = [
+      `Injection scan result:`,
+      `  detected:   ${result.detected}`,
+      `  confidence: ${(result.confidence * 100).toFixed(0)}%`,
+      `  patterns:   ${result.patterns.length > 0 ? result.patterns.join(', ') : 'none'}`,
+    ];
+    if (strippedCount > 0) {
+      lines.push(`  stripped:   ${strippedCount} control/invisible characters removed`);
+    }
+    if (result.detected && result.confidence > 0.7) {
+      lines.push(`  verdict:    HIGH RISK — likely injection attempt`);
+    } else if (result.detected) {
+      lines.push(`  verdict:    LOW RISK — suspicious but may be benign`);
+    } else {
+      lines.push(`  verdict:    CLEAN`);
+    }
+
+    log.info({ detected: result.detected, confidence: result.confidence }, 'check_injection tool called');
+    return lines.join('\n');
   }
 
   // ── web_search ─────────────────────────────────────────────────────
