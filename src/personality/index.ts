@@ -12,6 +12,7 @@ import { EmotionalEngine, EVENT_FORCES, type EmotionForce } from './emotions.js'
 import { OpinionEngine, type Evidence } from './opinions.js';
 import { StyleEngine, type StyleContext } from './style.js';
 import { HumorEngine, type HumorContext } from './humor.js';
+import { loadBrainState, saveBrainState, createDebouncedSaver, type BrainStateFile } from '../brain/state-persistence.js';
 
 const log = createLogger('PersonalityEngine');
 
@@ -26,8 +27,10 @@ export class PersonalityEngine {
   private readonly traits: PersonalityTraits;
   private mood: number; // -1 to 1 overall mood (slower moving than emotion)
   private relationshipWarmth: number;
-  private readonly firstInteraction: string;
+  private firstInteraction: string;
   private messageCount = 0;
+
+  private readonly debouncedSave: (state: BrainStateFile) => void;
 
   constructor(config: NexusConfig) {
     this.traits = config.personality.traits;
@@ -41,7 +44,57 @@ export class PersonalityEngine {
     this.relationshipWarmth = 0.3; // starts warm-ish, grows over time
     this.firstInteraction = nowISO();
 
+    this.debouncedSave = createDebouncedSaver();
+
+    // Restore persisted state if available
+    this.loadState();
+
     log.info({ traits: this.traits }, 'Personality engine initialized');
+  }
+
+  /** Serialize current state and persist to disk immediately. */
+  saveState(): void {
+    saveBrainState({
+      version: 1,
+      savedAt: new Date().toISOString(),
+      emotionalState: this.emotions.getState(),
+      mood: this.mood,
+      relationshipWarmth: this.relationshipWarmth,
+      messageCount: this.messageCount,
+      firstInteraction: this.firstInteraction,
+      opinions: this.opinions.getAllOpinions(),
+    });
+  }
+
+  /** Load persisted state from disk and restore it. */
+  loadState(): void {
+    const saved = loadBrainState();
+    if (!saved) return;
+
+    this.emotions.setState(saved.emotionalState);
+    this.mood = saved.mood;
+    this.relationshipWarmth = saved.relationshipWarmth;
+    this.messageCount = saved.messageCount;
+    this.firstInteraction = saved.firstInteraction;
+    this.opinions.restoreOpinions(saved.opinions);
+
+    log.info(
+      { mood: this.mood, warmth: this.relationshipWarmth, messageCount: this.messageCount },
+      'Personality state restored from disk',
+    );
+  }
+
+  private scheduleSave(): void {
+    this.debouncedSave({
+      version: 1,
+      savedAt: new Date().toISOString(),
+      emotionalState: this.emotions.getState(),
+      mood: this.mood,
+      relationshipWarmth: this.relationshipWarmth,
+      messageCount: this.messageCount,
+      firstInteraction: this.firstInteraction,
+      opinions: this.opinions.getAllOpinions(),
+    });
   }
 
   /** Get the full personality state snapshot. */
@@ -80,6 +133,7 @@ export class PersonalityEngine {
     );
 
     log.debug({ event, mood: this.mood, label: this.emotions.getLabel() }, 'Event processed');
+    this.scheduleSave();
   }
 
   /** Adjust overall mood based on interaction quality (-1 to 1). */
@@ -95,6 +149,7 @@ export class PersonalityEngine {
     }
 
     log.debug({ mood: this.mood, warmth: this.relationshipWarmth, quality }, 'Mood updated');
+    this.scheduleSave();
   }
 
   /** Assemble all personality-driven system prompt additions for the LLM. */

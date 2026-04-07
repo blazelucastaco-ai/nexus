@@ -121,4 +121,13 @@ export class OpinionEngine {
       evidence: [...o.evidence],
     }));
   }
+
+  /** Restore opinions from a persisted snapshot (replaces current state). */
+  restoreOpinions(opinions: Opinion[]): void {
+    this.opinions.clear();
+    for (const o of opinions) {
+      this.opinions.set(o.topic, { ...o, evidence: [...o.evidence] });
+    }
+    log.debug({ count: opinions.length }, 'Opinions restored from state');
+  }
 }
