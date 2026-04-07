@@ -1,4 +1,6 @@
 // Brain Phase 1.2 — Personality State Persistence
+// Brain Phase 2.1 — Mood History, Circadian Baseline, Relationship Score
+// Brain Phase 2.2 — Opinion History with Drift
 //
 // Saves and loads personality state to/from ~/.nexus/brain-state.json so NEXUS
 // retains its emotional context, warmth, opinions, and interaction history across restarts.
@@ -13,9 +15,14 @@ import { createLogger } from '../utils/logger.js';
 const log = createLogger('StatePersistence');
 
 const STATE_PATH = join(homedir(), '.nexus', 'brain-state.json');
-const STATE_VERSION = 2;
+const STATE_VERSION = 3;
 
 // ── Types ──────────────────────────────────────────────────────────────────
+
+export interface MoodHistoryEntry {
+  valence: number;
+  timestamp: string; // ISO 8601
+}
 
 export interface BrainStateFile {
   version: number;
@@ -23,12 +30,17 @@ export interface BrainStateFile {
   emotionalState: EmotionalState;
   mood: number;
   relationshipWarmth: number;
-  relationshipScore: number;          // Phase 2.1: 0-1 accumulated relationship score
+  relationshipScore: number;           // 0-1, grows with positive interactions
   messageCount: number;
-  totalInteractionCount: number;      // Phase 2.1: canonical interaction counter
+  totalInteractionCount: number;       // canonical lifetime interaction counter
   firstInteraction: string;
-  firstSeenTimestamp: string;         // Phase 2.1: canonical first-seen timestamp
+  firstSeenTimestamp: string;          // canonical first-seen timestamp
+  lastSeenTimestamp: string;           // most recent interaction
   opinions: Opinion[];
+  moodHistory: MoodHistoryEntry[];     // last 50 entries with timestamps
+  dailyMoodBaseline: number;           // -1 to 1, computed from time-of-day at save time
+  // Phase 2.2: per-topic opinion drift history
+  opinionHistory: Record<string, Array<{ stance: number; confidence: number; timestamp: string; reason: string }>>;
 }
 
 // ── File I/O ───────────────────────────────────────────────────────────────
@@ -39,13 +51,24 @@ export function loadBrainState(): BrainStateFile | null {
     const raw = readFileSync(STATE_PATH, 'utf8');
     const parsed = JSON.parse(raw) as BrainStateFile;
 
-    // Migrate v1 → v2: fill in new fields with defaults
     if (parsed.version === 1) {
-      log.info({ path: STATE_PATH }, 'Migrating brain state v1 → v2');
+      // Migrate v1 → v2: fill Phase 2.1 defaults from existing fields
+      const now = new Date().toISOString();
       parsed.version = 2;
-      parsed.relationshipScore = 0;
-      parsed.totalInteractionCount = parsed.messageCount;
-      parsed.firstSeenTimestamp = parsed.firstInteraction;
+      parsed.moodHistory = [];
+      parsed.dailyMoodBaseline = 0;
+      parsed.totalInteractionCount = parsed.messageCount ?? 0;
+      parsed.firstSeenTimestamp = parsed.firstInteraction ?? now;
+      parsed.lastSeenTimestamp = now;
+      parsed.relationshipScore = Math.min((parsed.relationshipWarmth ?? 0) * 0.5, 1);
+      log.info({ path: STATE_PATH }, 'Brain state migrated v1→v2');
+    }
+
+    if (parsed.version === 2) {
+      // Migrate v2 → v3: add empty opinion history
+      parsed.version = 3;
+      parsed.opinionHistory = {};
+      log.info({ path: STATE_PATH }, 'Brain state migrated v2→v3');
     }
 
     if (parsed.version !== STATE_VERSION) {

@@ -41,6 +41,8 @@ const BASELINE: EmotionalState = {
 
 // ─── PersonalityEngine ────────────────────────────────────────────────
 
+export type RelationshipLevel = 'stranger' | 'acquaintance' | 'familiar' | 'trusted' | 'close';
+
 export class PersonalityEngine {
   private traits: PersonalityConfig;
   private emotion: EmotionalState;
@@ -48,11 +50,19 @@ export class PersonalityEngine {
   private warmth: number = 0.3;
   private interactionCount: number = 0;
   private firstInteraction: Date;
+  // Phase 2.1 fields
+  private persistedMoodHistory: Array<{ valence: number; timestamp: string }> = [];
+  private totalInteractionCount: number = 0;
+  private firstSeenTimestamp: Date;
+  private lastSeenTimestamp: Date;
+  private relationshipScore: number = 0;
 
   constructor(traits: PersonalityConfig) {
     this.traits = traits;
     this.emotion = { ...BASELINE };
     this.firstInteraction = new Date();
+    this.firstSeenTimestamp = new Date();
+    this.lastSeenTimestamp = new Date();
   }
 
   // ── Emotional State Machine ───────────────────────────────────────
@@ -65,6 +75,16 @@ export class PersonalityEngine {
   updateEmotion(eventForces: Partial<EmotionalState>): void {
     const keys: (keyof EmotionalState)[] = ['valence', 'arousal', 'confidence', 'engagement', 'patience'];
 
+    // Blend circadian modifiers into event forces (30% weight)
+    const circadian = this.getCircadianModifiers();
+    const blendedForces: Partial<EmotionalState> = { ...eventForces };
+    for (const key of keys) {
+      const c = circadian[key];
+      if (c !== undefined) {
+        blendedForces[key] = ((eventForces[key] ?? 0) + c * 0.3) as number;
+      }
+    }
+
     for (const key of keys) {
       const current = this.emotion[key];
       const baselineVal = BASELINE[key];
@@ -73,7 +93,7 @@ export class PersonalityEngine {
       let next = lerp(current, baselineVal, DECAY_RATE);
 
       // If an event force is provided, interpolate toward it
-      const force = eventForces[key];
+      const force = blendedForces[key];
       if (force !== undefined) {
         next = lerp(next, force, INTERPOLATION_RATE);
       }
@@ -85,9 +105,23 @@ export class PersonalityEngine {
 
     this.recordMoodSample();
     this.interactionCount += 1;
+    this.totalInteractionCount += 1;
+    this.lastSeenTimestamp = new Date();
     this.updateWarmth();
 
-    log.debug({ emotion: this.emotion, derived: this.getDerivedEmotion() }, 'Emotion updated');
+    // Record persisted mood history (last 50)
+    this.persistedMoodHistory.push({
+      valence: this.emotion.valence,
+      timestamp: this.lastSeenTimestamp.toISOString(),
+    });
+    if (this.persistedMoodHistory.length > 50) {
+      this.persistedMoodHistory = this.persistedMoodHistory.slice(-50);
+    }
+
+    log.debug(
+      { emotion: this.emotion, derived: this.getDerivedEmotion(), circadianPhase: this.getCircadianPhase() },
+      'Emotion updated',
+    );
   }
 
   /** Get the current raw emotional state. */
@@ -211,6 +245,88 @@ export class PersonalityEngine {
     return lines.join('\n');
   }
 
+  // ── Circadian Rhythm ──────────────────────────────────────────────
+
+  /** Return the current time-of-day phase label. */
+  getCircadianPhase(): string {
+    const hour = new Date().getHours();
+    if (hour >= 6 && hour < 10) return 'morning';
+    if (hour >= 10 && hour < 14) return 'peak';
+    if (hour >= 14 && hour < 17) return 'afternoon-dip';
+    if (hour >= 17 && hour < 21) return 'evening';
+    if (hour >= 21) return 'night';
+    return 'late-night'; // 12am–6am
+  }
+
+  /**
+   * Circadian emotion modifier offsets based on time of day.
+   * Applied as a 30% blend into event forces on every update.
+   */
+  private getCircadianModifiers(): Partial<EmotionalState> {
+    const phase = this.getCircadianPhase();
+    switch (phase) {
+      case 'morning':         return { arousal: 0.12, engagement: 0.10, valence: 0.05 };
+      case 'peak':            return { confidence: 0.10, engagement: 0.08, arousal: 0.05 };
+      case 'afternoon-dip':   return { arousal: -0.10, valence: -0.05, patience: -0.05 };
+      case 'evening':         return { valence: 0.06, arousal: -0.08, patience: 0.05 };
+      case 'night':           return { arousal: -0.12, valence: 0.03, patience: 0.08 };
+      case 'late-night':      return { arousal: -0.18, engagement: -0.12, valence: -0.05 };
+      default:                return {};
+    }
+  }
+
+  /** Compute a daily mood baseline scalar from circadian modifiers (-1 to 1). */
+  getDailyMoodBaseline(): number {
+    const mod = this.getCircadianModifiers();
+    return clamp(((mod.valence ?? 0) * 0.5 + (mod.arousal ?? 0) * 0.3), -1, 1);
+  }
+
+  /** Short hint string for the circadian phase, used in prompts. */
+  getCircadianMoodHint(phase: string): string {
+    switch (phase) {
+      case 'morning':       return 'energized and curious, morning boost active';
+      case 'peak':          return 'in peak focus mode, confident and productive';
+      case 'afternoon-dip': return 'slight energy dip, staying grounded';
+      case 'evening':       return 'relaxed and conversational, winding down';
+      case 'night':         return 'calm and reflective, thoughtful pace';
+      case 'late-night':    return 'low energy, keeping things terse and efficient';
+      default:              return 'steady state';
+    }
+  }
+
+  // ── Relationship Level ────────────────────────────────────────────
+
+  /**
+   * Returns a human-readable relationship level based on total interactions
+   * and accumulated relationship score.
+   *
+   * - stranger:     < 10 interactions, score < 0.1
+   * - acquaintance: < 50 interactions OR score < 0.25
+   * - familiar:     score < 0.5
+   * - trusted:      score < 0.75
+   * - close:        score >= 0.75
+   */
+  getRelationshipLevel(): RelationshipLevel {
+    const count = this.totalInteractionCount;
+    const score = this.relationshipScore;
+
+    if (count < 10 && score < 0.1) return 'stranger';
+    if (count < 50 || score < 0.25) return 'acquaintance';
+    if (score < 0.5) return 'familiar';
+    if (score < 0.75) return 'trusted';
+    return 'close';
+  }
+
+  /** Get the relationship score (0-1). */
+  getRelationshipScore(): number {
+    return this.relationshipScore;
+  }
+
+  /** Get lifetime total interaction count. */
+  getTotalInteractionCount(): number {
+    return this.totalInteractionCount;
+  }
+
   // ── Mood Description ──────────────────────────────────────────────
 
   /** Human-readable mood description for display or logging. */
@@ -236,7 +352,10 @@ export class PersonalityEngine {
           ? 'warming up'
           : 'getting acquainted';
 
-    return `Feeling ${emotion} — overall mood is ${moodWord}. Relationship: ${warmthWord} (warmth: ${this.warmth.toFixed(2)}).`;
+    const phase = this.getCircadianPhase();
+    const level = this.getRelationshipLevel();
+
+    return `Feeling ${emotion} — overall mood is ${moodWord}. Relationship: ${warmthWord} (${level}, warmth: ${this.warmth.toFixed(2)}, score: ${this.relationshipScore.toFixed(2)}). Time of day: ${phase}.`;
   }
 
   // ── Opinion Formation ─────────────────────────────────────────────
@@ -493,15 +612,19 @@ ${this.getSystemPromptModifier()}`);
 
     // ── Relationship ──
     const daysSinceFirst = Math.floor((Date.now() - this.firstInteraction.getTime()) / 86_400_000);
+    const level = this.getRelationshipLevel();
+    const phase = this.getCircadianPhase();
     sections.push(`## Relationship Context
 
 Warmth level: ${this.warmth.toFixed(2)} / 1.0
-Interactions so far: ${this.interactionCount}
+Relationship level: ${level} (score: ${this.relationshipScore.toFixed(2)})
+Interactions so far: ${this.interactionCount} (lifetime: ${this.totalInteractionCount})
 Days since first interaction: ${daysSinceFirst}
+Time of day: ${phase} — ${this.getCircadianMoodHint(phase)}
 
-${this.warmth > 0.7
+${level === 'close' || level === 'trusted'
   ? 'You have a strong rapport with this user. You can be candid, use inside references, be more direct, and show genuine care. You know their style and preferences well.'
-  : this.warmth > 0.4
+  : level === 'familiar'
     ? 'You are building a solid working relationship. You can be somewhat informal, offer proactive suggestions, and share occasional personal asides.'
     : 'You are still getting to know this user. Be friendly and helpful, but do not assume familiarity. Focus on being reliably useful to build trust.'}`);
 
@@ -571,6 +694,8 @@ Apply these style parameters to shape your responses:
     if (valence > 0 && engagement > 0.4) {
       const boost = valence * engagement * 0.01;
       this.warmth = clamp(this.warmth + boost, 0, 1);
+      // Relationship score grows 0.01 per positive interaction, max 1.0
+      this.relationshipScore = clamp(this.relationshipScore + 0.01, 0, 1);
     }
 
     // Negative interactions decrease warmth slightly (but never below 0.1 once past it)
@@ -598,5 +723,30 @@ Apply these style parameters to shape your responses:
   /** Set the interaction count (for persistence restoration). */
   setInteractionCount(count: number): void {
     this.interactionCount = count;
+  }
+
+  /** Set total lifetime interaction count (for persistence restoration). */
+  setTotalInteractionCount(count: number): void {
+    this.totalInteractionCount = count;
+  }
+
+  /** Set the first-seen timestamp (for persistence restoration). */
+  setFirstSeenTimestamp(date: Date): void {
+    this.firstSeenTimestamp = date;
+  }
+
+  /** Set the last-seen timestamp (for persistence restoration). */
+  setLastSeenTimestamp(date: Date): void {
+    this.lastSeenTimestamp = date;
+  }
+
+  /** Set the relationship score (for persistence restoration). */
+  setRelationshipScore(score: number): void {
+    this.relationshipScore = clamp(score, 0, 1);
+  }
+
+  /** Set the persisted mood history (for persistence restoration). */
+  setPersistedMoodHistory(history: Array<{ valence: number; timestamp: string }>): void {
+    this.persistedMoodHistory = history.slice(-50);
   }
 }
