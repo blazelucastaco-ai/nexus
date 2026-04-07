@@ -368,6 +368,7 @@ You run on macOS (Darwin). Use macOS-compatible commands only:
 - Open ports: \`lsof -i -P -n | grep LISTEN\`
 - Disk usage: \`df -h\` / \`du -sh\`
 - No GNU-only flags like \`--sort\`, \`--color=auto\` (use \`-G\` for color in ls).
+In bash scripts, always use \`#!/usr/bin/env bash\` as the shebang line.
 In Python scripts, always use \`os.path.expanduser('~/...')\` for tilde paths.`);
 
     // ── Tool usage guidance ──

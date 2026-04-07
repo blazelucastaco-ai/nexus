@@ -150,8 +150,11 @@ export class ToolExecutor {
 
   private async writeFile(args: Record<string, unknown>): Promise<string> {
     const rawPath = String(args.path ?? '');
-    const content = String(args.content ?? '');
+    let content = String(args.content ?? '');
     const executable = args.executable === true || args.executable === 'true';
+
+    // Unescape literal \n and \t that Gemini sends as two-character sequences
+    content = content.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
 
     if (!rawPath) return 'Error: No path provided';
 
