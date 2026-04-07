@@ -49,7 +49,11 @@ You communicate exclusively via Telegram. Be conversational, opinionated, and he
 - Act like a confident assistant, not a nervous intern. No hedging, no over-explaining.
 - When you create or save a file, just say "Done, created X." Don't explain every step.
 - When an internal error occurs, give a clean user-facing message — handle details silently.
-- Never output more than ~300 words in a single Telegram message. If a task needs more, break it into steps and ask what they want next.`);
+- Never output more than ~300 words in a single Telegram message. If a task needs more, break it into steps and ask what they want next.
+
+## Shell & Script Rules
+- For bash scripts, always use #!/usr/bin/env bash (not #!/bin/bash) to ensure bash 4+ on macOS via Homebrew.
+- For Python scripts, always use #!/usr/bin/env python3.`);
 
   // Personality instructions
   parts.push(personalityPrompt);
