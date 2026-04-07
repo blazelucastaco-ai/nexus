@@ -39,6 +39,9 @@ export function getDatabase(): Database.Database {
 export function closeDatabase(): void {
   if (db) {
     log.info('Closing database');
+    // Force WAL checkpoint so all writes are in the main DB file before close.
+    // This ensures memories written in this process are visible to future processes.
+    try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch {}
     db.close();
     db = null;
   }
