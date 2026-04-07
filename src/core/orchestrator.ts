@@ -20,6 +20,7 @@ import {
 import { SelfAwareness } from '../brain/self-awareness.js';
 import { summarizeSession, storeSessionSummary } from '../brain/session-summary.js';
 import { InnerMonologue } from '../brain/inner-monologue.js';
+import { DreamingEngine } from '../brain/dreaming.js';
 import type {
   AgentName,
   AgentResult,
@@ -60,8 +61,10 @@ export class Orchestrator {
   private sessionTurnCount = 0;
   private lastMessageTime = Date.now();
   private inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+  private dreamInterval: ReturnType<typeof setInterval> | null = null;
   private readonly INACTIVITY_MS = 30 * 60 * 1000; // 30 minutes
   private readonly SUMMARY_EVERY_N_TURNS = 5;
+  private readonly DREAM_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
   // Subsystems — set via init()
   public memory!: MemoryManager;
@@ -116,6 +119,9 @@ export class Orchestrator {
 
     await this.telegram.start();
 
+    // Schedule dream cycle every 6 hours
+    this.scheduleDreamCycle();
+
     this.eventLoop.emit('system:started', { timestamp: nowISO() }, 'high', 'orchestrator');
     log.info('NEXUS is running');
   }
@@ -135,6 +141,11 @@ export class Orchestrator {
     if (this.inactivityTimer) {
       clearTimeout(this.inactivityTimer);
       this.inactivityTimer = null;
+    }
+
+    if (this.dreamInterval) {
+      clearInterval(this.dreamInterval);
+      this.dreamInterval = null;
     }
 
     try {
@@ -726,6 +737,26 @@ ${insights.slice(0, 8).join('\n')}`);
   }
 
   // ── Event Handlers ────────────────────────────────────────────────
+
+  // ── Dream Cycle Scheduling ────────────────────────────────────────
+
+  private scheduleDreamCycle(): void {
+    const dreamer = new DreamingEngine(this.ai);
+
+    const runDream = async () => {
+      try {
+        log.info('Running scheduled dream cycle…');
+        const report = await dreamer.runDreamCycle();
+        log.info(report, 'Dream cycle complete');
+      } catch (err) {
+        log.error({ err }, 'Dream cycle failed');
+      }
+    };
+
+    // Run once after a short delay (give the system time to settle), then every 6h
+    setTimeout(runDream, 60_000);
+    this.dreamInterval = setInterval(runDream, this.DREAM_INTERVAL_MS);
+  }
 
   private setupEventHandlers(): void {
     this.eventLoop.on('system:started', async () => {

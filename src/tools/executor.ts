@@ -18,6 +18,7 @@ import { nowISO, truncate } from '../utils/helpers.js';
 import { detectInjection, sanitizeInput } from '../brain/injection-guard.js';
 import type { SelfAwareness } from '../brain/self-awareness.js';
 import type { InnerMonologue } from '../brain/inner-monologue.js';
+import { storeEmbedding } from '../memory/embeddings.js';
 
 import type { AgentManager } from '../agents/index.js';
 import type { MemoryManager } from '../memory/index.js';
@@ -167,7 +168,9 @@ export class ToolExecutor {
 
   private async writeFile(args: Record<string, unknown>): Promise<string> {
     const rawPath = String(args.path ?? '');
+    // Unescape literal backslash-escaped sequences from LLM output
     let content = String(args.content ?? '');
+    content = content.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r');
     const executable = args.executable === true || args.executable === 'true';
 
     if (!rawPath) return 'Error: No path provided';
@@ -272,11 +275,20 @@ export class ToolExecutor {
 
     if (!content) return 'Error: No content to remember';
 
-    this.memory.store('semantic', 'fact', content, {
+    const result = this.memory.store('semantic', 'fact', content, {
       importance,
       tags: ['explicit-remember', 'tool-call'],
       source: 'tool-executor',
     });
+
+    // Generate and store a local TF-IDF embedding for vector search
+    if (result && typeof result === 'object' && 'id' in result) {
+      try {
+        storeEmbedding(result.id as string, content);
+      } catch (err) {
+        log.warn({ err }, 'Failed to store embedding for memory');
+      }
+    }
 
     log.info({ content: truncate(content, 80) }, 'Stored memory via tool');
     return `Remembered: "${truncate(content, 100)}"`;

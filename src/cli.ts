@@ -866,4 +866,84 @@ program
     showPhrase();
   });
 
+// ── nexus dream ───────────────────────────────────────────────────────────────
+
+program
+  .command('dream')
+  .description('Run the dream cycle — consolidate episodic memories into semantic insights')
+  .action(async () => {
+    showLogo(true);
+    console.log(chalk.bold('  Running dream cycle…'));
+    console.log('');
+
+    if (!existsSync(DB_PATH)) {
+      console.log(chalk.yellow('  ⚠  No memory database found. Start NEXUS first.'));
+      showPhrase();
+      return;
+    }
+
+    // Run as a one-shot subprocess so we get a clean DB connection
+    const dreamer = spawn(
+      'node',
+      [
+        '--input-type=module',
+        '--eval',
+        [
+          `import { DreamingEngine } from '${join(PROJECT_DIR, 'dist', 'brain', 'dreaming.js')}';`,
+          `import { getDatabase } from '${join(PROJECT_DIR, 'dist', 'memory', 'database.js')}';`,
+          `getDatabase();`, // ensures migrations run
+          `const e = new DreamingEngine();`,
+          `e.runDreamCycle().then(r => {`,
+          `  console.log(JSON.stringify(r));`,
+          `  process.exit(0);`,
+          `}).catch(err => { console.error(err.message); process.exit(1); });`,
+        ].join('\n'),
+      ],
+      { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env } },
+    );
+
+    let out = '';
+    let err = '';
+    dreamer.stdout?.on('data', (d: Buffer) => { out += d.toString(); });
+    dreamer.stderr?.on('data', (d: Buffer) => { err += d.toString(); });
+
+    dreamer.on('exit', (code) => {
+      if (code !== 0) {
+        console.log(chalk.red('  ✗  Dream cycle failed.'));
+        if (err) console.log(chalk.dim(err.trim()));
+        showPhrase();
+        return;
+      }
+
+      try {
+        const report = JSON.parse(out.trim()) as {
+          consolidated: number;
+          decayed: number;
+          garbageCollected: number;
+          durationMs: number;
+          insights: string[];
+        };
+
+        console.log(chalk.green('  ✓  Dream cycle complete') + chalk.dim(` (${report.durationMs}ms)`));
+        console.log('');
+        info('Consolidated', `${report.consolidated} episodic → semantic`);
+        info('Decayed', `${report.decayed} stale memories`);
+        info('GC\'d', `${report.garbageCollected} old memories removed`);
+
+        if (report.insights.length > 0) {
+          console.log('');
+          console.log(chalk.dim('  Insights generated:'));
+          for (const insight of report.insights) {
+            console.log(`  ${chalk.cyan('◈')} ${chalk.white(insight)}`);
+          }
+        }
+      } catch {
+        console.log(chalk.green('  ✓  Dream cycle complete'));
+        if (out.trim()) console.log(chalk.dim(out.trim()));
+      }
+
+      showPhrase();
+    });
+  });
+
 program.parse(process.argv);

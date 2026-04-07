@@ -1,8 +1,15 @@
 // Nexus AI — Multi-strategy memory retrieval with fusion scoring
+//
+// Scoring pipeline (Phase 3.2 + 3.3):
+//   hybridContent = 0.6 * keywordScore + 0.4 * vectorScore
+//   base = hybridContent * 0.40 + importanceScore * 0.25
+//        + tagScore * 0.20 + frequencyScore * 0.15
+//   finalScore = base * temporalDecay   (episodic/buffer only — 30-day half-life)
 
 import type Database from 'better-sqlite3';
 import type { Memory, MemoryLayer, MemoryType } from '../types.js';
 import { createLogger } from '../utils/logger.js';
+import { vectorSearch, cosineSimilarity, computeEmbedding } from './embeddings.js';
 
 const log = createLogger('MemoryRetrieval');
 
@@ -17,6 +24,9 @@ interface ScoredMemory {
   score: number;
 }
 
+// Layers whose memories decay over time (episodic knowledge fades; semantic/procedural is evergreen)
+const DECAYING_LAYERS = new Set<MemoryLayer>(['buffer', 'episodic']);
+
 export class MemoryRetrieval {
   private db: Database.Database;
 
@@ -25,41 +35,79 @@ export class MemoryRetrieval {
   }
 
   /**
-   * Multi-strategy retrieval with fusion scoring.
+   * Multi-strategy retrieval with hybrid BM25+vector fusion and temporal decay.
    *
    * Scoring formula:
-   *   (contentMatch * 0.35) + (recency * 0.20) + (importance * 0.20)
-   *   + (tagMatch * 0.15) + (accessFrequency * 0.10)
+   *   hybridContent  = 0.6 * keywordScore + 0.4 * vectorScore
+   *   base           = hybridContent * 0.40 + importanceScore * 0.25
+   *                  + tagScore * 0.20 + frequencyScore * 0.15
+   *   finalScore     = base * temporalDecay   (episodic/buffer: 30-day half-life)
+   *                    base                   (semantic/procedural: exempt from decay)
    */
   retrieve(query: string, options?: RetrievalOptions): Memory[] {
     const limit = options?.limit ?? 10;
     const minImportance = options?.minImportance ?? 0;
     const layers = options?.layers;
 
-    // Pull a broad candidate set from SQLite
+    // Pull a broad candidate set from SQLite via keyword LIKE
     const candidates = this.getCandidates(query, layers, minImportance);
     log.debug({ candidateCount: candidates.length, query }, 'Candidates fetched');
 
-    // Score each candidate with the fusion formula
+    // Build vector score map from embedding search (top 50 by cosine similarity)
+    const vectorScores = this.buildVectorScoreMap(query, 50);
+
     const queryTerms = query.toLowerCase().split(/\s+/).filter(Boolean);
-    const nowMs = Date.now();
 
     const scored: ScoredMemory[] = candidates.map((memory) => {
-      const contentScore = this.scoreContent(memory, queryTerms);
-      const recencyScore = this.scoreRecency(memory, nowMs);
-      const importanceScore = memory.importance; // already 0-1
+      // --- Keyword score (BM25-like term overlap) ---
+      const keywordScore = this.scoreContent(memory, queryTerms);
+
+      // --- Vector score (cosine similarity from embedding index) ---
+      const vectorScore = vectorScores.get(memory.id) ?? 0;
+
+      // --- Hybrid content score ---
+      const hybridContent = 0.6 * keywordScore + 0.4 * vectorScore;
+
+      // --- Other factors ---
+      const importanceScore = memory.importance;
       const tagScore = this.scoreTags(memory, queryTerms);
       const frequencyScore = this.scoreFrequency(memory);
 
-      const score =
-        contentScore * 0.35 +
-        recencyScore * 0.2 +
-        importanceScore * 0.2 +
-        tagScore * 0.15 +
-        frequencyScore * 0.1;
+      // --- Base combined score ---
+      const base =
+        hybridContent * 0.40 +
+        importanceScore * 0.25 +
+        tagScore * 0.20 +
+        frequencyScore * 0.15;
+
+      // --- Temporal decay (Phase 3.3) ---
+      // Formula: score *= exp(-0.693 / 30 * ageDays)  → 30-day half-life
+      // Semantic and procedural memories are evergreen — exempt from decay.
+      const score = DECAYING_LAYERS.has(memory.layer)
+        ? base * this.temporalDecay(memory)
+        : base;
 
       return { memory, score };
     });
+
+    // Augment with any vector-only hits not already in keyword candidates
+    // (memories that match semantically but not lexically)
+    const candidateIds = new Set(candidates.map((m) => m.id));
+    const vectorOnlyHits = this.getVectorOnlyHits(vectorScores, candidateIds, minImportance, layers);
+
+    for (const memory of vectorOnlyHits) {
+      const vectorScore = vectorScores.get(memory.id) ?? 0;
+      const base =
+        0.4 * vectorScore +
+        0.25 * memory.importance +
+        0.15 * this.scoreFrequency(memory);
+
+      const score = DECAYING_LAYERS.has(memory.layer)
+        ? base * this.temporalDecay(memory)
+        : base;
+
+      scored.push({ memory, score });
+    }
 
     // Sort descending by score, return top-K
     scored.sort((a, b) => b.score - a.score);
@@ -71,7 +119,54 @@ export class MemoryRetrieval {
     return results;
   }
 
-  // ── Strategy 1: Content/keyword match ──────────────────────────
+  // ── Phase 3.3: Temporal decay ──────────────────────────────────────────────
+
+  private temporalDecay(memory: Memory): number {
+    const createdMs = new Date(memory.createdAt).getTime();
+    const ageDays = (Date.now() - createdMs) / (1000 * 60 * 60 * 24);
+    // Half-life = 30 days: decay = exp(-ln2 / 30 * ageDays)
+    return Math.exp((-0.693 / 30) * ageDays);
+  }
+
+  // ── Phase 3.2: Vector score map ────────────────────────────────────────────
+
+  private buildVectorScoreMap(query: string, topK: number): Map<string, number> {
+    const hits = vectorSearch(query, topK);
+    const map = new Map<string, number>();
+    for (const { memoryId, score } of hits) {
+      map.set(memoryId, score);
+    }
+    return map;
+  }
+
+  /**
+   * Fetch memories that matched via vector search but were not returned by
+   * the keyword LIKE query.
+   */
+  private getVectorOnlyHits(
+    vectorScores: Map<string, number>,
+    excludeIds: Set<string>,
+    minImportance: number,
+    layers?: MemoryLayer[],
+  ): Memory[] {
+    const idsToFetch = [...vectorScores.keys()].filter((id) => !excludeIds.has(id));
+    if (idsToFetch.length === 0) return [];
+
+    const placeholders = idsToFetch.map(() => '?').join(', ');
+    let sql = `SELECT * FROM memories WHERE id IN (${placeholders}) AND importance >= ?`;
+    const params: unknown[] = [...idsToFetch, minImportance];
+
+    if (layers && layers.length > 0) {
+      const lp = layers.map(() => '?').join(', ');
+      sql += ` AND layer IN (${lp})`;
+      params.push(...layers);
+    }
+
+    const rows = this.db.prepare(sql).all(...params) as RawMemoryRow[];
+    return rows.map(rowToMemory);
+  }
+
+  // ── Strategy 1: Keyword / BM25-like match ──────────────────────────────────
 
   private scoreContent(memory: Memory, queryTerms: string[]): number {
     if (queryTerms.length === 0) return 0;
@@ -84,19 +179,7 @@ export class MemoryRetrieval {
     return hits / queryTerms.length;
   }
 
-  // ── Strategy 2: Recency bias (exponential decay) ──────────────
-
-  private scoreRecency(memory: Memory, nowMs: number): number {
-    const createdMs = new Date(memory.createdAt).getTime();
-    const ageMs = nowMs - createdMs;
-    const ageHours = ageMs / (1000 * 60 * 60);
-    // Half-life of ~48 hours
-    return Math.exp(-0.0144 * ageHours);
-  }
-
-  // ── Strategy 3: Importance filter (handled by SQL + direct value)
-
-  // ── Strategy 4: Tag matching ──────────────────────────────────
+  // ── Strategy 3: Tag matching ───────────────────────────────────────────────
 
   private scoreTags(memory: Memory, queryTerms: string[]): number {
     if (queryTerms.length === 0 || memory.tags.length === 0) return 0;
@@ -109,14 +192,13 @@ export class MemoryRetrieval {
     return hits / queryTerms.length;
   }
 
-  // ── Strategy 5: Access frequency ──────────────────────────────
+  // ── Strategy 4: Access frequency ──────────────────────────────────────────
 
   private scoreFrequency(memory: Memory): number {
-    // Logarithmic scaling so frequent access helps but doesn't dominate
     return Math.min(1.0, Math.log2(memory.accessCount + 1) / 10);
   }
 
-  // ── Candidate fetching ────────────────────────────────────────
+  // ── Candidate fetching (keyword LIKE) ─────────────────────────────────────
 
   private getCandidates(
     query: string,
@@ -143,7 +225,7 @@ export class MemoryRetrieval {
     return rows.map(rowToMemory);
   }
 
-  // ── Touch accessed ────────────────────────────────────────────
+  // ── Touch accessed ─────────────────────────────────────────────────────────
 
   private touchAccessed(ids: string[]): void {
     if (ids.length === 0) return;
@@ -157,7 +239,7 @@ export class MemoryRetrieval {
   }
 }
 
-// ── Internal helpers ──────────────────────────────────────────────
+// ── Internal helpers ──────────────────────────────────────────────────────────
 
 interface RawMemoryRow {
   id: string;

@@ -236,13 +236,18 @@ export class MemoryManager {
         memory,
         queryTerms,
       );
-      const recencyScore = this.scoreRecency(memory);
       const importanceScore = memory.importance;
 
+      const base =
+        contentScore * 0.55 +
+        importanceScore * 0.45;
+
+      // Phase 3.3: 30-day half-life temporal decay for episodic/buffer memories.
+      // Semantic and procedural memories are evergreen — exempt from decay.
       const totalScore =
-        contentScore * 0.4 +
-        recencyScore * 0.25 +
-        importanceScore * 0.35;
+        memory.layer === 'episodic' || memory.layer === 'buffer'
+          ? base * this.temporalDecay(memory)
+          : base;
 
       return { memory, score: totalScore };
     });
@@ -415,14 +420,14 @@ export class MemoryManager {
     return hits / queryTerms.length;
   }
 
-  private scoreRecency(memory: Memory): number {
+  /** Phase 3.3: 30-day half-life temporal decay multiplier. */
+  private temporalDecay(memory: Memory): number {
     const created =
       typeof memory.createdAt === 'string'
         ? new Date(memory.createdAt).getTime()
         : Date.now();
-    const ageMs = Date.now() - created;
-    const ageHours = ageMs / (1000 * 60 * 60);
-    return Math.exp(-0.0144 * ageHours);
+    const ageDays = (Date.now() - created) / (1000 * 60 * 60 * 24);
+    return Math.exp((-0.693 / 30) * ageDays);
   }
 }
 
