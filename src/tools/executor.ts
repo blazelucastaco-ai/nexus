@@ -134,7 +134,10 @@ export class ToolExecutor {
       timeout: timeoutMs,
       cwd,
       maxBuffer: 10 * 1024 * 1024,
-      env: { ...process.env },
+      env: {
+        ...process.env,
+        PATH: `/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:${process.env.PATH ?? ''}`,
+      },
     });
 
     const out = cleanTruncate(stdout.trim());

@@ -387,6 +387,11 @@ IMPORTANT — Terminal commands: always provide the EXACT shell command, not a d
 IMPORTANT — write_file: provide the FULL file content, not a description or placeholder.
 The content you provide is written directly to disk as-is.
 
+IMPORTANT — Multi-file projects: When creating a project with multiple files, use
+write_file for EACH file in a SINGLE response. Do NOT stop after creating the directory
+or writing one file — write ALL files in one turn. The write_file tool automatically
+creates parent directories, so you do not need a separate mkdir step.
+
 Keep your conversational responses SHORT (2-4 sentences). When you execute tools,
 just say what you did briefly — don't explain every step.`);
 
