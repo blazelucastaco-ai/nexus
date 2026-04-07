@@ -13,7 +13,7 @@ import { createLogger } from '../utils/logger.js';
 const log = createLogger('StatePersistence');
 
 const STATE_PATH = join(homedir(), '.nexus', 'brain-state.json');
-const STATE_VERSION = 1;
+const STATE_VERSION = 2;
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -23,8 +23,11 @@ export interface BrainStateFile {
   emotionalState: EmotionalState;
   mood: number;
   relationshipWarmth: number;
+  relationshipScore: number;          // Phase 2.1: 0-1 accumulated relationship score
   messageCount: number;
+  totalInteractionCount: number;      // Phase 2.1: canonical interaction counter
   firstInteraction: string;
+  firstSeenTimestamp: string;         // Phase 2.1: canonical first-seen timestamp
   opinions: Opinion[];
 }
 
@@ -35,6 +38,15 @@ export function loadBrainState(): BrainStateFile | null {
   try {
     const raw = readFileSync(STATE_PATH, 'utf8');
     const parsed = JSON.parse(raw) as BrainStateFile;
+
+    // Migrate v1 → v2: fill in new fields with defaults
+    if (parsed.version === 1) {
+      log.info({ path: STATE_PATH }, 'Migrating brain state v1 → v2');
+      parsed.version = 2;
+      parsed.relationshipScore = 0;
+      parsed.totalInteractionCount = parsed.messageCount;
+      parsed.firstSeenTimestamp = parsed.firstInteraction;
+    }
 
     if (parsed.version !== STATE_VERSION) {
       log.warn({ path: STATE_PATH, version: parsed.version }, 'Brain state version mismatch, ignoring');

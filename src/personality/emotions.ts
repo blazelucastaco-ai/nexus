@@ -47,9 +47,45 @@ export class EmotionalEngine {
     };
   }
 
+  /**
+   * Return time-of-day baseline adjustments (circadian rhythm).
+   * Applied as an offset to the personality baseline during decay.
+   */
+  static getCircadianModifier(): Partial<EmotionalState> {
+    const hour = new Date().getHours();
+    if (hour >= 6 && hour < 10) {
+      // Morning: curious and energized
+      return { arousal: 0.1, engagement: 0.1 };
+    } else if (hour >= 10 && hour < 14) {
+      // Late morning / midday: confident and productive
+      return { confidence: 0.1, engagement: 0.1 };
+    } else if (hour >= 14 && hour < 17) {
+      // Afternoon slump
+      return { arousal: -0.05 };
+    } else if (hour >= 17 && hour < 21) {
+      // Evening: patient and reflective
+      return { patience: 0.1 };
+    } else if (hour >= 21) {
+      // Late night: winding down
+      return { arousal: -0.1 };
+    } else {
+      // 12am-6am: deep night
+      return { arousal: -0.15 };
+    }
+  }
+
   /** Apply event forces with interpolation and natural decay toward baseline. */
   update(forces: EmotionForce): void {
     const dims = ['valence', 'arousal', 'confidence', 'engagement', 'patience'] as const;
+
+    // Compute circadian-adjusted effective baseline
+    const circadian = EmotionalEngine.getCircadianModifier();
+    const effectiveBaseline: EmotionalState = { ...this.baseline };
+    for (const dim of dims) {
+      const offset = (circadian[dim] ?? 0);
+      const min = dim === 'valence' ? -1 : 0;
+      effectiveBaseline[dim] = clamp(this.baseline[dim] + offset, min, 1);
+    }
 
     for (const dim of dims) {
       const force = forces[dim] ?? 0;
@@ -57,8 +93,8 @@ export class EmotionalEngine {
       const target = this.state[dim] + force;
       this.state[dim] = lerp(this.state[dim], target, LERP_FACTOR);
 
-      // Natural decay toward baseline
-      this.state[dim] = lerp(this.state[dim], this.baseline[dim], DECAY_FACTOR);
+      // Natural decay toward circadian-adjusted baseline
+      this.state[dim] = lerp(this.state[dim], effectiveBaseline[dim], DECAY_FACTOR);
 
       // Clamp to valid range
       const min = dim === 'valence' ? -1 : 0;

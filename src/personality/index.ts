@@ -27,6 +27,7 @@ export class PersonalityEngine {
   private readonly traits: PersonalityTraits;
   private mood: number; // -1 to 1 overall mood (slower moving than emotion)
   private relationshipWarmth: number;
+  private relationshipScore: number; // 0-1, grows 0.01 per positive interaction
   private firstInteraction: string;
   private messageCount = 0;
 
@@ -42,6 +43,7 @@ export class PersonalityEngine {
 
     this.mood = 0.2; // slightly positive default
     this.relationshipWarmth = 0.3; // starts warm-ish, grows over time
+    this.relationshipScore = 0; // starts at 0, grows with positive interactions
     this.firstInteraction = nowISO();
 
     this.debouncedSave = createDebouncedSaver();
@@ -55,13 +57,16 @@ export class PersonalityEngine {
   /** Serialize current state and persist to disk immediately. */
   saveState(): void {
     saveBrainState({
-      version: 1,
+      version: 2,
       savedAt: new Date().toISOString(),
       emotionalState: this.emotions.getState(),
       mood: this.mood,
       relationshipWarmth: this.relationshipWarmth,
+      relationshipScore: this.relationshipScore,
       messageCount: this.messageCount,
+      totalInteractionCount: this.messageCount,
       firstInteraction: this.firstInteraction,
+      firstSeenTimestamp: this.firstInteraction,
       opinions: this.opinions.getAllOpinions(),
     });
   }
@@ -74,25 +79,34 @@ export class PersonalityEngine {
     this.emotions.setState(saved.emotionalState);
     this.mood = saved.mood;
     this.relationshipWarmth = saved.relationshipWarmth;
-    this.messageCount = saved.messageCount;
-    this.firstInteraction = saved.firstInteraction;
+    this.relationshipScore = saved.relationshipScore ?? 0;
+    this.messageCount = saved.totalInteractionCount ?? saved.messageCount;
+    this.firstInteraction = saved.firstSeenTimestamp ?? saved.firstInteraction;
     this.opinions.restoreOpinions(saved.opinions);
 
     log.info(
-      { mood: this.mood, warmth: this.relationshipWarmth, messageCount: this.messageCount },
+      {
+        mood: this.mood,
+        warmth: this.relationshipWarmth,
+        relationshipScore: this.relationshipScore,
+        messageCount: this.messageCount,
+      },
       'Personality state restored from disk',
     );
   }
 
   private scheduleSave(): void {
     this.debouncedSave({
-      version: 1,
+      version: 2,
       savedAt: new Date().toISOString(),
       emotionalState: this.emotions.getState(),
       mood: this.mood,
       relationshipWarmth: this.relationshipWarmth,
+      relationshipScore: this.relationshipScore,
       messageCount: this.messageCount,
+      totalInteractionCount: this.messageCount,
       firstInteraction: this.firstInteraction,
+      firstSeenTimestamp: this.firstInteraction,
       opinions: this.opinions.getAllOpinions(),
     });
   }
@@ -141,15 +155,36 @@ export class PersonalityEngine {
     const quality = clamp(interactionQuality, -1, 1);
     this.mood = clamp(this.mood * 0.85 + quality * 0.15, -1, 1);
 
-    // Good interactions build warmth slowly
+    // Good interactions build warmth and relationship score
     if (quality > 0.3) {
       this.relationshipWarmth = clamp(this.relationshipWarmth + 0.02, 0, 1);
+      this.relationshipScore = clamp(this.relationshipScore + 0.01, 0, 1);
     } else if (quality < -0.3) {
       this.relationshipWarmth = clamp(this.relationshipWarmth - 0.01, 0, 1);
     }
 
-    log.debug({ mood: this.mood, warmth: this.relationshipWarmth, quality }, 'Mood updated');
+    log.debug(
+      { mood: this.mood, warmth: this.relationshipWarmth, relationshipScore: this.relationshipScore, quality },
+      'Mood updated',
+    );
     this.scheduleSave();
+  }
+
+  /**
+   * Return a human-readable relationship level based on the accumulated
+   * relationshipScore (0–1).
+   */
+  getRelationshipLevel(): 'stranger' | 'acquaintance' | 'familiar' | 'trusted' | 'close' {
+    if (this.relationshipScore < 0.1) return 'stranger';
+    if (this.relationshipScore < 0.3) return 'acquaintance';
+    if (this.relationshipScore < 0.6) return 'familiar';
+    if (this.relationshipScore < 0.85) return 'trusted';
+    return 'close';
+  }
+
+  /** Return the current relationship score (0-1). */
+  getRelationshipScore(): number {
+    return this.relationshipScore;
   }
 
   /** Assemble all personality-driven system prompt additions for the LLM. */
@@ -159,11 +194,26 @@ export class PersonalityEngine {
     const label = this.emotions.getLabel();
 
     // 1. Emotional state instruction
+    const relLevel = this.getRelationshipLevel();
+    const circadian = EmotionalEngine.getCircadianModifier();
+    const circadianNote = Object.entries(circadian).map(([k, v]) => `${k} ${(v as number) > 0 ? '+' : ''}${v}`).join(', ');
+
     sections.push(
       `[Current emotional state: ${label}]`,
       `Mood: ${this.mood > 0.3 ? 'positive' : this.mood < -0.3 ? 'negative' : 'neutral'}. ` +
-        `Relationship warmth: ${this.relationshipWarmth > 0.6 ? 'close' : this.relationshipWarmth > 0.3 ? 'familiar' : 'new'}.`,
+        `Relationship: ${relLevel} (score: ${this.relationshipScore.toFixed(2)}, warmth: ${this.relationshipWarmth.toFixed(2)}). ` +
+        `Circadian baseline shift: ${circadianNote || 'none'}.`,
     );
+
+    // Relationship-level tone guidance
+    const relTone: Record<ReturnType<typeof this.getRelationshipLevel>, string> = {
+      stranger: 'You are meeting this person for the first time. Be friendly and helpful, but do not assume familiarity.',
+      acquaintance: 'You have had a few exchanges. You can be a bit warmer and more proactive with suggestions.',
+      familiar: 'You know this person reasonably well. Be direct, use a relaxed tone, and reference prior context naturally.',
+      trusted: 'You have built real trust. Be candid, push back when warranted, and show genuine care. You can be more personal.',
+      close: 'This is a close, established relationship. Be fully yourself — direct, honest, occasionally irreverent. Treat them as a peer.',
+    };
+    sections.push(`[Relationship tone — ${relLevel}] ${relTone[relLevel]}`);
 
     // 2. Style prompt
     const stylePrompt = this.style.getStylePrompt(emotion, context);
