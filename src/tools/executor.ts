@@ -150,7 +150,9 @@ export class ToolExecutor {
 
   private async writeFile(args: Record<string, unknown>): Promise<string> {
     const rawPath = String(args.path ?? '');
-    const content = String(args.content ?? '');
+    // Unescape literal backslash-escaped sequences from LLM output
+    let content = String(args.content ?? '');
+    content = content.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r');
     const executable = args.executable === true || args.executable === 'true';
 
     if (!rawPath) return 'Error: No path provided';
