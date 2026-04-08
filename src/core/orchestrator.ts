@@ -4,6 +4,7 @@
 // No more text-based [DELEGATE:...] parsing — the LLM emits tool_calls,
 // we execute them, and loop until the model is done.
 
+import { createHash } from 'crypto';
 import { createLogger } from '../utils/logger.js';
 import { generateId, nowISO, truncate } from '../utils/helpers.js';
 import { loadConfig } from '../config.js';
@@ -20,6 +21,7 @@ import {
 import { SelfAwareness } from '../brain/self-awareness.js';
 import { summarizeSession, storeSessionSummary } from '../brain/session-summary.js';
 import { InnerMonologue } from '../brain/inner-monologue.js';
+import { appendTurn, loadSession } from './session-store.js';
 import { DreamingEngine } from '../brain/dreaming.js';
 import { ProactiveEngine } from '../brain/proactive.js';
 import type {
@@ -224,6 +226,15 @@ export class Orchestrator {
         );
       }
 
+      // ── FIX 1: Load persisted session on first message ────────
+      if (this.conversationHistory.length === 0) {
+        const persisted = loadSession(chatId, 10);
+        if (persisted.length > 0) {
+          this.conversationHistory.push(...persisted.map((m) => ({ role: m.role as AIMessage['role'], content: m.content })));
+          log.info({ chatId, loaded: persisted.length }, 'Loaded persisted session');
+        }
+      }
+
       // ── 1. Personality event + short-term memory ──────────────
       this.personality.processEvent('user_message');
       this.memory.addToBuffer('user', text);
@@ -276,7 +287,14 @@ export class Orchestrator {
       let finalContent = '';
       let toolCallCount = 0;
 
+      // ── FIX 3: Tool loop detection state ──────────────────────────
+      const toolCallCounts = new Map<string, number>();
+      const recentToolSequence: string[] = [];
+
       for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+        // ── FIX 2: LLM-driven compaction ──────────────────────────
+        await this.maybeCompact(loopMessages, systemPrompt);
+
         const aiResponse = await this.ai.complete({
           messages: loopMessages,
           systemPrompt,
@@ -311,6 +329,23 @@ export class Orchestrator {
           tool_calls: aiResponse.toolCalls,
         });
 
+        // ── FIX 3: Check alternating pattern (A→B→A→B) ──────────
+        let loopDetected = false;
+        if (recentToolSequence.length >= 4) {
+          const len = recentToolSequence.length;
+          if (
+            recentToolSequence[len - 4] === recentToolSequence[len - 2] &&
+            recentToolSequence[len - 3] === recentToolSequence[len - 1]
+          ) {
+            log.warn({ sequence: recentToolSequence.slice(-4) }, 'Alternating tool pattern detected');
+            loopDetected = true;
+          }
+        }
+        if (loopDetected) {
+          finalContent = "I noticed I was repeating the same actions in a loop. Let me try a different approach.";
+          break;
+        }
+
         // Execute each tool call and add results
         for (const toolCall of aiResponse.toolCalls) {
           toolCallCount++;
@@ -321,6 +356,25 @@ export class Orchestrator {
             toolArgs = JSON.parse(toolCall.function.arguments);
           } catch {
             log.warn({ toolName, raw: toolCall.function.arguments }, 'Failed to parse tool arguments');
+          }
+
+          // ── FIX 3: Track tool+args combo frequency ────────────
+          const argsHash = createHash('sha256').update(toolCall.function.arguments).digest('hex').slice(0, 8);
+          const comboKey = `${toolName}:${argsHash}`;
+          const comboCount = (toolCallCounts.get(comboKey) ?? 0) + 1;
+          toolCallCounts.set(comboKey, comboCount);
+          recentToolSequence.push(comboKey);
+
+          if (comboCount >= 3) {
+            log.warn({ toolName, comboKey, count: comboCount }, 'Tool loop detected — same tool+args called 3+ times');
+            loopMessages.push({
+              role: 'tool',
+              content: '[Loop detected: this exact action was already tried twice. Try a different approach.]',
+              tool_call_id: toolCall.id,
+            });
+            finalContent = "I noticed I was repeating the same action. Let me try a different approach.";
+            loopDetected = true;
+            break;
           }
 
           log.info({ toolName, toolCallId: toolCall.id, iteration }, 'Executing tool call');
@@ -349,6 +403,9 @@ export class Orchestrator {
           });
         }
 
+        // Break out of outer loop if tool loop was detected
+        if (loopDetected) break;
+
         // If this was the last iteration, the next loop will get the final response
         // (or we'll hit the max and use whatever content we have)
         if (iteration === MAX_TOOL_ITERATIONS - 1) {
@@ -367,6 +424,16 @@ export class Orchestrator {
         content: finalContent,
       });
       this.memory.addToBuffer('assistant', finalContent);
+
+      // ── FIX 1: Persist turn to JSONL session store ────────────
+      try {
+        await appendTurn(chatId, [
+          { role: 'user', content: text },
+          { role: 'assistant', content: finalContent },
+        ]);
+      } catch (err) {
+        log.warn({ err }, 'Session append failed');
+      }
 
       // ── 10. Store episodic memory ─────────────────────────────
       await this.memory.store(
@@ -752,6 +819,60 @@ ${insights.slice(0, 8).join('\n')}`);
   // ── Event Handlers ────────────────────────────────────────────────
 
   // ── Dream Cycle Scheduling ────────────────────────────────────────
+
+  // ── FIX 2: LLM-Driven Compaction ─────────────────────────────────
+
+  /**
+   * If token estimate exceeds 5000, compact the middle of the message history
+   * by asking the LLM to summarize it, then replace with a single system message.
+   */
+  private async maybeCompact(messages: AIMessage[], systemPrompt: string): Promise<void> {
+    const COMPACT_THRESHOLD = 5000;
+    const estimate = (msg: AIMessage) => Math.ceil((String(msg.content ?? '')).length / 4);
+    const total = messages.reduce((sum, m) => sum + estimate(m), 0);
+
+    if (total <= COMPACT_THRESHOLD) return;
+    if (messages.length < 6) return;
+
+    // Keep system prompt (index 0 if present) and last 4 messages; summarize middle
+    const keepEnd = Math.max(1, messages.length - 4);
+    const keepStart = messages[0]?.role === 'system' ? 1 : 0;
+    const middle = messages.slice(keepStart, keepEnd);
+
+    if (middle.length === 0) return;
+
+    const conversationText = middle
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .map((m) => `${m.role}: ${truncate(String(m.content ?? ''), 300)}`)
+      .join('\n');
+
+    log.info({ totalTokens: total, middleMessages: middle.length }, 'Triggering LLM compaction');
+
+    try {
+      const summaryResponse = await this.ai.complete({
+        messages: [{ role: 'user', content: `Summarize this conversation in 2-3 sentences for context continuity:\n\n${conversationText}` }],
+        systemPrompt: 'You are a helpful assistant that summarizes conversations concisely.',
+        model: this.config.ai.model,
+        maxTokens: 200,
+        temperature: 0.3,
+      });
+
+      const summary = summaryResponse.content?.trim();
+      if (!summary) return;
+
+      const summaryMsg: AIMessage = {
+        role: 'system',
+        content: `[Previous conversation summary: ${summary}]`,
+      };
+
+      // Replace middle with summary in-place
+      messages.splice(keepStart, keepEnd - keepStart, summaryMsg);
+
+      log.info({ removedMessages: middle.length }, 'Context compacted');
+    } catch (err) {
+      log.warn({ err }, 'LLM compaction failed — proceeding without compaction');
+    }
+  }
 
   // ── Context Pruning ───────────────────────────────────────────────
 
