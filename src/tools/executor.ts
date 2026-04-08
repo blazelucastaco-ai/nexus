@@ -62,6 +62,7 @@ const TOOL_RISK: Record<string, 'AUTO' | 'LOGGED' | 'CONFIRM'> = {
   introspect:          'AUTO',
   web_search:          'AUTO',
   web_fetch:           'AUTO',
+  crawl_url:           'AUTO',
   check_injection:     'AUTO',
   write_file:          'LOGGED',
   run_terminal_command:'LOGGED',
@@ -247,6 +248,7 @@ export class ToolExecutor {
       case 'recall':              return this.recall(args);
       case 'web_search':          return this.webSearch(args);
       case 'web_fetch':           return this.webFetch(args);
+      case 'crawl_url':           return this.crawlUrl(args);
       case 'check_injection':     return this.checkInjection(args);
       case 'introspect':          return this.introspect();
       case 'toggle_think_mode':   return this.toggleThinkMode(args);
@@ -551,35 +553,31 @@ export class ToolExecutor {
   }
 
   // ── web_search ─────────────────────────────────────────────────────
-  // Uses DuckDuckGo Instant Answer API (no key required) for real results.
+  // Uses DuckDuckGo: tries Instant Answer API first, then HTML scraper.
 
   private async webSearch(args: Record<string, unknown>): Promise<string> {
     const query = String(args.query ?? '');
-
     if (!query) return 'Error: No query provided';
 
-    // Try DuckDuckGo Instant Answer API first
+    const encodedQuery = encodeURIComponent(query);
+
+    // ── Step 1: DuckDuckGo Instant Answer API ─────────────────────
     try {
-      const encodedQuery = encodeURIComponent(query);
-      const url = `https://api.duckduckgo.com/?q=${encodedQuery}&format=json&no_html=1&skip_disambig=1`;
-      const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      const apiUrl = `https://api.duckduckgo.com/?q=${encodedQuery}&format=json&no_html=1&skip_disambig=1`;
+      const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(10_000) });
 
       if (resp.ok) {
         const data = await resp.json() as Record<string, unknown>;
         const results: string[] = [];
 
-        // Abstract (top answer)
         if (data.Abstract && String(data.Abstract).length > 10) {
           results.push(`**Summary:** ${data.Abstract}`);
           if (data.AbstractURL) results.push(`Source: ${data.AbstractURL}`);
         }
-
-        // Instant answer
         if (data.Answer && String(data.Answer).length > 0) {
           results.push(`**Answer:** ${data.Answer}`);
         }
 
-        // Related topics (top 5)
         const topics = (data.RelatedTopics as Array<{ Text?: string; FirstURL?: string }> | undefined) ?? [];
         const topResults = topics.slice(0, 5).filter((t) => t.Text);
         if (topResults.length > 0) {
@@ -594,13 +592,77 @@ export class ToolExecutor {
         }
       }
     } catch (err) {
-      log.warn({ err }, 'DuckDuckGo API failed — falling back to browser open');
+      log.warn({ err }, 'DuckDuckGo Instant API failed — trying HTML scraper');
     }
 
-    // Fallback: open browser
-    const encodedQuery = encodeURIComponent(query);
-    await execFileAsync('open', [`https://duckduckgo.com/?q=${encodedQuery}`], { timeout: 5_000 });
-    return `No instant results found. Opened DuckDuckGo search for: "${query}"`;
+    // ── Step 2: DDG HTML Lite scraper ─────────────────────────────
+    // html.duckduckgo.com returns a plain HTML page with real search results.
+    try {
+      const htmlUrl = `https://html.duckduckgo.com/html/?q=${encodedQuery}`;
+      const htmlResp = await fetch(htmlUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+        signal: AbortSignal.timeout(15_000),
+      });
+
+      if (htmlResp.ok) {
+        const html = await htmlResp.text();
+        const { load } = await import('cheerio');
+        const $ = load(html);
+
+        const results: string[] = [];
+
+        // DDG HTML result structure: .result with .result__title, .result__snippet, .result__url
+        $('.result').each((i, el) => {
+          if (i >= 8) return false; // top 8 results
+
+          const titleEl = $(el).find('.result__title a, .result__a');
+          const snippetEl = $(el).find('.result__snippet');
+          const urlEl = $(el).find('.result__url');
+
+          const title = titleEl.text().trim();
+          const snippet = snippetEl.text().trim();
+          const displayUrl = urlEl.text().trim();
+
+          // Extract actual href (DDG wraps it in a redirect)
+          let href = titleEl.attr('href') ?? '';
+          // DDG uses uddg= param for the real URL
+          try {
+            if (href.includes('uddg=')) {
+              href = decodeURIComponent(href.split('uddg=')[1]?.split('&')[0] ?? href);
+            } else if (!href.startsWith('http')) {
+              href = displayUrl ? `https://${displayUrl}` : href;
+            }
+          } catch {
+            href = displayUrl ? `https://${displayUrl}` : href;
+          }
+
+          if (title && (snippet || displayUrl)) {
+            results.push(`**${i + 1}. ${title}**`);
+            if (href) results.push(`   ${href}`);
+            if (snippet) results.push(`   ${snippet}`);
+            results.push('');
+          }
+        });
+
+        if (results.length > 0) {
+          return `DuckDuckGo search results for: "${query}"\n\n${results.join('\n').trim()}`;
+        }
+      }
+    } catch (err) {
+      log.warn({ err }, 'DuckDuckGo HTML scraper failed');
+    }
+
+    // ── Step 3: Last resort — open browser ────────────────────────
+    try {
+      await execFileAsync('open', [`https://duckduckgo.com/?q=${encodedQuery}`], { timeout: 5_000 });
+    } catch {
+      // ignore
+    }
+    return `Couldn't retrieve inline search results for: "${query}". Opened DuckDuckGo in your browser.`;
   }
 
   // ── web_fetch ──────────────────────────────────────────────────────
@@ -638,6 +700,87 @@ export class ToolExecutor {
       return truncateToolResult(text);
     } catch (err) {
       return `Error fetching ${url}: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  // ── crawl_url ──────────────────────────────────────────────────────
+  // Deep HTML extraction using cheerio: strips noise, extracts title + body + links.
+
+  private async crawlUrl(args: Record<string, unknown>): Promise<string> {
+    const url = String(args.url ?? '');
+    if (!url) return 'Error: No URL provided';
+
+    try {
+      const resp = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+        signal: AbortSignal.timeout(20_000),
+      });
+
+      if (!resp.ok) {
+        return `Error: HTTP ${resp.status} ${resp.statusText} for ${url}`;
+      }
+
+      const contentType = resp.headers.get('content-type') ?? '';
+      const html = await resp.text();
+
+      if (!contentType.includes('text/html')) {
+        return `Non-HTML content from ${url}:\n\n${html.slice(0, 4_000)}`;
+      }
+
+      // Dynamically import cheerio to avoid bundler issues
+      const { load } = await import('cheerio');
+      const $ = load(html);
+
+      // Remove noise elements
+      $('script, style, nav, footer, header, aside, noscript, iframe, .nav, .footer, .header, .sidebar, .advertisement, .ad, .ads, .cookie-banner, #nav, #footer, #header, #sidebar').remove();
+
+      // Extract title
+      const title = $('title').text().trim() || $('h1').first().text().trim() || '(no title)';
+
+      // Try to find main content area
+      const mainSel = $('main, article, [role="main"], .content, .main-content, #content, #main, .post-body, .entry-content, .article-body');
+      const contentEl = mainSel.length > 0 ? mainSel.first() : $('body');
+
+      const rawText = contentEl.text();
+      const bodyText = rawText
+        .replace(/[ \t]{2,}/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+        .slice(0, 6_000);
+
+      // Extract top links
+      const links: string[] = [];
+      $('a[href]').each((_, el) => {
+        const href = $(el).attr('href') ?? '';
+        const linkText = $(el).text().trim().replace(/\s+/g, ' ');
+        if (!href || href.startsWith('#') || href.startsWith('javascript:') || !linkText || linkText.length < 3) return;
+        try {
+          const absolute = href.startsWith('http') ? href : new URL(href, url).href;
+          links.push(`- ${linkText}: ${absolute}`);
+        } catch {
+          // skip malformed
+        }
+      });
+
+      const parts = [
+        `Title: ${title}`,
+        `URL: ${url}`,
+        `Content-Length: ${html.length} chars`,
+        '',
+        bodyText,
+      ];
+
+      if (links.length > 0) {
+        parts.push('', `Links (first ${Math.min(links.length, 20)} of ${links.length}):`, ...links.slice(0, 20));
+      }
+
+      return parts.join('\n');
+    } catch (err) {
+      return `Error crawling ${url}: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
 

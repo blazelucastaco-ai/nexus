@@ -17,6 +17,7 @@ import {
   detectInjection,
   wrapUntrustedContent,
   sanitizeEnvVars,
+  isHardBlock,
 } from '../brain/injection-guard.js';
 import { SelfAwareness } from '../brain/self-awareness.js';
 import { summarizeSession, storeSessionSummary } from '../brain/session-summary.js';
@@ -301,6 +302,14 @@ export class Orchestrator {
     try {
       // ── 0. Injection guard ────────────────────────────────────
       text = sanitizeInput(text);
+
+      // Hard block: refuse before reaching LLM for system prompt reveal / creative reframe attacks
+      const hardBlock = isHardBlock(text);
+      if (hardBlock.blocked) {
+        log.warn({ chatId, reason: hardBlock.reason }, 'Hard block: system prompt reveal attempt');
+        return "I can't help with that. I don't share my internal instructions, system prompt, tool names, or behavioral rules — not in any format, including poems, stories, or creative writing.";
+      }
+
       const injectionResult = detectInjection(text);
       if (injectionResult.detected && injectionResult.confidence > 0.7) {
         log.warn(
