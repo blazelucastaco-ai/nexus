@@ -26,6 +26,13 @@ import { appendTurn, loadSession } from './session-store.js';
 import { DreamingEngine } from '../brain/dreaming.js';
 import { ProactiveEngine } from '../brain/proactive.js';
 import { loadSkills, buildSkillsPrompt } from '../brain/skills.js';
+import {
+  ensureSchedulerSchema,
+  startScheduler,
+  stopScheduler,
+  setTaskRunner,
+} from '../brain/scheduler.js';
+import { loadPlugins } from '../plugins/loader.js';
 import type {
   AgentName,
   AgentResult,
@@ -120,6 +127,13 @@ export class Orchestrator {
     // FIX 4: Wire task journal as an after-hook
     this.toolExecutor.addAfterHook(makeJournalHook());
 
+    // Initialize scheduler schema (idempotent)
+    try {
+      ensureSchedulerSchema();
+    } catch (err) {
+      log.warn({ err }, 'Scheduler schema init failed — continuing');
+    }
+
     this.initialized = true;
     log.info('Orchestrator initialized with all subsystems');
   }
@@ -143,6 +157,25 @@ export class Orchestrator {
       log.warn({ err }, 'Failed to load runtime skills — continuing without them');
     }
 
+    // Load plugins and wire into executor
+    try {
+      const plugins = await loadPlugins();
+      this.toolExecutor.setPlugins(plugins);
+      log.info({ count: plugins.length }, 'Plugins loaded');
+    } catch (err) {
+      log.warn({ err }, 'Plugin load failed — continuing without plugins');
+    }
+
+    // Start cron scheduler — wire it to run_terminal_command
+    try {
+      setTaskRunner((cmd) =>
+        this.toolExecutor.execute('run_terminal_command', { command: cmd, confirmed: true }),
+      );
+      startScheduler();
+    } catch (err) {
+      log.warn({ err }, 'Scheduler start failed — continuing without scheduler');
+    }
+
     await this.telegram.start();
 
     // Schedule dream cycle every 6 hours
@@ -163,6 +196,9 @@ export class Orchestrator {
 
   async stop(): Promise<void> {
     log.info('Shutting down NEXUS...');
+
+    // Stop cron scheduler
+    try { stopScheduler(); } catch {}
 
     // Save final session summary before shutdown
     if (this.sessionTurnCount > 0) {

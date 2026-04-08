@@ -243,6 +243,166 @@ export const toolDefinitions: ToolDefinition[] = [
       required: [],
     },
   },
+  {
+    name: 'web_fetch',
+    description:
+      'Fetch the text content of a URL. Strips HTML for readability. ' +
+      'Use when you need to read the contents of a webpage, API endpoint, or document online. ' +
+      'Do NOT use for searching — use web_search for that.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The full URL to fetch (https://...)',
+        },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'schedule_task',
+    description:
+      'Schedule a recurring task using a cron expression. The task command runs on the defined schedule. ' +
+      'Use when the user asks to schedule something recurring, like "every hour" or "every day at 9am". ' +
+      'Cron format: "minute hour day-of-month month day-of-week" (e.g. "0 * * * *" = every hour). ' +
+      'Common expressions: "0 * * * *"=hourly, "0 9 * * *"=daily at 9am, "0 9 * * 1"=weekly Monday 9am.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Unique name for the task (e.g. "daily-backup")',
+        },
+        cron: {
+          type: 'string',
+          description: 'Cron expression (5 fields: minute hour dom month dow)',
+        },
+        command: {
+          type: 'string',
+          description: 'Shell command to run (e.g. "echo hello world")',
+        },
+      },
+      required: ['name', 'cron', 'command'],
+    },
+  },
+  {
+    name: 'list_tasks',
+    description:
+      'List all scheduled tasks, their cron expressions, commands, and last/next run times. ' +
+      'Use when asked about scheduled jobs, cron tasks, or recurring automation.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'cancel_task',
+    description:
+      'Disable or cancel a scheduled task by name or ID. ' +
+      'Use when the user wants to stop a recurring task from running.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Task name (from list_tasks)',
+        },
+        id: {
+          type: 'string',
+          description: 'Task ID (from list_tasks)',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'generate_image',
+    description:
+      'Generate an image from a text description using DALL-E (if OpenAI key is configured). ' +
+      'Saves the image to ~/nexus-workspace/. ' +
+      'Use when the user asks you to create, draw, or generate an image.',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: {
+          type: 'string',
+          description: 'Detailed description of the image to generate',
+        },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
+    name: 'speak',
+    description:
+      'Convert text to speech using the macOS "say" command. ' +
+      'Plays audio out loud or saves to ~/nexus-workspace/ as an .aiff file. ' +
+      'Use when the user asks you to say something out loud, or to generate a voice message.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: {
+          type: 'string',
+          description: 'The text to speak',
+        },
+        voice: {
+          type: 'string',
+          description: 'macOS voice to use (default: Samantha)',
+        },
+        save: {
+          type: 'string',
+          description: 'Set to "true" to save as .aiff instead of playing',
+          enum: ['true', 'false'],
+        },
+      },
+      required: ['text'],
+    },
+  },
+  {
+    name: 'list_sessions',
+    description:
+      'List all saved conversation sessions with sizes and last activity. ' +
+      'Use when asked about session history or to see past conversations.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'cleanup_sessions',
+    description:
+      'Remove old conversation sessions to free up space. ' +
+      'Deletes sessions older than the specified number of days (default: 7).',
+    parameters: {
+      type: 'object',
+      properties: {
+        days: {
+          type: 'number',
+          description: 'Delete sessions older than this many days (default 7)',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'export_session',
+    description:
+      'Export a conversation session as readable text. ' +
+      'Use when the user wants to review or save a specific past conversation.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description: 'Session ID or filename (from list_sessions)',
+        },
+      },
+      required: ['id'],
+    },
+  },
 ];
 
 /**

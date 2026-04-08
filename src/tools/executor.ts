@@ -19,6 +19,12 @@ import { detectInjection, sanitizeInput } from '../brain/injection-guard.js';
 import type { SelfAwareness } from '../brain/self-awareness.js';
 import type { InnerMonologue } from '../brain/inner-monologue.js';
 import { storeEmbedding } from '../memory/embeddings.js';
+import {
+  scheduleTaskTool,
+  listTasksTool,
+  cancelTaskTool,
+} from '../brain/scheduler.js';
+import type { LoadedPlugin } from '../plugins/loader.js';
 
 import type { AgentManager } from '../agents/index.js';
 import type { MemoryManager } from '../memory/index.js';
@@ -55,13 +61,50 @@ const TOOL_RISK: Record<string, 'AUTO' | 'LOGGED' | 'CONFIRM'> = {
   recall:              'AUTO',
   introspect:          'AUTO',
   web_search:          'AUTO',
+  web_fetch:           'AUTO',
   check_injection:     'AUTO',
   write_file:          'LOGGED',
   run_terminal_command:'LOGGED',
   remember:            'LOGGED',
   take_screenshot:     'CONFIRM',
   toggle_think_mode:   'AUTO',
+  schedule_task:       'LOGGED',
+  list_tasks:          'AUTO',
+  cancel_task:         'LOGGED',
+  generate_image:      'LOGGED',
+  speak:               'LOGGED',
+  list_sessions:       'AUTO',
+  cleanup_sessions:    'LOGGED',
+  export_session:      'AUTO',
 };
+
+// Commands that require explicit user approval — returned as a confirmation prompt
+// (distinct from DANGEROUS_PATTERNS which hard-block catastrophic patterns)
+const APPROVAL_REQUIRED_COMMANDS = [
+  'rm -rf',
+  'rm -r ',
+  'sudo rm',
+  'shutdown',
+  'reboot',
+  'halt',
+  'poweroff',
+  'mkfs',
+  'dd if=',
+  'format ',
+  'deltree',
+  'diskutil eraseDisk',
+  'diskutil eraseVolume',
+];
+
+// Commands always allowed without any warning (safe-bin allowlist)
+const SAFE_BIN_ALLOWLIST = new Set([
+  'ls', 'cat', 'echo', 'pwd', 'date', 'which', 'whoami', 'uname',
+  'grep', 'find', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'awk', 'sed',
+  'curl', 'wget', 'ping', 'nslookup', 'dig', 'ifconfig', 'netstat',
+  'ps', 'top', 'htop', 'df', 'du', 'free', 'uptime',
+  'git', 'npm', 'pnpm', 'node', 'python3', 'python',
+  'open', 'say', 'osascript',
+]);
 
 function cleanTruncate(text: string): string {
   if (text.length <= MAX_OUTPUT_BYTES) return text;
@@ -117,6 +160,7 @@ export class ToolExecutor {
   // FIX 3: Tool middleware hooks
   private beforeHooks: ToolHook[] = [];
   private afterHooks: ToolHook[] = [];
+  private plugins: LoadedPlugin[] = [];
 
   constructor(
     private agents: AgentManager,
@@ -124,6 +168,12 @@ export class ToolExecutor {
     private selfAwareness?: SelfAwareness,
     private innerMonologue?: InnerMonologue,
   ) {}
+
+  /** Register loaded plugins so their tools can be dispatched */
+  setPlugins(plugins: LoadedPlugin[]): void {
+    this.plugins = plugins;
+    log.info({ count: plugins.length }, 'Plugins registered with tool executor');
+  }
 
   addBeforeHook(fn: ToolHook): void { this.beforeHooks.push(fn); }
   addAfterHook(fn: ToolHook): void { this.afterHooks.push(fn); }
@@ -196,10 +246,28 @@ export class ToolExecutor {
       case 'remember':            return this.remember(args);
       case 'recall':              return this.recall(args);
       case 'web_search':          return this.webSearch(args);
+      case 'web_fetch':           return this.webFetch(args);
       case 'check_injection':     return this.checkInjection(args);
       case 'introspect':          return this.introspect();
       case 'toggle_think_mode':   return this.toggleThinkMode(args);
-      default:                    return `Error: Unknown tool "${toolName}"`;
+      case 'schedule_task':       return scheduleTaskTool(args);
+      case 'list_tasks':          return listTasksTool();
+      case 'cancel_task':         return cancelTaskTool(args);
+      case 'generate_image':      return this.generateImage(args);
+      case 'speak':               return this.speak(args);
+      case 'list_sessions':       return this.listSessions();
+      case 'cleanup_sessions':    return this.cleanupSessions(args);
+      case 'export_session':      return this.exportSession(args);
+      default: {
+        // Check plugin handlers
+        for (const plugin of this.plugins) {
+          if (toolName in plugin.handlers) {
+            log.info({ toolName, plugin: plugin.manifest.name }, 'Dispatching to plugin handler');
+            return plugin.handlers[toolName]!(args);
+          }
+        }
+        return `Error: Unknown tool "${toolName}"`;
+      }
     }
   }
 
@@ -209,11 +277,26 @@ export class ToolExecutor {
     const command = String(args.command ?? '');
     const timeoutMs = Number(args.timeout ?? 30_000);
     const cwd = args.cwd ? expandPath(String(args.cwd)) : undefined;
+    const confirmed = args.confirmed === true || args.confirmed === 'true';
 
     if (!command) return 'Error: No command provided';
 
     if (DANGEROUS_PATTERNS.some((p) => p.test(command))) {
       return `Command rejected as dangerous: ${command}`;
+    }
+
+    // Approval gate — dangerous but not catastrophic commands require explicit confirmation
+    if (!confirmed) {
+      const needsApproval = APPROVAL_REQUIRED_COMMANDS.some((pattern) =>
+        command.toLowerCase().includes(pattern.toLowerCase()),
+      );
+      if (needsApproval) {
+        log.warn({ command }, 'Command requires approval');
+        return (
+          `⚠️ This command requires approval. Please confirm:\n\n\`${command}\`\n\n` +
+          `Reply with: run_terminal_command with confirmed=true to proceed, or cancel.`
+        );
+      }
     }
 
     // FIX 2: argv-level safety checks
@@ -468,22 +551,243 @@ export class ToolExecutor {
   }
 
   // ── web_search ─────────────────────────────────────────────────────
+  // Uses DuckDuckGo Instant Answer API (no key required) for real results.
 
   private async webSearch(args: Record<string, unknown>): Promise<string> {
     const query = String(args.query ?? '');
-    const engine = String(args.engine ?? 'google');
 
     if (!query) return 'Error: No query provided';
 
-    const encodedQuery = encodeURIComponent(query);
-    const urls: Record<string, string> = {
-      google: `https://www.google.com/search?q=${encodedQuery}`,
-      duckduckgo: `https://duckduckgo.com/?q=${encodedQuery}`,
-      bing: `https://www.bing.com/search?q=${encodedQuery}`,
-    };
+    // Try DuckDuckGo Instant Answer API first
+    try {
+      const encodedQuery = encodeURIComponent(query);
+      const url = `https://api.duckduckgo.com/?q=${encodedQuery}&format=json&no_html=1&skip_disambig=1`;
+      const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
 
-    const url = urls[engine] ?? urls.google!;
-    await execFileAsync('open', [url], { timeout: 5_000 });
-    return `Opened ${engine} search for: "${query}"`;
+      if (resp.ok) {
+        const data = await resp.json() as Record<string, unknown>;
+        const results: string[] = [];
+
+        // Abstract (top answer)
+        if (data.Abstract && String(data.Abstract).length > 10) {
+          results.push(`**Summary:** ${data.Abstract}`);
+          if (data.AbstractURL) results.push(`Source: ${data.AbstractURL}`);
+        }
+
+        // Instant answer
+        if (data.Answer && String(data.Answer).length > 0) {
+          results.push(`**Answer:** ${data.Answer}`);
+        }
+
+        // Related topics (top 5)
+        const topics = (data.RelatedTopics as Array<{ Text?: string; FirstURL?: string }> | undefined) ?? [];
+        const topResults = topics.slice(0, 5).filter((t) => t.Text);
+        if (topResults.length > 0) {
+          results.push('\n**Related:**');
+          for (const t of topResults) {
+            results.push(`• ${t.Text}${t.FirstURL ? `\n  ${t.FirstURL}` : ''}`);
+          }
+        }
+
+        if (results.length > 0) {
+          return `DuckDuckGo results for: "${query}"\n\n${results.join('\n')}`;
+        }
+      }
+    } catch (err) {
+      log.warn({ err }, 'DuckDuckGo API failed — falling back to browser open');
+    }
+
+    // Fallback: open browser
+    const encodedQuery = encodeURIComponent(query);
+    await execFileAsync('open', [`https://duckduckgo.com/?q=${encodedQuery}`], { timeout: 5_000 });
+    return `No instant results found. Opened DuckDuckGo search for: "${query}"`;
+  }
+
+  // ── web_fetch ──────────────────────────────────────────────────────
+
+  private async webFetch(args: Record<string, unknown>): Promise<string> {
+    const url = String(args.url ?? '');
+    if (!url) return 'Error: No URL provided';
+
+    try {
+      const resp = await fetch(url, {
+        headers: { 'User-Agent': 'NEXUS/1.0 (personal AI assistant)' },
+        signal: AbortSignal.timeout(15_000),
+      });
+
+      if (!resp.ok) {
+        return `Error: HTTP ${resp.status} ${resp.statusText} for ${url}`;
+      }
+
+      const contentType = resp.headers.get('content-type') ?? '';
+      const text = await resp.text();
+
+      // Strip HTML tags for readability
+      if (contentType.includes('text/html')) {
+        const stripped = text
+          .replace(/<script[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[\s\S]*?<\/style>/gi, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s{2,}/g, ' ')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim();
+        const truncated = stripped.slice(0, 8_000);
+        return `Content from ${url} (${text.length} chars, truncated to 8000):\n\n${truncated}`;
+      }
+
+      return truncateToolResult(text);
+    } catch (err) {
+      return `Error fetching ${url}: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  // ── generate_image ─────────────────────────────────────────────────
+
+  private async generateImage(args: Record<string, unknown>): Promise<string> {
+    const prompt = String(args.prompt ?? args.description ?? '');
+    if (!prompt) return 'Error: No image prompt provided';
+
+    const workspace = expandPath('~/nexus-workspace');
+    await mkdir(workspace, { recursive: true });
+
+    // Try OpenAI DALL-E if key is present
+    const openaiKey = process.env.OPENAI_API_KEY ?? '';
+    if (openaiKey) {
+      try {
+        const resp = await fetch('https://api.openai.com/v1/images/generations', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${openaiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ model: 'dall-e-3', prompt, n: 1, size: '1024x1024' }),
+          signal: AbortSignal.timeout(60_000),
+        });
+
+        if (resp.ok) {
+          const data = await resp.json() as { data?: Array<{ url?: string }> };
+          const imageUrl = data.data?.[0]?.url;
+          if (imageUrl) {
+            // Download the image
+            const imgResp = await fetch(imageUrl, { signal: AbortSignal.timeout(30_000) });
+            const buffer = await imgResp.arrayBuffer();
+            const filename = `image_${Date.now()}.png`;
+            const outPath = join(workspace, filename);
+            const { writeFile } = await import('node:fs/promises');
+            await writeFile(outPath, Buffer.from(buffer));
+            log.info({ path: outPath }, 'Image generated and saved');
+            return `Image generated and saved to: ${outPath}\nPrompt: ${prompt}`;
+          }
+        }
+      } catch (err) {
+        log.warn({ err }, 'DALL-E generation failed');
+      }
+    }
+
+    // Fallback: describe what would be generated
+    return (
+      `Image generation: No OpenAI API key configured for DALL-E.\n\n` +
+      `Prompt: "${prompt}"\n\n` +
+      `To enable: add OPENAI_API_KEY to .env\n` +
+      `Images would be saved to: ${workspace}`
+    );
+  }
+
+  // ── speak ──────────────────────────────────────────────────────────
+
+  private async speak(args: Record<string, unknown>): Promise<string> {
+    const text = String(args.text ?? args.message ?? '');
+    const voice = String(args.voice ?? 'Samantha');
+    const save = args.save === true || args.save === 'true';
+
+    if (!text) return 'Error: No text to speak';
+
+    // Sanitize text for shell safety — strip special chars
+    const safeText = text.replace(/["`$\\]/g, ' ').slice(0, 500);
+
+    if (save) {
+      const workspace = expandPath('~/nexus-workspace');
+      await mkdir(workspace, { recursive: true });
+      const filename = `speech_${Date.now()}.aiff`;
+      const outPath = join(workspace, filename);
+      await execFileAsync('say', ['-v', voice, '-o', outPath, safeText], { timeout: 30_000 });
+      log.info({ path: outPath }, 'Speech saved');
+      return `Speech saved to: ${outPath}`;
+    }
+
+    await execFileAsync('say', ['-v', voice, safeText], { timeout: 30_000 });
+    log.info({ text: truncate(safeText, 80) }, 'Speech played');
+    return `Said: "${truncate(safeText, 100)}"`;
+  }
+
+  // ── session management ─────────────────────────────────────────────
+
+  private async listSessions(): Promise<string> {
+    const { homedir } = await import('node:os');
+    const sessDir = join(homedir(), '.nexus', 'sessions');
+    try {
+      const entries = await readdir(sessDir);
+      if (entries.length === 0) return 'No sessions found.';
+
+      const rows: string[] = [`Sessions in ${sessDir}:\n`];
+      for (const name of entries.sort()) {
+        try {
+          const info = await stat(join(sessDir, name));
+          const kb = (info.size / 1024).toFixed(1);
+          const age = Math.floor((Date.now() - info.mtimeMs) / 86_400_000);
+          rows.push(`  ${name}  (${kb} KB, last modified ${age}d ago)`);
+        } catch {
+          rows.push(`  ${name}`);
+        }
+      }
+      return rows.join('\n');
+    } catch {
+      return 'No sessions directory found.';
+    }
+  }
+
+  private async cleanupSessions(args: Record<string, unknown>): Promise<string> {
+    const olderThanDays = Number(args.days ?? 7);
+    const { homedir } = await import('node:os');
+    const { unlink } = await import('node:fs/promises');
+    const sessDir = join(homedir(), '.nexus', 'sessions');
+    try {
+      const entries = await readdir(sessDir);
+      const cutoff = Date.now() - olderThanDays * 86_400_000;
+      let removed = 0;
+      for (const name of entries) {
+        const p = join(sessDir, name);
+        const info = await stat(p).catch(() => null);
+        if (info && info.mtimeMs < cutoff) {
+          await unlink(p);
+          removed++;
+        }
+      }
+      return `Cleaned up ${removed} session(s) older than ${olderThanDays} days.`;
+    } catch {
+      return 'No sessions directory found or cleanup failed.';
+    }
+  }
+
+  private async exportSession(args: Record<string, unknown>): Promise<string> {
+    const id = String(args.id ?? '');
+    if (!id) return 'Error: No session id provided';
+
+    const { homedir } = await import('node:os');
+    const sessDir = join(homedir(), '.nexus', 'sessions');
+    const sessFile = join(sessDir, id.endsWith('.json') ? id : `${id}.json`);
+
+    try {
+      const raw = await fsReadFile(sessFile, 'utf-8');
+      const parsed = JSON.parse(raw) as { turns?: Array<{ role: string; content: string }> };
+      const turns = parsed.turns ?? [];
+      const lines = [`Session export: ${id}\n${'─'.repeat(40)}`];
+      for (const turn of turns) {
+        lines.push(`\n[${turn.role.toUpperCase()}]\n${turn.content}`);
+      }
+      return lines.join('\n');
+    } catch (err) {
+      return `Error reading session ${id}: ${err instanceof Error ? err.message : String(err)}`;
+    }
   }
 }

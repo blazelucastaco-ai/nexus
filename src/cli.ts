@@ -946,4 +946,176 @@ program
     });
   });
 
+// ── nexus plugins ─────────────────────────────────────────────────────────────
+
+program
+  .command('plugins')
+  .description('List installed NEXUS plugins from ~/.nexus/plugins/')
+  .action(async () => {
+    showLogo(true);
+    console.log(chalk.bold('  Installed Plugins\n'));
+
+    try {
+      const { loadPlugins, formatPluginList } = await import(join(PROJECT_DIR, 'dist', 'plugins', 'loader.js'));
+      const plugins = await loadPlugins();
+      console.log(formatPluginList(plugins));
+    } catch (err) {
+      // Fallback: read manifest files directly
+      const pluginsDir = join(HOME, '.nexus', 'plugins');
+      if (!existsSync(pluginsDir)) {
+        mkdirSync(pluginsDir, { recursive: true });
+        console.log(chalk.dim('  No plugins installed.'));
+        console.log(chalk.dim(`  Add plugins to: ${pluginsDir}`));
+        console.log(chalk.dim('  Each plugin needs a manifest.json: { name, version, description, tools? }'));
+      } else {
+        const entries = readdirSync(pluginsDir);
+        if (entries.length === 0) {
+          console.log(chalk.dim('  No plugins installed.'));
+          console.log(chalk.dim(`  Plugin directory: ${pluginsDir}`));
+        } else {
+          for (const entry of entries) {
+            const manifestPath = join(pluginsDir, entry, 'manifest.json');
+            if (existsSync(manifestPath)) {
+              try {
+                const m = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+                console.log(chalk.bold(`  ${m.name ?? entry}`) + chalk.dim(` v${m.version ?? '?'}`));
+                console.log(`  ${m.description ?? ''}`);
+                if (m.tools?.length) console.log(chalk.dim(`  Tools: ${m.tools.map((t: { name: string }) => t.name).join(', ')}`));
+                console.log('');
+              } catch {
+                console.log(chalk.dim(`  ${entry} (invalid manifest)`));
+              }
+            } else {
+              console.log(chalk.dim(`  ${entry} (no manifest.json)`));
+            }
+          }
+        }
+      }
+    }
+
+    showPhrase();
+  });
+
+// ── nexus doctor ──────────────────────────────────────────────────────────────
+
+program
+  .command('doctor')
+  .description('Run a health check on the NEXUS installation')
+  .action(() => {
+    const doctorScript = join(PROJECT_DIR, 'scripts', 'doctor.ts');
+    const distDoctor = join(PROJECT_DIR, 'dist', 'scripts', 'doctor.js');
+
+    // Try tsx first (dev), then compiled dist
+    if (existsSync(doctorScript)) {
+      const tsx = spawnSync('npx', ['tsx', doctorScript], {
+        stdio: 'inherit',
+        env: { ...process.env },
+        cwd: PROJECT_DIR,
+      });
+      process.exit(tsx.status ?? 0);
+    } else if (existsSync(distDoctor)) {
+      const node = spawnSync('node', [distDoctor], {
+        stdio: 'inherit',
+        env: { ...process.env },
+        cwd: PROJECT_DIR,
+      });
+      process.exit(node.status ?? 0);
+    } else {
+      console.log(chalk.red('  Doctor script not found. Run from the NEXUS project directory.'));
+      process.exit(1);
+    }
+  });
+
+// ── nexus sessions ─────────────────────────────────────────────────────────────
+
+const sessionsCmd = program
+  .command('sessions')
+  .description('Manage conversation sessions');
+
+sessionsCmd
+  .command('list')
+  .description('List all sessions with sizes and last activity')
+  .action(() => {
+    const sessDir = join(HOME, '.nexus', 'sessions');
+    if (!existsSync(sessDir)) {
+      console.log(chalk.dim('  No sessions directory found.'));
+      return;
+    }
+    const entries = readdirSync(sessDir).sort();
+    if (entries.length === 0) {
+      console.log(chalk.dim('  No sessions found.'));
+      return;
+    }
+    console.log(chalk.bold(`\n  Sessions (${entries.length})\n`));
+    for (const name of entries) {
+      try {
+        const info = statSync(join(sessDir, name));
+        const kb = (info.size / 1024).toFixed(1);
+        const age = Math.floor((Date.now() - info.mtimeMs) / 86_400_000);
+        const ageStr = age === 0 ? 'today' : `${age}d ago`;
+        console.log(`  ${name}  ${chalk.dim(`${kb} KB, ${ageStr}`)}`);
+      } catch {
+        console.log(`  ${name}`);
+      }
+    }
+    console.log('');
+  });
+
+sessionsCmd
+  .command('cleanup')
+  .description('Remove sessions older than 7 days')
+  .option('--days <n>', 'Age threshold in days', '7')
+  .action((opts: { days: string }) => {
+    const days = parseInt(opts.days, 10);
+    const sessDir = join(HOME, '.nexus', 'sessions');
+    if (!existsSync(sessDir)) {
+      console.log(chalk.dim('  No sessions directory found.'));
+      return;
+    }
+    const entries = readdirSync(sessDir);
+    const cutoff = Date.now() - days * 86_400_000;
+    let removed = 0;
+    for (const name of entries) {
+      const p = join(sessDir, name);
+      try {
+        const info = statSync(p);
+        if (info.mtimeMs < cutoff) {
+          require('fs').unlinkSync(p);
+          removed++;
+        }
+      } catch {}
+    }
+    console.log(chalk.green(`  ✓ Removed ${removed} session(s) older than ${days} days`));
+  });
+
+sessionsCmd
+  .command('export <id>')
+  .description('Export a session as readable text')
+  .action((id: string) => {
+    const sessDir = join(HOME, '.nexus', 'sessions');
+    const filename = id.endsWith('.json') ? id : `${id}.json`;
+    const filePath = join(sessDir, filename);
+
+    if (!existsSync(filePath)) {
+      console.log(chalk.red(`  Session not found: ${filePath}`));
+      process.exit(1);
+    }
+
+    try {
+      const data = JSON.parse(readFileSync(filePath, 'utf-8')) as {
+        turns?: Array<{ role: string; content: string }>;
+      };
+      const turns = data.turns ?? [];
+      console.log(chalk.bold(`\n  Session: ${id}\n${'─'.repeat(50)}`));
+      for (const turn of turns) {
+        const label = turn.role === 'user' ? chalk.cyan('[USER]') : chalk.green('[NEXUS]');
+        console.log(`\n${label}\n${turn.content}`);
+      }
+      console.log('');
+    } catch (err) {
+      console.log(chalk.red(`  Error reading session: ${err instanceof Error ? err.message : String(err)}`));
+      process.exit(1);
+    }
+  });
+
 program.parse(process.argv);
