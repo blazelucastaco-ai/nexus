@@ -343,6 +343,14 @@ export class MemoryManager {
     return this.semantic.searchFacts(query, limit);
   }
 
+  /**
+   * Get the most recently stored facts (by creation time), regardless of query.
+   * Use for proactive memory injection — always surface recent user facts to the LLM.
+   */
+  getRecentFacts(limit = 10): UserFact[] {
+    return this.semantic.getRecentFacts(limit);
+  }
+
   // ─── Consolidation ────────────────────────────────────────────────
 
   /**

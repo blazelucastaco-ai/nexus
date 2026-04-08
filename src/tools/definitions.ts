@@ -123,8 +123,10 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'remember',
     description:
-      'Store an important fact or piece of information in long-term memory for future recall. ' +
-      'Use when the user explicitly asks you to remember something, or when you discover a high-value fact.',
+      'Store a fact in long-term memory for future recall. ' +
+      'ALWAYS call this tool when the user says "remember that X", "remember I am doing X", ' +
+      '"don\'t forget X", "keep in mind X", or any similar request to store information. ' +
+      'Call this tool BEFORE responding so the fact is saved. Then confirm it was saved.',
     parameters: {
       type: 'object',
       properties: {
@@ -197,10 +199,12 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'introspect',
     description:
-      'Return a full self-awareness report about NEXUS itself: PID, uptime, heap usage, ' +
-      'memory DB size, total memories/facts stored, current emotional state, workspace contents, ' +
-      'and host machine info. Use when the user asks about your state, resources, or identity, ' +
-      'or when you want to check your own runtime status.',
+      'Get your own real runtime status: PID, uptime, heap usage, emotional state, workspace info. ' +
+      'ALWAYS call this tool FIRST when the user asks a self-referential question about YOU specifically: ' +
+      '"how are you feeling?", "what is your uptime?", "what is your PID?", "how is your health?", ' +
+      '"are you okay?", "what processes are you running?", "how much memory are you using?". ' +
+      'NEVER make up or guess your own PID, uptime, heap usage, or emotional state. ' +
+      'Do NOT call this tool when the user says "remember X" or asks to store a fact — use the remember tool for that.',
     parameters: {
       type: 'object',
       properties: {},

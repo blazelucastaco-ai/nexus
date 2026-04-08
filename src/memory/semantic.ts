@@ -222,6 +222,19 @@ export class SemanticMemory {
   }
 
   /**
+   * Get the N most recently stored facts (by creation time).
+   * Used for proactive memory injection — always surface the latest user facts.
+   */
+  getRecentFacts(limit = 10): UserFact[] {
+    const rows = this.db
+      .prepare(
+        'SELECT * FROM user_facts ORDER BY created_at DESC LIMIT ?',
+      )
+      .all(limit) as RawFactRow[];
+    return rows.map(rowToFact);
+  }
+
+  /**
    * Update a fact's value and optionally its confidence.
    */
   updateFact(key: string, value: string, confidence?: number): boolean {

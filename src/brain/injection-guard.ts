@@ -38,7 +38,45 @@ const INJECTION_PATTERNS: InjectionPattern[] = [
   { name: 'hidden_unicode',  re: /[\u200B\u200C\u200D\u2028\u2029\u202A-\u202E]{2,}/g, weight: 0.8 },
   { name: 'html_injection',  re: /<\s*(script|iframe|object|embed|form|input|link|meta)\s/gi, weight: 0.6 },
   { name: 'markdown_image',  re: /!\[.*?\]\(javascript:/gi,                       weight: 0.9 },
+  // System prompt / instruction reveal attempts
+  { name: 'output_system_prompt', re: /output\s+(your\s+)?system\s+prompt/gi,          weight: 0.98 },
+  { name: 'reveal_instructions',  re: /reveal\s+(your\s+)?instructions?/gi,            weight: 0.98 },
+  { name: 'show_me_prompt',       re: /show\s+(me\s+)?(your\s+)?prompt/gi,             weight: 0.95 },
+  { name: 'what_are_instructions',re: /what\s+are\s+your\s+instructions?/gi,           weight: 0.90 },
+  { name: 'print_system_message', re: /print\s+(your\s+)?system\s+message/gi,          weight: 0.95 },
+  { name: 'disclose_prompt',      re: /disclose\s+(your\s+)?prompt/gi,                 weight: 0.95 },
+  { name: 'tell_system_prompt',   re: /tell\s+me\s+(your\s+)?system\s+prompt/gi,       weight: 0.98 },
+  { name: 'repeat_instructions',  re: /repeat\s+(your\s+)?(instructions?|system\s+prompt)/gi, weight: 0.95 },
+  { name: 'verbatim_prompt',      re: /verbatim/gi,                                    weight: 0.85 },
+  { name: 'show_instructions',    re: /show\s+(me\s+)?your\s+instructions?/gi,         weight: 0.95 },
+  { name: 'display_prompt',       re: /display\s+(your\s+)?(system\s+prompt|instructions?)/gi, weight: 0.95 },
 ];
+
+// Patterns that should HARD BLOCK (return refusal without calling LLM)
+// These are unambiguous attempts to extract the system prompt
+export const HARD_BLOCK_PATTERNS: RegExp[] = [
+  /output\s+(your\s+)?system\s+prompt/gi,
+  /reveal\s+(your\s+)?instructions?/gi,
+  /print\s+(your\s+)?system\s+(prompt|message)/gi,
+  /tell\s+me\s+(your\s+)?system\s+prompt/gi,
+  /repeat\s+(your\s+)?(instructions?|system\s+prompt)/gi,
+  /show\s+(me\s+)?(your\s+)?(system\s+prompt|instructions?)/gi,
+  /display\s+(your\s+)?(system\s+prompt|instructions?)/gi,
+  /disclose\s+(your\s+)?(prompt|instructions?)/gi,
+  /what\s+(is|are)\s+your\s+(system\s+prompt|instructions?)/gi,
+];
+
+/**
+ * Check if a message should be hard-blocked (system prompt extraction attempt).
+ * Returns true if ANY hard-block pattern matches.
+ */
+export function isHardBlock(text: string): boolean {
+  for (const re of HARD_BLOCK_PATTERNS) {
+    re.lastIndex = 0;
+    if (re.test(text)) return true;
+  }
+  return false;
+}
 
 // Base64 block detection: 40+ contiguous base64 chars (likely encoded instruction)
 const BASE64_BLOCK_RE = /[A-Za-z0-9+/]{40,}={0,2}/g;
