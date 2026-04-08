@@ -946,6 +946,67 @@ program
     });
   });
 
+// ── nexus mcp ─────────────────────────────────────────────────────────────────
+
+program
+  .command('mcp')
+  .description('Start NEXUS in Model Context Protocol (MCP) server mode')
+  .option('--http', 'Use HTTP transport instead of stdio')
+  .option('--port <n>', 'Port for HTTP mode (default 3333)', '3333')
+  .action(async (opts: { http?: boolean; port: string }) => {
+    // Load .env
+    try { require('dotenv').config({ path: join(PROJECT_DIR, '.env') }); } catch {}
+
+    const distMcp = join(PROJECT_DIR, 'dist', 'mcp', 'server.js');
+    if (!existsSync(distMcp)) {
+      console.error('MCP server not built. Run: npx esbuild src/mcp/server.ts --bundle --platform=node --outfile=dist/mcp/server.js --format=esm');
+      process.exit(1);
+    }
+
+    if (opts.http) {
+      console.log(`Starting NEXUS MCP HTTP server on port ${opts.port}...`);
+      const { startMcpHttpServer } = await import(distMcp);
+      await startMcpHttpServer(parseInt(opts.port, 10));
+    } else {
+      // stdio mode — used by Claude Desktop/Code
+      const { startMcpServer } = await import(distMcp);
+      startMcpServer();
+    }
+  });
+
+// ── nexus providers ────────────────────────────────────────────────────────────
+
+program
+  .command('providers')
+  .description('List available AI provider presets (LiteLLM, OpenRouter, Groq, Mistral, xAI)')
+  .action(async () => {
+    showLogo(true);
+    console.log(chalk.bold('  AI Provider Presets\n'));
+
+    const presets: Record<string, { name: string; baseURL: string; defaultModel?: string }> = {
+      groq:        { name: 'groq',        baseURL: 'https://api.groq.com/openai/v1',    defaultModel: 'llama-3.3-70b-versatile' },
+      mistral:     { name: 'mistral',     baseURL: 'https://api.mistral.ai/v1',         defaultModel: 'mistral-large-latest' },
+      openrouter:  { name: 'openrouter',  baseURL: 'https://openrouter.ai/api/v1',      defaultModel: 'anthropic/claude-3.5-sonnet' },
+      xai:         { name: 'xai',         baseURL: 'https://api.x.ai/v1',               defaultModel: 'grok-2-latest' },
+      litellm:     { name: 'litellm',     baseURL: 'http://localhost:4000',             defaultModel: 'gpt-4o' },
+      together:    { name: 'together',    baseURL: 'https://api.together.xyz/v1',        defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
+    };
+
+    for (const [key, p] of Object.entries(presets)) {
+      const envKey = `${key.toUpperCase()}_API_KEY`;
+      const hasKey = !!process.env[envKey];
+      const status = hasKey ? chalk.green('✓ key set') : chalk.dim('no key');
+      console.log(`  ${chalk.bold(key.padEnd(14))} ${status}`);
+      console.log(`    Model:   ${p.defaultModel ?? '(auto)'}`);
+      console.log(`    URL:     ${p.baseURL}`);
+      console.log(`    Env var: ${envKey}`);
+      console.log('');
+    }
+
+    console.log(chalk.dim('  Set NEXUS_AI_PROVIDER_PRESET=<name> to auto-use a preset.'));
+    showPhrase();
+  });
+
 // ── nexus plugins ─────────────────────────────────────────────────────────────
 
 program
