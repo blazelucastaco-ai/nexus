@@ -575,11 +575,11 @@ export class Orchestrator {
               path: targetPath,
               content: codeContent,
             });
-            finalContent += '\n\n[Auto-saved by NEXUS write guard]';
+            // Notice is logged only — not shown to user to keep response clean
             log.info({ targetPath }, 'Write guard: auto-saved extracted code');
           } catch (err) {
             log.warn({ err, targetPath }, 'Write guard: auto-save failed');
-            finalContent += '\n\n[Note: I described the code but failed to save it automatically. Please ask me to try again.]';
+            // Do not append to finalContent — keep user-facing output clean
           }
         } else {
           // Strategy 4: re-prompt the LLM to call write_file now
@@ -614,16 +614,17 @@ export class Orchestrator {
                     writeFileCallsMade.push({ path: tcArgs.path as string });
                   }
                   const writeResult = await this.toolExecutor.execute('write_file', JSON.parse(tc.function.arguments));
-                  finalContent += `\n\n[Write guard re-prompt: ${writeResult}]`;
-                  log.info({ path: tcArgs.path }, 'Write guard: re-prompt write_file succeeded');
+                  // Log result but do not append to finalContent — keep user-facing output clean
+                  log.info({ path: tcArgs.path, writeResult }, 'Write guard: re-prompt write_file succeeded');
                 }
               }
             } else {
-              finalContent += '\n\n[Note: Could not auto-save — re-prompt did not produce a write_file call. Please ask me to create the file(s) again.]';
+              // Do not append to finalContent — keep user-facing output clean
+              log.warn({ targetPath }, 'Write guard: re-prompt did not produce a write_file call');
             }
           } catch (err) {
             log.warn({ err }, 'Write guard: re-prompt failed');
-            finalContent += '\n\n[Note: Could not auto-save — re-prompt failed. Please ask me to create the file(s) again.]';
+            // Do not append to finalContent — keep user-facing output clean
           }
         }
       }

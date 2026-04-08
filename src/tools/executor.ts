@@ -33,21 +33,21 @@ const log = createLogger('ToolExecutor');
 const execFileAsync = promisify(execFile);
 
 const MAX_OUTPUT_BYTES = 200_000;
-const TOOL_RESULT_MAX = 8_000;
-const TOOL_RESULT_HEAD = 3_000;
-const TOOL_RESULT_TAIL = 3_000;
+const TOOL_RESULT_MAX = 4_000;
+const TOOL_RESULT_HEAD = 2_000;
+const TOOL_RESULT_TAIL = 2_000;
 
 /**
- * FIX 4: Head+tail truncation for tool results.
- * Keeps first 3000 chars (command echo, headers) and last 3000 chars (errors, summaries).
- * Ensures we never lose the tail where errors typically appear.
+ * Head+tail truncation for tool results.
+ * Keeps first 2000 chars (command echo, headers) and last 2000 chars (errors, summaries).
+ * Ensures LLM never gets overwhelmed by massive tool output before it can respond.
  */
 function truncateToolResult(text: string): string {
   if (text.length <= TOOL_RESULT_MAX) return text;
   const total = text.length;
   const head = text.slice(0, TOOL_RESULT_HEAD);
   const tail = text.slice(total - TOOL_RESULT_TAIL);
-  return `${head}\n[Output truncated: showing first ${TOOL_RESULT_HEAD} and last ${TOOL_RESULT_TAIL} of ${total} total characters]\n${tail}`;
+  return `${head}\n...[truncated ${total - TOOL_RESULT_HEAD - TOOL_RESULT_TAIL} chars]...\n${tail}`;
 }
 
 // Risk tiers for tool execution:
