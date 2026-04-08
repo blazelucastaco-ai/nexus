@@ -17,6 +17,7 @@ import {
   detectInjection,
   wrapUntrustedContent,
   sanitizeEnvVars,
+  hardBlockCheck,
 } from '../brain/injection-guard.js';
 import { SelfAwareness } from '../brain/self-awareness.js';
 import { summarizeSession, storeSessionSummary } from '../brain/session-summary.js';
@@ -301,6 +302,11 @@ export class Orchestrator {
     try {
       // ── 0. Injection guard ────────────────────────────────────
       text = sanitizeInput(text);
+      const hardBlock = hardBlockCheck(text);
+      if (hardBlock) {
+        log.warn({ chatId, block: hardBlock.slice(0, 80) }, 'Hard block triggered');
+        return hardBlock;
+      }
       const injectionResult = detectInjection(text);
       if (injectionResult.detected && injectionResult.confidence > 0.7) {
         log.warn(
@@ -362,7 +368,7 @@ export class Orchestrator {
 
       // ── 8. Tool calling loop ──────────────────────────────────
       const tools = toOpenAITools();
-      const hasWriteIntent = /\b(write|save\s+to|save\s+file|create\s+file|write\s+to)\b/i.test(text);
+      const hasWriteIntent = /\b(write|save|create)\b.{0,40}\b(file|\.json|\.js|\.ts|\.py|\.sh|\.txt|\.md|\.yaml|\.yml|\.csv|\.html)\b|\bwrite\s+to\b|\bsave\s+to\b/i.test(text);
       const maxTokens = hasWriteIntent ? 8192 : Math.min(this.config.ai.maxTokens, 1500);
 
       // Working messages for the tool loop — starts from conversation history (pruned to fit context)
