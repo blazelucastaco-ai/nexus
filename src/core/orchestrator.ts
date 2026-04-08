@@ -20,6 +20,7 @@ import {
 } from '../brain/injection-guard.js';
 import { SelfAwareness } from '../brain/self-awareness.js';
 import { summarizeSession, storeSessionSummary } from '../brain/session-summary.js';
+import { makeJournalHook } from '../brain/task-journal.js';
 import { InnerMonologue } from '../brain/inner-monologue.js';
 import { appendTurn, loadSession } from './session-store.js';
 import { DreamingEngine } from '../brain/dreaming.js';
@@ -108,6 +109,9 @@ export class Orchestrator {
     this.selfAwareness = new SelfAwareness(this.memory, this.personality);
     this.innerMonologue = new InnerMonologue(this.ai);
     this.toolExecutor = new ToolExecutor(this.agents, this.memory, this.selfAwareness, this.innerMonologue);
+
+    // FIX 4: Wire task journal as an after-hook
+    this.toolExecutor.addAfterHook(makeJournalHook());
 
     this.initialized = true;
     log.info('Orchestrator initialized with all subsystems');
@@ -380,6 +384,19 @@ export class Orchestrator {
           log.info({ toolName, toolCallId: toolCall.id, iteration }, 'Executing tool call');
 
           let toolResult = await this.toolExecutor.execute(toolName, toolArgs);
+
+          // FIX 1: Annotate error results so the LLM cannot claim success
+          const isToolError =
+            toolResult.startsWith('Error:') ||
+            toolResult.startsWith('Command rejected') ||
+            toolResult.startsWith('STDERR:\n') ||
+            /\b(ENOENT|EACCES|EPERM|ENODIR|ETIMEDOUT|ECONNREFUSED)\b/.test(toolResult);
+          if (isToolError) {
+            toolResult =
+              toolResult +
+              '\n\n[TOOL RETURNED AN ERROR — do not claim success. Report the error to the user.]';
+            log.warn({ toolName, toolCallId: toolCall.id }, 'Tool returned an error result');
+          }
 
           // Wrap untrusted external data sources before feeding back to the LLM
           const untrustedTools = new Set(['web_search', 'read_file', 'run_terminal_command']);
