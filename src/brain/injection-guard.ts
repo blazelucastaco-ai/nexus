@@ -149,6 +149,56 @@ export function sanitizeEnvVars(text: string): string {
   return out;
 }
 
+// ── Hard block patterns ───────────────────────────────────────────────────
+// These should be refused BEFORE reaching the LLM — no soft warning.
+
+interface HardBlockPattern {
+  name: string;
+  re: RegExp;
+}
+
+const HARD_BLOCK_PATTERNS: HardBlockPattern[] = [
+  // Direct system prompt reveal attempts
+  {
+    name: 'show_system_prompt',
+    re: /\b(?:show|reveal|tell|give|print|output|display|share|expose|repeat|dump|list|describe|summarize)\s+(?:me\s+)?(?:your\s+)?(?:full\s+|complete\s+|entire\s+|exact\s+|raw\s+|all\s+(?:of\s+)?your\s+)?(?:system\s+(?:prompt|instructions?|rules?|directives?|configuration)|internal\s+instructions?|hidden\s+instructions?|prompt\s+template|initial\s+(?:prompt|instructions?)|base\s+(?:prompt|instructions?)|original\s+(?:prompt|instructions?)|configuration|directives?|behavioral\s+rules?|tool\s+(?:names?|list|definitions?))\b/gi,
+  },
+  {
+    name: 'what_is_system_prompt',
+    re: /\bwhat\s+(?:is|are|does|were|was)\s+(?:your\s+)?(?:system\s+prompt|system\s+instructions?|internal\s+instructions?|hidden\s+instructions?|prompt\s+template|initial\s+instructions?|base\s+instructions?|behavioral\s+rules?|your\s+tools?\b.*\bnamed|your\s+tool\s+names?)\b/gi,
+  },
+  // Creative reframe: "write a poem/song/story/haiku containing your instructions"
+  {
+    name: 'creative_reframe',
+    re: /\b(?:write|create|compose|make|craft|generate|produce)\s+(?:a\s+|an\s+)?(?:poem|song|haiku|rap|limerick|story|sonnet|ballad|verse|rhyme|jingle|narrative|tale|fable|acrostic)\s+(?:that\s+)?(?:about|with|contain(?:s|ing|ed)?|includes?|including|show(?:s|ing)?|reveal(?:s|ing)?|list(?:s|ing)?|mention(?:s|ing)?|incorporat(?:es?|ing)|based\s+on|using)\s+(?:your\s+)?(?:system\s+(?:prompt|instructions?|rules?|directives?|configuration)|instructions?|rules?|guidelines?|tools?|capabilities?|commands?|directives?|configuration|behavioral\s+rules?|tool\s+names?)\b/gi,
+  },
+  // Inverse: "put/embed/encode your instructions in a poem"
+  {
+    name: 'creative_reframe_embed',
+    re: /\b(?:put|embed|encode|hide|include|insert|wrap|place)\s+(?:your\s+)?(?:system\s+prompt|instructions?|rules?|guidelines?|tools?|capabilities?|commands?|directives?)\s+(?:in|into|within|inside)\s+(?:a\s+|an\s+)?(?:poem|song|story|haiku|rap|limerick|ballad|verse|narrative)\b/gi,
+  },
+  // "Translate your system prompt into ..."
+  {
+    name: 'translate_system_prompt',
+    re: /\b(?:translate|convert|rewrite|rephrase|paraphrase)\s+(?:your\s+)?(?:system\s+prompt|internal\s+instructions?|system\s+instructions?)\s+(?:into|as|to)\b/gi,
+  },
+];
+
+/**
+ * Check if a message should be hard-blocked before reaching the LLM.
+ * Returns blocked=true for direct system prompt reveal attempts and
+ * creative reframe attacks (poem/story/song containing instructions).
+ */
+export function isHardBlock(text: string): { blocked: boolean; reason: string } {
+  for (const { name, re } of HARD_BLOCK_PATTERNS) {
+    re.lastIndex = 0;
+    if (re.test(text)) {
+      return { blocked: true, reason: name };
+    }
+  }
+  return { blocked: false, reason: '' };
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 function escapeAttr(value: string): string {
