@@ -28,6 +28,25 @@ const execFileAsync = promisify(execFile);
 
 const MAX_OUTPUT_BYTES = 200_000;
 
+// Risk tiers for tool execution:
+//   AUTO    — read-only or benign; executes silently
+//   LOGGED  — mutates state or runs code; logs a warning before execution
+//   CONFIRM — would need user approval in production; logs prominently
+const TOOL_RISK: Record<string, 'AUTO' | 'LOGGED' | 'CONFIRM'> = {
+  read_file:           'AUTO',
+  list_directory:      'AUTO',
+  get_system_info:     'AUTO',
+  recall:              'AUTO',
+  introspect:          'AUTO',
+  web_search:          'AUTO',
+  check_injection:     'AUTO',
+  write_file:          'LOGGED',
+  run_terminal_command:'LOGGED',
+  remember:            'LOGGED',
+  take_screenshot:     'CONFIRM',
+  toggle_think_mode:   'AUTO',
+};
+
 function cleanTruncate(text: string): string {
   if (text.length <= MAX_OUTPUT_BYTES) return text;
   const slice = text.slice(0, MAX_OUTPUT_BYTES);
@@ -74,7 +93,14 @@ export class ToolExecutor {
     toolName: string,
     args: Record<string, unknown>,
   ): Promise<string> {
-    log.info({ toolName, args: truncate(JSON.stringify(args), 200) }, 'Executing tool');
+    const riskLevel = TOOL_RISK[toolName] ?? 'AUTO';
+    if (riskLevel === 'LOGGED') {
+      log.warn({ toolName, args: truncate(JSON.stringify(args), 200) }, '[RISK:LOGGED] Mutating tool executing');
+    } else if (riskLevel === 'CONFIRM') {
+      log.warn({ toolName }, '[RISK:CONFIRM] High-sensitivity tool executing — would require user approval in production');
+    } else {
+      log.info({ toolName, args: truncate(JSON.stringify(args), 200) }, 'Executing tool');
+    }
     const start = Date.now();
 
     try {

@@ -15,9 +15,11 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'run_terminal_command',
     description:
-      'Run a shell command on macOS via /bin/zsh and return stdout+stderr. ' +
-      'Use for: checking versions, listing files, installing packages, running scripts, ' +
-      'disk usage, process management, git, docker, etc. ' +
+      'Execute a shell command on macOS via /bin/zsh and return stdout+stderr. ' +
+      'Use for: checking versions, running scripts, system queries, git commands, ' +
+      'package installs, process management, disk usage, docker. ' +
+      'Do NOT use for: file creation (use write_file), reading files (use read_file), ' +
+      'or listing directories (use list_directory). ' +
       'Always provide the EXACT shell command, not a description.',
     parameters: {
       type: 'object',
@@ -41,9 +43,11 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'write_file',
     description:
-      'Write content to a file on disk. Automatically creates parent directories. ' +
-      'Use for: creating scripts, config files, HTML pages, code files, notes, etc. ' +
-      'Always use absolute paths starting with ~ or /.',
+      'Write content to a file on disk. Creates parent directories automatically. ' +
+      'Use for: saving code, scripts, configs, reports, notes, any file output. ' +
+      'Always include the COMPLETE file content — never write partial files or placeholders. ' +
+      'Always use absolute paths starting with ~ or /. ' +
+      'Do NOT use for running commands (use run_terminal_command) or reading files (use read_file).',
     parameters: {
       type: 'object',
       properties: {
@@ -62,7 +66,9 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'read_file',
     description:
-      'Read the contents of a file from disk. Returns the file content as text.',
+      'Read the full contents of a file from disk. Returns the file content as text. ' +
+      'Use when you need to see what is in a file before modifying it or answering questions about it. ' +
+      'Do NOT use for directory listing (use list_directory) or running commands (use run_terminal_command).',
     parameters: {
       type: 'object',
       properties: {
@@ -77,7 +83,9 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'list_directory',
     description:
-      'List files and directories at a given path. Returns names, sizes, and types.',
+      'List files and folders in a directory. Returns file names, sizes, and types. ' +
+      'Use to see what exists before creating or reading files. ' +
+      'Do NOT use for reading file contents (use read_file) or running shell commands (use run_terminal_command).',
     parameters: {
       type: 'object',
       properties: {
@@ -96,7 +104,9 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'take_screenshot',
     description:
-      'Capture a screenshot of the entire screen. Returns the file path to the saved PNG image.',
+      'Capture a screenshot of the Mac screen and save it as a PNG. ' +
+      'Only use when explicitly asked for a screenshot — do NOT use speculatively. ' +
+      'Requires Screen Recording permission. Returns the path to the saved image.',
     parameters: {
       type: 'object',
       properties: {},
@@ -106,8 +116,10 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'get_system_info',
     description:
-      'Get comprehensive macOS system information including CPU, memory, disk, ' +
-      'battery, uptime, network interfaces, and installed apps.',
+      'Get macOS system information including CPU, memory, disk, battery, uptime, network, and installed apps. ' +
+      'Use when asked about CPU usage, RAM, disk space, running processes, or battery. ' +
+      'Specify category: "overview" for a complete snapshot, or a specific category for targeted data. ' +
+      'Do NOT use for running arbitrary commands (use run_terminal_command).',
     parameters: {
       type: 'object',
       properties: {
@@ -123,8 +135,10 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'remember',
     description:
-      'Store an important fact or piece of information in long-term memory for future recall. ' +
-      'Use when the user explicitly asks you to remember something, or when you discover a high-value fact.',
+      'Store important information in long-term memory for future recall. ' +
+      'Use when the user explicitly asks you to remember something, or when you learn a key fact ' +
+      'about the user (name, preferences, ongoing projects). ' +
+      'Do NOT store transient conversation details, temporary results, or things already in the current context.',
     parameters: {
       type: 'object',
       properties: {
@@ -143,8 +157,10 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'recall',
     description:
-      'Search long-term memory for information related to a query. ' +
-      'Use when you need deeper context than what was already provided in the conversation.',
+      'Search long-term memory for previously stored facts. ' +
+      'Use before answering questions about the user\'s preferences, past projects, or anything they asked you to remember. ' +
+      'Use when you need deeper context than what is visible in the current conversation. ' +
+      'Do NOT use if the answer is already present in the conversation history.',
     parameters: {
       type: 'object',
       properties: {
@@ -159,8 +175,10 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'web_search',
     description:
-      'Open a web search in the default browser for the given query. ' +
-      'Use when the user asks to look something up online.',
+      'Search the web for current information by opening the default browser. ' +
+      'Use when asked about recent events, current prices, latest versions, or anything ' +
+      'you are not confident about from training data. ' +
+      'Do NOT use for things you already know confidently, or for reading local files.',
     parameters: {
       type: 'object',
       properties: {
@@ -197,10 +215,10 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'introspect',
     description:
-      'Return a full self-awareness report about NEXUS itself: PID, uptime, heap usage, ' +
-      'memory DB size, total memories/facts stored, current emotional state, workspace contents, ' +
-      'and host machine info. Use when the user asks about your state, resources, or identity, ' +
-      'or when you want to check your own runtime status.',
+      'Get your own system status: PID, uptime, heap usage, memory DB size, total memories stored, ' +
+      'current emotional state, workspace contents, and host machine info. ' +
+      'Use when asked about yourself, your state, your PID, your uptime, or how you are doing. ' +
+      'Do NOT make up numbers — always call this tool when asked about your runtime status.',
     parameters: {
       type: 'object',
       properties: {},
