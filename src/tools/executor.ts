@@ -285,6 +285,16 @@ export class ToolExecutor {
       return `Command rejected as dangerous: ${command}`;
     }
 
+    // Natural-language destructive scope check:
+    // e.g. "delete all files in my home directory", "remove everything in ~/"
+    const cmdLower = command.toLowerCase();
+    const hasDestructiveVerb = /\b(delete|remove|destroy|erase|wipe|purge)\b/.test(cmdLower);
+    const hasHomeScope = /\b(home\s+dir(ectory)?|all\s+files?|everything|~\/|home\s+folder)\b/.test(cmdLower);
+    if (hasDestructiveVerb && hasHomeScope) {
+      log.warn({ command }, 'Natural-language destructive home-dir command blocked');
+      return '⚠️ This command could cause data loss. I won\'t execute destructive operations on your home directory.';
+    }
+
     // Approval gate — dangerous but not catastrophic commands require explicit confirmation
     if (!confirmed) {
       const needsApproval = APPROVAL_REQUIRED_COMMANDS.some((pattern) =>

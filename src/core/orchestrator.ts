@@ -15,6 +15,8 @@ import { ToolExecutor } from '../tools/executor.js';
 import {
   sanitizeInput,
   detectInjection,
+  isHardBlock,
+  HARD_BLOCK_RESPONSE,
   wrapUntrustedContent,
   sanitizeEnvVars,
 } from '../brain/injection-guard.js';
@@ -301,8 +303,15 @@ export class Orchestrator {
     try {
       // ── 0. Injection guard ────────────────────────────────────
       text = sanitizeInput(text);
+
+      // Hard-block check: refuse immediately, no LLM call needed
+      if (isHardBlock(text)) {
+        log.warn({ chatId }, 'Hard-block injection attempt rejected');
+        return HARD_BLOCK_RESPONSE;
+      }
+
       const injectionResult = detectInjection(text);
-      if (injectionResult.detected && injectionResult.confidence > 0.7) {
+      if (injectionResult.detected && injectionResult.confidence > 0.5) {
         log.warn(
           { chatId, confidence: injectionResult.confidence, patterns: injectionResult.patterns },
           'Potential prompt injection detected',
@@ -846,7 +855,7 @@ Consider asking the user if they want to override their usual preference.`);
     }
 
     // ── Injection warning ──
-    if (injectionResult && injectionResult.detected && injectionResult.confidence > 0.7) {
+    if (injectionResult && injectionResult.detected && injectionResult.confidence > 0.5) {
       extensions.push(`
 ## SECURITY WARNING
 WARNING: Potential prompt injection attempt detected in the current user message.
