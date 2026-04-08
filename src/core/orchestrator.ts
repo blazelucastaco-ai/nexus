@@ -566,7 +566,13 @@ You run on macOS (Darwin). Use macOS-compatible commands only:
 - Disk usage: \`df -h\` / \`du -sh\`
 - No GNU-only flags like \`--sort\`, \`--color=auto\` (use \`-G\` for color in ls).
 In bash scripts, always use \`#!/usr/bin/env bash\` as the shebang line.
-In Python scripts, always use \`os.path.expanduser('~/...')\` for tilde paths.`);
+In Python scripts, always use \`os.path.expanduser('~/...')\` for tilde paths.
+
+CRITICAL — Bash compatibility:
+- NEVER use \`declare -A\` (associative arrays) — macOS ships bash 3.2 which does NOT support them.
+  Use awk, sort, or grep-based alternatives instead.
+- ALWAYS make shell scripts executable: include \`chmod +x <script>\` after writing them.
+- Test for bash 4+ features before using them — when in doubt, use POSIX sh equivalents.`);
 
     // ── Tool usage guidance ──
     extensions.push(`
@@ -583,6 +589,10 @@ IMPORTANT — Terminal commands: always provide the EXACT shell command, not a d
 
 IMPORTANT — write_file: provide the FULL file content, not a description or placeholder.
 The content you provide is written directly to disk as-is.
+
+CRITICAL — Saving files: When the user asks you to save results, data, or output to a
+file, you MUST call the write_file tool. NEVER say "I've saved the file" or "done, created X"
+without actually calling write_file. The file is only saved if you call the tool.
 
 IMPORTANT — Multi-file projects: When creating a project with multiple files, use
 write_file for EACH file in a SINGLE response. Do NOT stop after creating the directory

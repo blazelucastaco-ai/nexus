@@ -86,7 +86,8 @@ async function initNexus() {
   const learning = new LearningSystem(cortex);
 
   // Ensure SQLite WAL is checkpointed and memories are flushed on exit.
-  process.once('exit', () => closeDatabase());
+  // closeDatabase() calls db.close() which performs a full WAL checkpoint.
+  process.once('exit', () => { try { closeDatabase(); } catch {} });
   process.once('SIGINT', () => process.exit(0));
   process.once('SIGTERM', () => process.exit(0));
 

@@ -56,5 +56,5 @@ export function saveConfig(config: NexusConfig): void {
 }
 
 export function getDbPath(): string {
-  return join(ensureDataDir(), 'nexus.db');
+  return join(ensureDataDir(), 'memory.db');
 }
