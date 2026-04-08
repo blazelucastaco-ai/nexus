@@ -403,6 +403,105 @@ export const toolDefinitions: ToolDefinition[] = [
       required: ['id'],
     },
   },
+
+  // ── Media Understanding ───────────────────────────────────────────────────
+
+  {
+    name: 'understand_image',
+    description:
+      'Analyze an image using vision AI. Describe contents, extract text (OCR), or answer questions about the image. ' +
+      'Accepts image URLs (https://...) or local file paths. ' +
+      'Use when the user shares an image URL or asks about image content.',
+    parameters: {
+      type: 'object',
+      properties: {
+        source: {
+          type: 'string',
+          description: 'Image URL (https://...) or local file path (~/...)',
+        },
+        question: {
+          type: 'string',
+          description: 'Optional specific question to answer about the image',
+        },
+      },
+      required: ['source'],
+    },
+  },
+  {
+    name: 'read_pdf',
+    description:
+      'Extract text content from a PDF file or PDF URL. Returns the full text with page count. ' +
+      'Use when the user asks to read, summarize, or extract data from a PDF.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Local file path to the PDF (e.g. ~/Documents/report.pdf)',
+        },
+        url: {
+          type: 'string',
+          description: 'URL to a PDF file (https://...)',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'transcribe_audio',
+    description:
+      'Transcribe an audio file to text using Whisper. ' +
+      'Supports mp3, mp4, wav, m4a, ogg, flac formats. ' +
+      'Use when the user wants to convert speech or audio to text.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Local file path to the audio file (e.g. ~/Downloads/recording.mp3)',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'crawl_url',
+    description:
+      'Fetch a URL and return clean readable text content using a full HTML parser. ' +
+      'Strips navigation, ads, and boilerplate. Returns title, main content, and links. ' +
+      'More thorough than web_fetch — use when you need structured content extraction. ' +
+      'Do NOT use for searching — use web_search for that.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The full URL to crawl (https://...)',
+        },
+      },
+      required: ['url'],
+    },
+  },
+
+  // ── Execution Approval ────────────────────────────────────────────────────
+
+  {
+    name: 'check_command_risk',
+    description:
+      'Check the risk tier of a shell command before running it. Returns SAFE / MODERATE / DANGEROUS / BLOCKED. ' +
+      'Use this before running an unfamiliar or potentially risky command. ' +
+      'Blocked commands will be refused outright. Dangerous commands need approval.',
+    parameters: {
+      type: 'object',
+      properties: {
+        command: {
+          type: 'string',
+          description: 'The shell command to classify',
+        },
+      },
+      required: ['command'],
+    },
+  },
 ];
 
 /**
