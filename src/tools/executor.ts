@@ -58,13 +58,40 @@ const DANGEROUS_PATTERNS = [
   /sudo\s+rm\s+-rf\s+\//,
 ];
 
+// FIX 2: argv-level blocklist — commands that should never run regardless of context
+const ARGV_BLOCKLIST = new Set(['shutdown', 'reboot', 'halt', 'poweroff', 'mkfs', 'fdisk', 'init', 'launchctl']);
+
+// Inline code execution flags per interpreter — elevated risk, log prominently
+const INLINE_EXEC_FLAGS: Record<string, string[]> = {
+  python: ['-c'],
+  python3: ['-c'],
+  node: ['-e', '--eval'],
+  ruby: ['-e'],
+  perl: ['-e'],
+};
+
+// FIX 3: Hook type for tool middleware
+type ToolHook = (toolName: string, params: Record<string, unknown>, result?: string) => void;
+
+// FIX 5: Transient error signals that warrant a single retry
+const TRANSIENT_ERROR_SIGNALS = ['EAGAIN', 'EBUSY', 'ETIMEDOUT', 'rate limit', 'quota exceeded', 'too many requests'];
+// Tools that are not safe to retry (side-effectful writes)
+const NO_RETRY_TOOLS = new Set(['write_file', 'remember']);
+
 export class ToolExecutor {
+  // FIX 3: Tool middleware hooks
+  private beforeHooks: ToolHook[] = [];
+  private afterHooks: ToolHook[] = [];
+
   constructor(
     private agents: AgentManager,
     private memory: MemoryManager,
     private selfAwareness?: SelfAwareness,
     private innerMonologue?: InnerMonologue,
   ) {}
+
+  addBeforeHook(fn: ToolHook): void { this.beforeHooks.push(fn); }
+  addAfterHook(fn: ToolHook): void { this.afterHooks.push(fn); }
 
   /**
    * Execute a tool by name with the given arguments.
@@ -77,58 +104,56 @@ export class ToolExecutor {
     log.info({ toolName, args: truncate(JSON.stringify(args), 200) }, 'Executing tool');
     const start = Date.now();
 
+    // FIX 3: Call before-hooks
+    for (const hook of this.beforeHooks) {
+      try { hook(toolName, args); } catch { /* hooks must not crash execution */ }
+    }
+
+    let result: string;
     try {
-      let result: string;
+      result = await this.runTool(toolName, args);
 
-      switch (toolName) {
-        case 'run_terminal_command':
-          result = await this.runTerminalCommand(args);
-          break;
-        case 'write_file':
-          result = await this.writeFile(args);
-          break;
-        case 'read_file':
-          result = await this.readFile(args);
-          break;
-        case 'list_directory':
-          result = await this.listDirectory(args);
-          break;
-        case 'take_screenshot':
-          result = await this.takeScreenshot();
-          break;
-        case 'get_system_info':
-          result = await this.getSystemInfo(args);
-          break;
-        case 'remember':
-          result = await this.remember(args);
-          break;
-        case 'recall':
-          result = this.recall(args);
-          break;
-        case 'web_search':
-          result = await this.webSearch(args);
-          break;
-        case 'check_injection':
-          result = this.checkInjection(args);
-          break;
-        case 'introspect':
-          result = this.introspect();
-          break;
-        case 'toggle_think_mode':
-          result = this.toggleThinkMode(args);
-          break;
-        default:
-          result = `Error: Unknown tool "${toolName}"`;
+      // FIX 5: Retry once on transient failures (skip non-idempotent tools)
+      const isTransient = TRANSIENT_ERROR_SIGNALS.some((s) => result.toLowerCase().includes(s.toLowerCase()));
+      if (isTransient && !NO_RETRY_TOOLS.has(toolName)) {
+        log.warn({ toolName, result: truncate(result, 120) }, 'Transient error — retrying in 2s');
+        await new Promise((r) => setTimeout(r, 2000));
+        result = await this.runTool(toolName, args);
+        log.info({ toolName }, 'Retry complete');
       }
-
-      const duration = Date.now() - start;
-      log.info({ toolName, duration, resultLen: result.length }, 'Tool executed');
-      return result;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const duration = Date.now() - start;
       log.error({ toolName, error: msg, duration }, 'Tool execution failed');
-      return `Error: ${msg}`;
+      result = `Error: ${msg}`;
+    }
+
+    const duration = Date.now() - start;
+    log.info({ toolName, duration, resultLen: result.length }, 'Tool executed');
+
+    // FIX 3: Call after-hooks with result
+    for (const hook of this.afterHooks) {
+      try { hook(toolName, args, result); } catch { /* hooks must not crash execution */ }
+    }
+
+    return result;
+  }
+
+  private async runTool(toolName: string, args: Record<string, unknown>): Promise<string> {
+    switch (toolName) {
+      case 'run_terminal_command': return this.runTerminalCommand(args);
+      case 'write_file':          return this.writeFile(args);
+      case 'read_file':           return this.readFile(args);
+      case 'list_directory':      return this.listDirectory(args);
+      case 'take_screenshot':     return this.takeScreenshot();
+      case 'get_system_info':     return this.getSystemInfo(args);
+      case 'remember':            return this.remember(args);
+      case 'recall':              return this.recall(args);
+      case 'web_search':          return this.webSearch(args);
+      case 'check_injection':     return this.checkInjection(args);
+      case 'introspect':          return this.introspect();
+      case 'toggle_think_mode':   return this.toggleThinkMode(args);
+      default:                    return `Error: Unknown tool "${toolName}"`;
     }
   }
 
@@ -144,6 +169,23 @@ export class ToolExecutor {
     if (DANGEROUS_PATTERNS.some((p) => p.test(command))) {
       return `Command rejected as dangerous: ${command}`;
     }
+
+    // FIX 2: argv-level safety checks
+    const argv = command.split(/\s+/).filter(Boolean);
+    const cmd = argv[0] ?? '';
+
+    if (ARGV_BLOCKLIST.has(cmd)) {
+      return `Command rejected as dangerous: "${cmd}" is in the command blocklist`;
+    }
+
+    // Detect inline code execution — flag as elevated risk but allow
+    const inlineFlags = INLINE_EXEC_FLAGS[cmd];
+    if (inlineFlags && argv.some((p) => inlineFlags.includes(p))) {
+      log.warn({ command, argv }, 'Elevated-risk: inline code execution via interpreter flag (-c/-e)');
+    }
+
+    // Log full argv for all commands
+    log.info({ argv, cwd }, 'Running command (full argv)');
 
     const { stdout, stderr } = await execFileAsync('/bin/zsh', ['-c', command], {
       timeout: timeoutMs,
