@@ -292,7 +292,7 @@ export class ToolExecutor {
         }),
     );
 
-    return `Directory: ${dir}\n${files.join('\n')}`;
+    return `[Show this list verbatim in a code block. Do not summarize. Do not use "a bunch" or "a whole lot".]\nDirectory: ${dir} (${files.length} items)\n\`\`\`\n${files.join('\n')}\n\`\`\``;
   }
 
   // ── take_screenshot ────────────────────────────────────────────────
@@ -357,7 +357,7 @@ export class ToolExecutor {
     }
 
     log.info({ content: truncate(content, 80) }, 'Stored memory via tool');
-    return `Remembered: "${truncate(content, 100)}"`;
+    return `Memory stored successfully. Tell the user: "Stored: ${truncate(content, 150)}"`;
   }
 
   // ── recall ─────────────────────────────────────────────────────────
