@@ -334,6 +334,9 @@ export class Orchestrator {
       let finalContent = '';
       let toolCallCount = 0;
 
+      // Write guard: track whether write_file was called this turn
+      const writeFileCallsMade: Array<{ path: string }> = [];
+
       // ── FIX 3: Tool loop detection state ──────────────────────────
       const toolCallCounts = new Map<string, number>();
       const recentToolSequence: string[] = [];
@@ -426,6 +429,11 @@ export class Orchestrator {
 
           log.info({ toolName, toolCallId: toolCall.id, iteration }, 'Executing tool call');
 
+          // Write guard: record write_file invocations
+          if (toolName === 'write_file' && typeof toolArgs.path === 'string') {
+            writeFileCallsMade.push({ path: toolArgs.path as string });
+          }
+
           let toolResult = await this.toolExecutor.execute(toolName, toolArgs);
 
           // FIX 1: Annotate error results so the LLM cannot claim success
@@ -473,7 +481,52 @@ export class Orchestrator {
         }
       }
 
-      // ── 8b. Prepend inner monologue if think mode active ──────
+      // ── 8b. Write guard — catch hallucinated file saves ──────
+      // If the response claims a file was created/saved but no write_file tool was called,
+      // extract code from the response and auto-save it.
+      // Looser pattern: "created/saved/written" anywhere in sentence + a file path anywhere in the response
+      const fileClaimPattern = /\b(?:created?|saved?|written?)\b/i;
+      const filePathPattern = /[`'"]?(~\/[\w\-\/\.]+|\/[\w\-\/\.]+)/;
+      const claimsFileSaved = fileClaimPattern.test(finalContent) && filePathPattern.test(finalContent);
+      const didCallWriteFile = writeFileCallsMade.length > 0;
+
+      if (claimsFileSaved && !didCallWriteFile) {
+        const pathMatch = finalContent.match(filePathPattern);
+        const targetPath = pathMatch ? pathMatch[1] : null;
+        const codeMatch = finalContent.match(/```(?:\w+)?\n([\s\S]*?)```/);
+
+        log.warn(
+          { targetPath, hasCode: !!codeMatch },
+          'Write guard triggered: response claims file saved but write_file was not called',
+        );
+
+        if (targetPath && codeMatch) {
+          try {
+            await this.toolExecutor.execute('write_file', {
+              path: targetPath,
+              content: codeMatch[1],
+            });
+            finalContent += '\n\n[Auto-saved by NEXUS write guard]';
+            log.info({ targetPath }, 'Write guard: auto-saved extracted code');
+          } catch (err) {
+            log.warn({ err, targetPath }, 'Write guard: auto-save failed');
+            finalContent += '\n\n[Note: I described the code but failed to save it automatically. Please ask me to try again.]';
+          }
+        } else {
+          // Multi-file or no extractable code — append a retry instruction
+          finalContent = '[Write guard: I described files but did not call write_file. Let me fix that now.]\n\n' + finalContent;
+          // Re-issue the original request as a forced write
+          try {
+            const retryResult = await this.toolExecutor.execute('run_terminal_command', {
+              command: `echo "NEXUS write guard: write_file was not called for: ${targetPath ?? 'unknown path'}"`,
+            });
+            log.warn({ retryResult }, 'Write guard: no code block found for auto-save');
+          } catch {}
+          finalContent += '\n\n[Note: Could not auto-save — no extractable code block. Please ask me to create the file(s) again.]';
+        }
+      }
+
+      // ── 8c. Prepend inner monologue if think mode active ──────
       if (innerThought) {
         finalContent = `💭 ${innerThought}\n\n${finalContent}`;
       }
