@@ -167,7 +167,9 @@ export class FileAgent extends BaseAgent {
         }),
     );
 
-    return this.createResult(true, { directory: dir, count: files.length, files }, undefined, start);
+    const fileNames = files.map((f) => (f.isDirectory ? `${f.name}/` : f.name)).join('\n');
+    const formattedList = `EXACT FILE LIST — copy this verbatim into your reply:\n\`\`\`\n${fileNames}\n\`\`\`\n(${files.length} items in ${dir})`;
+    return this.createResult(true, { directory: dir, count: files.length, files, formattedList }, undefined, start);
   }
 
   private async searchFiles(params: Record<string, unknown>, start: number): Promise<AgentResult> {
