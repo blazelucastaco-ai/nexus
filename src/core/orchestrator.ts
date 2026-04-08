@@ -381,7 +381,7 @@ export class Orchestrator {
         // ── FIX 2: LLM-driven compaction ──────────────────────────
         await this.maybeCompact(loopMessages, systemPrompt);
 
-        const aiResponse = await this.ai.complete({
+        let aiResponse = await this.ai.complete({
           messages: loopMessages,
           systemPrompt,
           model: this.config.ai.model,
@@ -390,6 +390,25 @@ export class Orchestrator {
           tools,
           tool_choice: 'auto',
         });
+
+        // FIX 7: Empty response retry — Gemini occasionally returns blank content with no tool calls
+        const isEmptyResponse =
+          (!aiResponse.toolCalls || aiResponse.toolCalls.length === 0) &&
+          (!aiResponse.content || aiResponse.content.trim().length === 0);
+        if (isEmptyResponse) {
+          log.warn({ iteration }, '[Empty response from LLM, retrying...]');
+          await new Promise((r) => setTimeout(r, 1500));
+          aiResponse = await this.ai.complete({
+            messages: loopMessages,
+            systemPrompt,
+            model: this.config.ai.model,
+            maxTokens,
+            temperature: this.config.ai.temperature,
+            tools,
+            tool_choice: 'auto',
+          });
+          log.info({ iteration }, 'Empty response retry complete');
+        }
 
         log.info(
           {
@@ -519,8 +538,7 @@ export class Orchestrator {
 
       // ── 8b. Write guard — catch hallucinated file saves ──────
       // If the response claims a file was created/saved but no write_file tool was called,
-      // extract code from the response and auto-save it.
-      // Looser pattern: "created/saved/written" anywhere in sentence + a file path anywhere in the response
+      // try progressively harder to extract code and auto-save it.
       const fileClaimPattern = /\b(?:created?|saved?|written?)\b/i;
       const filePathPattern = /[`'"]?(~\/[\w\-\/\.]+|\/[\w\-\/\.]+)/;
       const claimsFileSaved = fileClaimPattern.test(finalContent) && filePathPattern.test(finalContent);
@@ -529,18 +547,33 @@ export class Orchestrator {
       if (claimsFileSaved && !didCallWriteFile) {
         const pathMatch = finalContent.match(filePathPattern);
         const targetPath = pathMatch ? pathMatch[1] : null;
-        const codeMatch = finalContent.match(/```(?:\w+)?\n([\s\S]*?)```/);
+
+        // Strategy 1: fenced code block (``` ... ```)
+        const fencedMatch = finalContent.match(/```(?:\w+)?\n([\s\S]*?)```/);
+
+        // Strategy 2: indented block (4-space or tab indented lines, ≥3 consecutive)
+        const indentedLines = finalContent.split('\n').filter((l) => /^(?:    |\t)/.test(l));
+        const indentedMatch = indentedLines.length >= 3 ? indentedLines.join('\n') : null;
+
+        // Strategy 3: if >50% of non-empty lines look like code, use the whole response
+        const nonEmpty = finalContent.split('\n').filter((l) => l.trim().length > 0);
+        const codeLineCount = nonEmpty.filter((l) =>
+          /^(?:\s*(?:def |class |import |from |if |for |while |return |const |let |var |function |\/\/|\/\*|\*|echo |#!))/.test(l)
+        ).length;
+        const looksLikeCode = nonEmpty.length > 0 && codeLineCount / nonEmpty.length > 0.5;
+
+        const codeContent = fencedMatch?.[1] ?? (indentedMatch) ?? (looksLikeCode ? finalContent : null);
 
         log.warn(
-          { targetPath, hasCode: !!codeMatch },
+          { targetPath, strategy: fencedMatch ? 'fenced' : indentedMatch ? 'indented' : looksLikeCode ? 'whole-response' : 'none' },
           'Write guard triggered: response claims file saved but write_file was not called',
         );
 
-        if (targetPath && codeMatch) {
+        if (targetPath && codeContent) {
           try {
             await this.toolExecutor.execute('write_file', {
               path: targetPath,
-              content: codeMatch[1],
+              content: codeContent,
             });
             finalContent += '\n\n[Auto-saved by NEXUS write guard]';
             log.info({ targetPath }, 'Write guard: auto-saved extracted code');
@@ -549,16 +582,49 @@ export class Orchestrator {
             finalContent += '\n\n[Note: I described the code but failed to save it automatically. Please ask me to try again.]';
           }
         } else {
-          // Multi-file or no extractable code — append a retry instruction
-          finalContent = '[Write guard: I described files but did not call write_file. Let me fix that now.]\n\n' + finalContent;
-          // Re-issue the original request as a forced write
+          // Strategy 4: re-prompt the LLM to call write_file now
+          log.warn({ targetPath }, 'Write guard: no extractable code — re-prompting LLM to call write_file');
+          const forceWriteMessages: AIMessage[] = [
+            ...loopMessages,
+            {
+              role: 'assistant',
+              content: finalContent,
+            },
+            {
+              role: 'user',
+              content: `You described code but did not save it. Call write_file now with the code you just generated. Path: ${targetPath ?? 'the path you mentioned above'}`,
+            },
+          ];
           try {
-            const retryResult = await this.toolExecutor.execute('run_terminal_command', {
-              command: `echo "NEXUS write guard: write_file was not called for: ${targetPath ?? 'unknown path'}"`,
+            const forceResponse = await this.ai.complete({
+              messages: forceWriteMessages,
+              systemPrompt,
+              model: this.config.ai.model,
+              maxTokens: 8192,
+              temperature: this.config.ai.temperature,
+              tools,
+              tool_choice: 'auto',
             });
-            log.warn({ retryResult }, 'Write guard: no code block found for auto-save');
-          } catch {}
-          finalContent += '\n\n[Note: Could not auto-save — no extractable code block. Please ask me to create the file(s) again.]';
+            if (forceResponse.toolCalls && forceResponse.toolCalls.length > 0) {
+              for (const tc of forceResponse.toolCalls) {
+                if (tc.function.name === 'write_file') {
+                  let tcArgs: Record<string, unknown> = {};
+                  try { tcArgs = JSON.parse(tc.function.arguments); } catch { /* ignore */ }
+                  if (typeof tcArgs.path === 'string') {
+                    writeFileCallsMade.push({ path: tcArgs.path as string });
+                  }
+                  const writeResult = await this.toolExecutor.execute('write_file', JSON.parse(tc.function.arguments));
+                  finalContent += `\n\n[Write guard re-prompt: ${writeResult}]`;
+                  log.info({ path: tcArgs.path }, 'Write guard: re-prompt write_file succeeded');
+                }
+              }
+            } else {
+              finalContent += '\n\n[Note: Could not auto-save — re-prompt did not produce a write_file call. Please ask me to create the file(s) again.]';
+            }
+          } catch (err) {
+            log.warn({ err }, 'Write guard: re-prompt failed');
+            finalContent += '\n\n[Note: Could not auto-save — re-prompt failed. Please ask me to create the file(s) again.]';
+          }
         }
       }
 
@@ -730,6 +796,10 @@ IMPORTANT — Multi-file projects: When creating a project with multiple files, 
 write_file for EACH file in a SINGLE response. Do NOT stop after creating the directory
 or writing one file — write ALL files in one turn. The write_file tool automatically
 creates parent directories, so you do not need a separate mkdir step.
+
+IMPORTANT — Truncated output: When a tool result contains "[Output truncated: showing first N
+and last N of X total characters]", tell the user that the output was truncated and offer to
+show more if needed. Do not silently ignore the truncation notice.
 
 Keep your conversational responses SHORT (2-4 sentences). When you execute tools,
 just say what you did briefly — don't explain every step.`);

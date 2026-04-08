@@ -44,10 +44,10 @@ const TOOL_RESULT_TAIL = 3_000;
  */
 function truncateToolResult(text: string): string {
   if (text.length <= TOOL_RESULT_MAX) return text;
-  const dropped = text.length - TOOL_RESULT_HEAD - TOOL_RESULT_TAIL;
+  const total = text.length;
   const head = text.slice(0, TOOL_RESULT_HEAD);
-  const tail = text.slice(text.length - TOOL_RESULT_TAIL);
-  return `${head}\n... [truncated ${dropped} chars] ...\n${tail}`;
+  const tail = text.slice(total - TOOL_RESULT_TAIL);
+  return `${head}\n[Output truncated: showing first ${TOOL_RESULT_HEAD} and last ${TOOL_RESULT_TAIL} of ${total} total characters]\n${tail}`;
 }
 
 // Risk tiers for tool execution:
