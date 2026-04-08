@@ -26,6 +26,15 @@ import {
 } from '../brain/scheduler.js';
 import type { LoadedPlugin } from '../plugins/loader.js';
 
+// New feature imports
+import { analyzeImage } from '../media/image-understanding.js';
+import { parsePdf, parsePdfFromUrl } from '../media/pdf-parser.js';
+import { transcribeAudio } from '../media/audio-transcription.js';
+import { crawlUrl } from '../media/link-crawler.js';
+import { extractContent } from './content-extractor.js';
+import { classifyCommand } from '../security/approval-policy.js';
+import { checkApproval } from '../security/approval-gate.js';
+
 import type { AgentManager } from '../agents/index.js';
 import type { MemoryManager } from '../memory/index.js';
 
@@ -76,6 +85,13 @@ const TOOL_RISK: Record<string, 'AUTO' | 'LOGGED' | 'CONFIRM'> = {
   list_sessions:       'AUTO',
   cleanup_sessions:    'LOGGED',
   export_session:      'AUTO',
+  // Media understanding
+  understand_image:    'AUTO',
+  read_pdf:            'AUTO',
+  transcribe_audio:    'AUTO',
+  crawl_url:           'AUTO',
+  // Approval
+  check_command_risk:  'AUTO',
 };
 
 // Commands that require explicit user approval — returned as a confirmation prompt
@@ -258,6 +274,13 @@ export class ToolExecutor {
       case 'list_sessions':       return this.listSessions();
       case 'cleanup_sessions':    return this.cleanupSessions(args);
       case 'export_session':      return this.exportSession(args);
+      // Media understanding
+      case 'understand_image':    return this.understandImage(args);
+      case 'read_pdf':            return this.readPdf(args);
+      case 'transcribe_audio':    return this.transcribeAudio(args);
+      case 'crawl_url':           return this.crawlUrl(args);
+      // Execution approval
+      case 'check_command_risk':  return this.checkCommandRisk(args);
       default: {
         // Check plugin handlers
         for (const plugin of this.plugins) {
@@ -285,13 +308,19 @@ export class ToolExecutor {
       return `Command rejected as dangerous: ${command}`;
     }
 
-    // Approval gate — dangerous but not catastrophic commands require explicit confirmation
+    // Enhanced approval gate — uses risk tier system from security/approval-gate.ts
+    const approvalDecision = await checkApproval(command, confirmed);
+    if (!approvalDecision.allowed) {
+      return approvalDecision.message ?? `Command not allowed: ${approvalDecision.reason}`;
+    }
+
+    // Legacy approval gate (belt-and-suspenders for patterns not yet in approval-policy)
     if (!confirmed) {
       const needsApproval = APPROVAL_REQUIRED_COMMANDS.some((pattern) =>
         command.toLowerCase().includes(pattern.toLowerCase()),
       );
       if (needsApproval) {
-        log.warn({ command }, 'Command requires approval');
+        log.warn({ command }, 'Command requires approval (legacy gate)');
         return (
           `⚠️ This command requires approval. Please confirm:\n\n\`${command}\`\n\n` +
           `Reply with: run_terminal_command with confirmed=true to proceed, or cancel.`
@@ -789,5 +818,135 @@ export class ToolExecutor {
     } catch (err) {
       return `Error reading session ${id}: ${err instanceof Error ? err.message : String(err)}`;
     }
+  }
+
+  // ── understand_image ───────────────────────────────────────────────
+
+  private async understandImage(args: Record<string, unknown>): Promise<string> {
+    const source = String(args.source ?? '');
+    const question = args.question ? String(args.question) : undefined;
+    if (!source) return 'Error: No image source provided';
+
+    const apiBaseUrl = process.env.OPENAI_BASE_URL ?? process.env.AI_BASE_URL ?? '';
+    const apiKey = process.env.OPENAI_API_KEY ?? process.env.AI_API_KEY ?? process.env.GEMINI_API_KEY ?? '';
+    const model = process.env.AI_MODEL ?? 'gemini-2.5-flash';
+
+    if (!apiBaseUrl || !apiKey) {
+      return 'Error: Vision API not configured (need OPENAI_BASE_URL + OPENAI_API_KEY or AI_* env vars)';
+    }
+
+    try {
+      const isBase64 = !source.startsWith('http') && !source.startsWith('/') && !source.startsWith('~');
+      const result = await analyzeImage({
+        source,
+        isBase64,
+        question,
+        apiBaseUrl,
+        apiKey,
+        model,
+      });
+      return question
+        ? `Image analysis — Answer: ${result.answer ?? result.description}`
+        : `Image description:\n\n${result.description}`;
+    } catch (err) {
+      return `Error analyzing image: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  // ── read_pdf ───────────────────────────────────────────────────────
+
+  private async readPdf(args: Record<string, unknown>): Promise<string> {
+    const path = args.path ? expandPath(String(args.path)) : undefined;
+    const url = args.url ? String(args.url) : undefined;
+
+    if (!path && !url) return 'Error: Provide either path or url for the PDF';
+
+    try {
+      const result = path ? await parsePdf(path) : await parsePdfFromUrl(url!);
+      const lines = [
+        `PDF: ${path ?? url} (${result.pageCount} pages)`,
+        result.truncated ? '[Content truncated to 20,000 chars]' : '',
+        '',
+        result.text,
+      ];
+      return lines.filter(Boolean).join('\n');
+    } catch (err) {
+      return `Error reading PDF: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  // ── transcribe_audio ───────────────────────────────────────────────
+
+  private async transcribeAudio(args: Record<string, unknown>): Promise<string> {
+    const rawPath = String(args.path ?? '');
+    if (!rawPath) return 'Error: No audio file path provided';
+
+    const filePath = expandPath(rawPath);
+    const openaiKey = process.env.OPENAI_API_KEY;
+
+    try {
+      const result = await transcribeAudio(filePath, openaiKey);
+      const lines = [
+        `Transcription (method: ${result.method}):`,
+        '',
+        result.text,
+      ];
+      return lines.join('\n');
+    } catch (err) {
+      return `Error transcribing audio: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  // ── crawl_url ──────────────────────────────────────────────────────
+
+  private async crawlUrl(args: Record<string, unknown>): Promise<string> {
+    const url = String(args.url ?? '');
+    if (!url) return 'Error: No URL provided';
+
+    try {
+      const result = await crawlUrl(url);
+      const lines = [
+        `Title: ${result.title}`,
+        `URL: ${result.url}`,
+        `Words: ${result.wordCount}${result.truncated ? ' (truncated)' : ''}`,
+        '',
+        '── Content ──',
+        result.mainContent,
+      ];
+
+      if (result.links.length > 0) {
+        lines.push('', '── Links ──');
+        for (const link of result.links.slice(0, 10)) {
+          lines.push(`• ${link.text} → ${link.href}`);
+        }
+      }
+
+      return lines.join('\n');
+    } catch (err) {
+      return `Error crawling URL: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  // ── check_command_risk ─────────────────────────────────────────────
+
+  private checkCommandRisk(args: Record<string, unknown>): string {
+    const command = String(args.command ?? '');
+    if (!command) return 'Error: No command provided';
+
+    const result = classifyCommand(command);
+    return [
+      `Risk assessment for: \`${command}\``,
+      `Tier: ${result.tier}`,
+      `Reason: ${result.reason}`,
+      result.matchedPattern ? `Matched: ${result.matchedPattern}` : '',
+      '',
+      result.tier === 'BLOCKED'
+        ? '⛔ This command will be refused.'
+        : result.tier === 'DANGEROUS'
+          ? '⚠️ This command requires approval (confirmed=true) or allowlisting.'
+          : result.tier === 'MODERATE'
+            ? '📝 This command will run but will be logged.'
+            : '✅ This command is safe to run.',
+    ].filter(Boolean).join('\n');
   }
 }

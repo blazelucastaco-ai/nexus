@@ -26,6 +26,9 @@ import { appendTurn, loadSession } from './session-store.js';
 import { DreamingEngine } from '../brain/dreaming.js';
 import { ProactiveEngine } from '../brain/proactive.js';
 import { loadSkills, buildSkillsPrompt } from '../brain/skills.js';
+import { contextCache } from './context-cache.js';
+import { checkContextUsage, aggressiveCompact } from './context-guard.js';
+import { repairToolResult } from './transcript-repair.js';
 import {
   ensureSchedulerSchema,
   startScheduler,
@@ -336,8 +339,9 @@ export class Orchestrator {
       // ── 4. Assemble context ───────────────────────────────────
       const context = this.assembleNexusContext(recentMemories, relevantFacts);
 
-      // ── 5. Build system prompt ────────────────────────────────
-      const systemPrompt = this.buildFullSystemPrompt(context, prevention, injectionResult);
+      // ── 5. Build system prompt (with caching) ────────────────
+      const rawSystemPrompt = this.buildFullSystemPrompt(context, prevention, injectionResult);
+      const systemPrompt = contextCache.getSystemPrompt(rawSystemPrompt);
 
       // ── 6. Add user message to conversation history ───────────
       this.conversationHistory.push({ role: 'user', content: text });
@@ -451,7 +455,15 @@ export class Orchestrator {
           break;
         }
 
-        // Execute each tool call and add results
+        // ── Phase 1: Pre-process all tool calls (loop detection, write guard) ──
+        interface ToolCallJob {
+          toolCall: AIToolCall;
+          toolName: string;
+          toolArgs: Record<string, unknown>;
+          loopBlocked: boolean;
+        }
+        const jobs: ToolCallJob[] = [];
+
         for (const toolCall of aiResponse.toolCalls) {
           toolCallCount++;
           const toolName = toolCall.function.name;
@@ -472,58 +484,92 @@ export class Orchestrator {
 
           if (comboCount >= 3) {
             log.warn({ toolName, comboKey, count: comboCount }, 'Tool loop detected — same tool+args called 3+ times');
-            loopMessages.push({
-              role: 'tool',
-              content: '[Loop detected: this exact action was already tried twice. Try a different approach.]',
-              tool_call_id: toolCall.id,
-            });
+            jobs.push({ toolCall, toolName, toolArgs, loopBlocked: true });
             finalContent = "I noticed I was repeating the same action. Let me try a different approach.";
             loopDetected = true;
             break;
           }
-
-          log.info({ toolName, toolCallId: toolCall.id, iteration }, 'Executing tool call');
 
           // Write guard: record write_file invocations
           if (toolName === 'write_file' && typeof toolArgs.path === 'string') {
             writeFileCallsMade.push({ path: toolArgs.path as string });
           }
 
-          let toolResult = await this.toolExecutor.execute(toolName, toolArgs);
+          jobs.push({ toolCall, toolName, toolArgs, loopBlocked: false });
+        }
 
-          // FIX 1: Annotate error results so the LLM cannot claim success
-          const isToolError =
-            toolResult.startsWith('Error:') ||
-            toolResult.startsWith('Command rejected') ||
-            toolResult.startsWith('STDERR:\n') ||
-            /\b(ENOENT|EACCES|EPERM|ENODIR|ETIMEDOUT|ECONNREFUSED)\b/.test(toolResult);
-          if (isToolError) {
-            toolResult =
-              toolResult +
-              '\n\n[TOOL RETURNED AN ERROR — do not claim success. Report the error to the user.]';
-            log.warn({ toolName, toolCallId: toolCall.id }, 'Tool returned an error result');
-          }
+        // ── Phase 2: Execute tools — parallel for reads, sequential for writes ──
+        const untrustedTools = new Set(['web_search', 'read_file', 'run_terminal_command', 'web_fetch', 'crawl_url']);
+        const parallelSafe = new Set(['read_file', 'recall', 'web_search', 'web_fetch', 'crawl_url',
+          'get_system_info', 'list_directory', 'introspect', 'check_injection', 'check_command_risk',
+          'understand_image', 'read_pdf', 'transcribe_audio', 'list_tasks', 'list_sessions']);
 
-          // Wrap untrusted external data sources before feeding back to the LLM
-          const untrustedTools = new Set(['web_search', 'read_file', 'run_terminal_command']);
-          if (untrustedTools.has(toolName)) {
-            toolResult = wrapUntrustedContent(toolResult, toolName);
-          }
+        if (!loopDetected) {
+          // Separate jobs into groups: parallel-safe and sequential
+          const parallelJobs = jobs.filter((j) => parallelSafe.has(j.toolName) && !j.loopBlocked);
+          const sequentialJobs = jobs.filter((j) => !parallelSafe.has(j.toolName) || j.loopBlocked);
 
-          // Emit agent event for tracking
-          this.eventLoop.emit(
-            'agent:completed',
-            { tool: toolName, args: toolArgs, resultLen: toolResult.length },
-            'medium',
-            'orchestrator',
+          log.info(
+            { total: jobs.length, parallel: parallelJobs.length, sequential: sequentialJobs.length },
+            jobs.length > 1 ? 'Executing tool calls (parallel + sequential split)' : 'Executing tool call',
           );
 
-          // Add tool result message
-          loopMessages.push({
-            role: 'tool',
-            content: toolResult,
-            tool_call_id: toolCall.id,
-          });
+          // Build result map: tool_call_id → result string
+          const resultMap = new Map<string, string>();
+
+          // Run parallel-safe tools concurrently
+          if (parallelJobs.length > 0) {
+            const parallelResults = await Promise.all(
+              parallelJobs.map(async (job) => {
+                log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (parallel)');
+                let result = await this.toolExecutor.execute(job.toolName, job.toolArgs);
+                result = repairToolResult(result);
+                const isToolError =
+                  result.startsWith('Error:') || result.startsWith('Command rejected') ||
+                  result.startsWith('STDERR:\n') ||
+                  /\b(ENOENT|EACCES|EPERM|ENODIR|ETIMEDOUT|ECONNREFUSED)\b/.test(result);
+                if (isToolError) {
+                  result += '\n\n[TOOL RETURNED AN ERROR — do not claim success. Report the error to the user.]';
+                  log.warn({ toolName: job.toolName }, 'Tool returned an error result');
+                }
+                if (untrustedTools.has(job.toolName)) result = wrapUntrustedContent(result, job.toolName);
+                this.eventLoop.emit('agent:completed', { tool: job.toolName, resultLen: result.length }, 'medium', 'orchestrator');
+                return { id: job.toolCall.id, result };
+              }),
+            );
+            for (const { id, result } of parallelResults) resultMap.set(id, result);
+          }
+
+          // Run sequential tools one at a time (writes, commands, etc.)
+          for (const job of sequentialJobs) {
+            if (job.loopBlocked) {
+              resultMap.set(job.toolCall.id, '[Loop detected: this exact action was already tried twice. Try a different approach.]');
+              continue;
+            }
+            log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (sequential)');
+            let result = await this.toolExecutor.execute(job.toolName, job.toolArgs);
+            result = repairToolResult(result);
+            const isToolError =
+              result.startsWith('Error:') || result.startsWith('Command rejected') ||
+              result.startsWith('STDERR:\n') ||
+              /\b(ENOENT|EACCES|EPERM|ENODIR|ETIMEDOUT|ECONNREFUSED)\b/.test(result);
+            if (isToolError) {
+              result += '\n\n[TOOL RETURNED AN ERROR — do not claim success. Report the error to the user.]';
+              log.warn({ toolName: job.toolName }, 'Tool returned an error result');
+            }
+            if (untrustedTools.has(job.toolName)) result = wrapUntrustedContent(result, job.toolName);
+            this.eventLoop.emit('agent:completed', { tool: job.toolName, resultLen: result.length }, 'medium', 'orchestrator');
+            resultMap.set(job.toolCall.id, result);
+          }
+
+          // Add tool results to loopMessages in original order
+          for (const job of jobs) {
+            loopMessages.push({
+              role: 'tool',
+              content: resultMap.get(job.toolCall.id) ?? '(no result)',
+              tool_call_id: job.toolCall.id,
+            });
+          }
         }
 
         // Break out of outer loop if tool loop was detected
@@ -1061,6 +1107,18 @@ ${insights.slice(0, 8).join('\n')}`);
    * by asking the LLM to summarize it, then replace with a single system message.
    */
   private async maybeCompact(messages: AIMessage[], systemPrompt: string): Promise<void> {
+    // Enhanced: use context-guard for Gemini's 1M token window
+    const guardStatus = checkContextUsage(systemPrompt, messages);
+    if (guardStatus.shouldCompact) {
+      // Aggressive compaction: trim to 60% of window budget
+      const targetTokens = Math.floor(600_000 * 0.6);
+      const compacted = aggressiveCompact(messages, targetTokens);
+      if (compacted.length < messages.length) {
+        messages.splice(0, messages.length, ...compacted);
+        log.info({ retained: compacted.length, pct: (guardStatus.percentUsed * 100).toFixed(0) }, 'Context guard: aggressive compaction applied');
+      }
+    }
+
     const COMPACT_THRESHOLD = 5000;
     const estimate = (msg: AIMessage) => Math.ceil((String(msg.content ?? '')).length / 4);
     const total = messages.reduce((sum, m) => sum + estimate(m), 0);
