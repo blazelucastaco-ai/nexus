@@ -27,6 +27,22 @@ const log = createLogger('ToolExecutor');
 const execFileAsync = promisify(execFile);
 
 const MAX_OUTPUT_BYTES = 200_000;
+const TOOL_RESULT_MAX = 8_000;
+const TOOL_RESULT_HEAD = 3_000;
+const TOOL_RESULT_TAIL = 3_000;
+
+/**
+ * FIX 4: Head+tail truncation for tool results.
+ * Keeps first 3000 chars (command echo, headers) and last 3000 chars (errors, summaries).
+ * Ensures we never lose the tail where errors typically appear.
+ */
+function truncateToolResult(text: string): string {
+  if (text.length <= TOOL_RESULT_MAX) return text;
+  const dropped = text.length - TOOL_RESULT_HEAD - TOOL_RESULT_TAIL;
+  const head = text.slice(0, TOOL_RESULT_HEAD);
+  const tail = text.slice(text.length - TOOL_RESULT_TAIL);
+  return `${head}\n... [truncated ${dropped} chars] ...\n${tail}`;
+}
 
 // Risk tiers for tool execution:
 //   AUTO    — read-only or benign; executes silently
@@ -155,6 +171,10 @@ export class ToolExecutor {
     }
 
     const duration = Date.now() - start;
+
+    // FIX 4: Head+tail truncation — preserve both the start (headers) and end (errors)
+    result = truncateToolResult(result);
+
     log.info({ toolName, duration, resultLen: result.length }, 'Tool executed');
 
     // FIX 3: Call after-hooks with result
