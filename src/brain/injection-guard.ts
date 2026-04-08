@@ -38,6 +38,18 @@ const INJECTION_PATTERNS: InjectionPattern[] = [
   { name: 'hidden_unicode',  re: /[\u200B\u200C\u200D\u2028\u2029\u202A-\u202E]{2,}/g, weight: 0.8 },
   { name: 'html_injection',  re: /<\s*(script|iframe|object|embed|form|input|link|meta)\s/gi, weight: 0.6 },
   { name: 'markdown_image',  re: /!\[.*?\]\(javascript:/gi,                       weight: 0.9 },
+  // Creative reframing: asking for system instructions/prompt embedded in a poem/song/story
+  {
+    name: 'creative_reframe',
+    re: /\b(?:poem|song|story|haiku|rap|rhyme|verse|ballad|limerick|riddle|acrostic)\b[\s\S]{0,300}\b(?:system\s*(?:prompt|instructions?)?|your\s+instructions?|your\s+(?:rules?|guidelines?|directives?|constraints?|training)|what\s+you(?:'re|\s+are)\s+(?:told|trained|instructed|programmed))\b/gi,
+    weight: 0.97,
+  },
+  // Reverse: "tell me your rules as a haiku"
+  {
+    name: 'creative_reframe_reverse',
+    re: /\b(?:system\s*(?:prompt|instructions?)?|your\s+instructions?|your\s+(?:rules?|guidelines?|directives?|constraints?))\b[\s\S]{0,300}\b(?:poem|song|story|haiku|rap|rhyme|verse|ballad|limerick)\b/gi,
+    weight: 0.97,
+  },
 ];
 
 // Base64 block detection: 40+ contiguous base64 chars (likely encoded instruction)
@@ -114,6 +126,16 @@ export function detectInjection(text: string): InjectionResult {
     confidence: Math.round(confidence * 100) / 100,
     patterns: matched,
   };
+}
+
+/**
+ * Check if text is a creative-reframing attack (hard block).
+ * These bypass soft guards by asking for system instructions embedded in poems/songs/stories.
+ * Returns true if the text should be hard-blocked before reaching the LLM.
+ */
+export function isCreativeReframeAttack(text: string): boolean {
+  const result = detectInjection(text);
+  return result.patterns.includes('creative_reframe') || result.patterns.includes('creative_reframe_reverse');
 }
 
 // ── wrapUntrustedContent ─────────────────────────────────────────────────

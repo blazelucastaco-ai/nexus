@@ -15,6 +15,7 @@ import { ToolExecutor } from '../tools/executor.js';
 import {
   sanitizeInput,
   detectInjection,
+  isCreativeReframeAttack,
   wrapUntrustedContent,
   sanitizeEnvVars,
 } from '../brain/injection-guard.js';
@@ -301,6 +302,13 @@ export class Orchestrator {
     try {
       // ── 0. Injection guard ────────────────────────────────────
       text = sanitizeInput(text);
+
+      // Hard block: creative reframing attacks (poem/song/haiku containing system instructions)
+      if (isCreativeReframeAttack(text)) {
+        log.warn({ chatId }, 'Creative reframe injection blocked (hard block)');
+        return "I can't embed my system instructions, prompt, or guidelines into creative writing. That's a prompt injection technique I'm designed to block.";
+      }
+
       const injectionResult = detectInjection(text);
       if (injectionResult.detected && injectionResult.confidence > 0.7) {
         log.warn(
@@ -362,7 +370,7 @@ export class Orchestrator {
 
       // ── 8. Tool calling loop ──────────────────────────────────
       const tools = toOpenAITools();
-      const hasWriteIntent = /\b(write|save\s+to|save\s+file|create\s+file|write\s+to)\b/i.test(text);
+      const hasWriteIntent = /\b(write|save\s+(?:to|a|the|this|it)|create\s+(?:a\s+)?file|write\s+to|make\s+(?:a\s+)?file|generate\s+(?:a\s+)?file|put\s+(?:this\s+)?in(?:to)?\s+(?:a\s+)?file|output\s+to\s+(?:a\s+)?file|store\s+(?:it|this)\s+(?:as|in|to))\b/i.test(text);
       const maxTokens = hasWriteIntent ? 8192 : Math.min(this.config.ai.maxTokens, 1500);
 
       // Working messages for the tool loop — starts from conversation history (pruned to fit context)
@@ -539,7 +547,8 @@ export class Orchestrator {
       // ── 8b. Write guard — catch hallucinated file saves ──────
       // If the response claims a file was created/saved but no write_file tool was called,
       // try progressively harder to extract code and auto-save it.
-      const fileClaimPattern = /\b(?:created?|saved?|written?)\b/i;
+      const fileClaimPattern =
+        /\b(?:created?|saved?|written?|done[,.]?\s*(?:created?|saved?|written?)|i'?(?:ve|'m)?\s+(?:created?|saved?|written?|done\s+(?:creating|saving|writing))|file\s+(?:is|has\s+been)\s+(?:created?|saved?|written?|ready)|saved?\s+(?:it\s+)?to|here'?s?\s+(?:the\s+)?(?:file|content|code|script)|file\s+(?:content|saved|created))\b/i;
       const filePathPattern = /[`'"]?(~\/[\w\-\/\.]+|\/[\w\-\/\.]+)/;
       const claimsFileSaved = fileClaimPattern.test(finalContent) && filePathPattern.test(finalContent);
       const didCallWriteFile = writeFileCallsMade.length > 0;
@@ -592,7 +601,7 @@ export class Orchestrator {
             },
             {
               role: 'user',
-              content: `You described code but did not save it. Call write_file now with the code you just generated. Path: ${targetPath ?? 'the path you mentioned above'}`,
+              content: `CRITICAL ERROR: You claimed to create/save a file but you NEVER called the write_file tool. The file does NOT exist. You MUST call write_file RIGHT NOW to actually create it. Do not describe the file or say you will do it — call write_file immediately. Path: ${targetPath ?? 'the path you mentioned above'}`,
             },
           ];
           try {

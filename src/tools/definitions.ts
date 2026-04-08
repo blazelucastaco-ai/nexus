@@ -261,6 +261,24 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
   {
+    name: 'crawl_url',
+    description:
+      'Crawl a URL and extract its readable text content. Similar to web_fetch but optimized for ' +
+      'content extraction — strips navigation, ads, and boilerplate. ' +
+      'Use when asked to crawl, scrape, or extract content from a specific webpage. ' +
+      'Returns title, meta description, and main text content.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The full URL to crawl (https://...)',
+        },
+      },
+      required: ['url'],
+    },
+  },
+  {
     name: 'schedule_task',
     description:
       'Schedule a recurring task using a cron expression. The task command runs on the defined schedule. ' +

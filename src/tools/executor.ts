@@ -62,6 +62,7 @@ const TOOL_RISK: Record<string, 'AUTO' | 'LOGGED' | 'CONFIRM'> = {
   introspect:          'AUTO',
   web_search:          'AUTO',
   web_fetch:           'AUTO',
+  crawl_url:           'AUTO',
   check_injection:     'AUTO',
   write_file:          'LOGGED',
   run_terminal_command:'LOGGED',
@@ -247,6 +248,7 @@ export class ToolExecutor {
       case 'recall':              return this.recall(args);
       case 'web_search':          return this.webSearch(args);
       case 'web_fetch':           return this.webFetch(args);
+      case 'crawl_url':           return this.crawlUrl(args);
       case 'check_injection':     return this.checkInjection(args);
       case 'introspect':          return this.introspect();
       case 'toggle_think_mode':   return this.toggleThinkMode(args);
@@ -475,6 +477,53 @@ export class ToolExecutor {
     const query = String(args.query ?? '');
     if (!query) return 'Error: No query provided';
 
+    // Broad identity queries: "everything you know about me", "what do you remember about me", etc.
+    const isBroadIdentityQuery =
+      /\b(?:everything|all|anything)\b[\s\S]{0,80}\b(?:you\s+(?:know|remember|recall|learned?|stored?|have)\b[\s\S]{0,40}\b(?:about\s+me|me\b)|about\s+me)\b/i.test(query) ||
+      /\bwhat\s+(?:do\s+you|have\s+you)\s+(?:know|remember|stored?|learned?)\b[\s\S]{0,60}\b(?:about\s+me|about\s+the\s+user)\b/i.test(query) ||
+      /\btell\s+me\s+(?:everything|all)\b[\s\S]{0,40}\b(?:you\s+(?:know|remember)|about\s+me)\b/i.test(query);
+
+    if (isBroadIdentityQuery) {
+      // Fetch user facts + broad memory recall across all layers using multiple seed terms
+      const facts = this.memory.getRelevantFacts('user preference name age hobby like dislike', 30);
+      const memoriesByTerm = [
+        ...this.memory.recall('remember user', { limit: 20 }),
+        ...this.memory.recall('preference like dislike', { limit: 10 }),
+        ...this.memory.recall('fact personal', { limit: 10 }),
+      ];
+
+      // Deduplicate by id
+      const seen = new Set<string>();
+      const memories = memoriesByTerm.filter((m) => {
+        if (seen.has(m.id)) return false;
+        seen.add(m.id);
+        return true;
+      });
+
+      const lines: string[] = [];
+
+      if (facts.length > 0) {
+        lines.push(`**Stored facts about you (${facts.length}):**`);
+        for (const f of facts) {
+          lines.push(`- [${f.category}] ${f.key}: ${f.value}`);
+        }
+      }
+
+      if (memories.length > 0) {
+        lines.push(`\n**Memory entries (${memories.length}):**`);
+        for (const m of memories) {
+          const summary = m.summary ?? truncate(m.content, 200);
+          lines.push(`- [${m.type}/${m.layer}] ${summary}`);
+        }
+      }
+
+      if (lines.length === 0) {
+        return "I don't have any stored information about you yet. You can tell me things with 'Remember that...' and I'll store them.";
+      }
+
+      return lines.join('\n');
+    }
+
     const memories = this.memory.recall(query, { limit: 8 });
     if (memories.length === 0) {
       return 'No relevant memories found.';
@@ -551,35 +600,28 @@ export class ToolExecutor {
   }
 
   // ── web_search ─────────────────────────────────────────────────────
-  // Uses DuckDuckGo Instant Answer API (no key required) for real results.
+  // Multi-tier search: DDG Instant Answer API → DDG Lite HTML scrape → browser open.
 
   private async webSearch(args: Record<string, unknown>): Promise<string> {
     const query = String(args.query ?? '');
-
     if (!query) return 'Error: No query provided';
+    const encodedQuery = encodeURIComponent(query);
 
-    // Try DuckDuckGo Instant Answer API first
+    // Tier 1: DuckDuckGo Instant Answer API (best for factual lookups)
     try {
-      const encodedQuery = encodeURIComponent(query);
       const url = `https://api.duckduckgo.com/?q=${encodedQuery}&format=json&no_html=1&skip_disambig=1`;
-      const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-
+      const resp = await fetch(url, { signal: AbortSignal.timeout(8_000) });
       if (resp.ok) {
         const data = await resp.json() as Record<string, unknown>;
         const results: string[] = [];
 
-        // Abstract (top answer)
         if (data.Abstract && String(data.Abstract).length > 10) {
           results.push(`**Summary:** ${data.Abstract}`);
           if (data.AbstractURL) results.push(`Source: ${data.AbstractURL}`);
         }
-
-        // Instant answer
         if (data.Answer && String(data.Answer).length > 0) {
           results.push(`**Answer:** ${data.Answer}`);
         }
-
-        // Related topics (top 5)
         const topics = (data.RelatedTopics as Array<{ Text?: string; FirstURL?: string }> | undefined) ?? [];
         const topResults = topics.slice(0, 5).filter((t) => t.Text);
         if (topResults.length > 0) {
@@ -588,19 +630,72 @@ export class ToolExecutor {
             results.push(`• ${t.Text}${t.FirstURL ? `\n  ${t.FirstURL}` : ''}`);
           }
         }
-
         if (results.length > 0) {
-          return `DuckDuckGo results for: "${query}"\n\n${results.join('\n')}`;
+          return `Search results for: "${query}"\n\n${results.join('\n')}`;
         }
       }
     } catch (err) {
-      log.warn({ err }, 'DuckDuckGo API failed — falling back to browser open');
+      log.warn({ err }, 'DDG Instant Answer API failed — trying DDG Lite scrape');
     }
 
-    // Fallback: open browser
-    const encodedQuery = encodeURIComponent(query);
+    // Tier 2: DuckDuckGo Lite HTML scrape (works for general queries)
+    try {
+      const liteUrl = `https://lite.duckduckgo.com/lite/?q=${encodedQuery}`;
+      const resp = await fetch(liteUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+        signal: AbortSignal.timeout(12_000),
+      });
+
+      if (resp.ok) {
+        const html = await resp.text();
+        const results: string[] = [];
+
+        // DDG Lite: <a href="//duckduckgo.com/l/?uddg=ENCODED&..." class='result-link'>title</a>
+        // href and class order can vary — match any <a> tag that has class='result-link'
+        const linkRe = /<a\s[^>]*class='result-link'[^>]*>([\s\S]*?)<\/a>/gi;
+        const hrefRe = /href="([^"]+)"/i;
+        const snippetRe = /<td[^>]+class='result-snippet'[^>]*>([\s\S]*?)<\/td>/gi;
+
+        const links: Array<{ url: string; title: string }> = [];
+        let m: RegExpExecArray | null;
+        while ((m = linkRe.exec(html)) !== null && links.length < 8) {
+          const fullTag = m[0];
+          const hrefMatch = hrefRe.exec(fullTag);
+          if (!hrefMatch) continue;
+          const rawHref = hrefMatch[1];
+          const uddgMatch = rawHref.match(/uddg=([^&]+)/);
+          const url = uddgMatch ? decodeURIComponent(uddgMatch[1]) : rawHref;
+          const title = m[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+          if (title && url) links.push({ url, title });
+        }
+
+        const snippets: string[] = [];
+        while ((m = snippetRe.exec(html)) !== null && snippets.length < 8) {
+          const text = m[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+          if (text) snippets.push(text);
+        }
+
+        if (links.length > 0) {
+          results.push(`Search results for: "${query}"\n`);
+          for (let i = 0; i < Math.min(links.length, 5); i++) {
+            results.push(`**${links[i].title}**`);
+            if (snippets[i]) results.push(snippets[i]);
+            results.push(`${links[i].url}\n`);
+          }
+          return results.join('\n');
+        }
+      }
+    } catch (err) {
+      log.warn({ err }, 'DDG Lite scrape failed — falling back to browser open');
+    }
+
+    // Tier 3: Open browser as last resort
     await execFileAsync('open', [`https://duckduckgo.com/?q=${encodedQuery}`], { timeout: 5_000 });
-    return `No instant results found. Opened DuckDuckGo search for: "${query}"`;
+    return `No inline results available. Opened DuckDuckGo search for: "${query}"`;
   }
 
   // ── web_fetch ──────────────────────────────────────────────────────
@@ -638,6 +733,64 @@ export class ToolExecutor {
       return truncateToolResult(text);
     } catch (err) {
       return `Error fetching ${url}: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  // ── crawl_url ──────────────────────────────────────────────────────
+  // Extracts readable text from a URL with better content isolation than web_fetch.
+
+  private async crawlUrl(args: Record<string, unknown>): Promise<string> {
+    const url = String(args.url ?? '');
+    if (!url) return 'Error: No URL provided';
+
+    try {
+      const resp = await fetch(url, {
+        headers: {
+          'User-Agent': 'NEXUS/1.0 (personal AI assistant)',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+        signal: AbortSignal.timeout(15_000),
+      });
+
+      if (!resp.ok) {
+        return `Error: HTTP ${resp.status} ${resp.statusText} for ${url}`;
+      }
+
+      const html = await resp.text();
+
+      // Extract title
+      const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+      const title = titleMatch ? titleMatch[1].trim().replace(/\s+/g, ' ') : null;
+
+      // Extract meta description
+      const metaMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i);
+      const description = metaMatch ? metaMatch[1].trim() : null;
+
+      // Strip boilerplate: nav, header, footer, aside, script, style
+      let body = html
+        .replace(/<(script|style|nav|header|footer|aside|noscript)[^>]*>[\s\S]*?<\/\1>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+
+      if (body.length > 8_000) {
+        body = body.slice(0, 8_000) + '... [truncated]';
+      }
+
+      const parts: string[] = [`Crawled: ${url}`];
+      if (title) parts.push(`Title: ${title}`);
+      if (description) parts.push(`Description: ${description}`);
+      parts.push('', body);
+
+      return parts.join('\n');
+    } catch (err) {
+      return `Error crawling ${url}: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
 
