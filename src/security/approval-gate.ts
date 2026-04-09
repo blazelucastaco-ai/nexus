@@ -4,6 +4,7 @@
 import { createLogger } from '../utils/logger.js';
 import { classifyCommand, type RiskTier, type TierResult } from './approval-policy.js';
 import { isAllowlisted } from './command-allowlist.js';
+import { findMatchingAreas } from './recommended-approvals.js';
 
 const log = createLogger('ApprovalGate');
 
@@ -45,12 +46,25 @@ export async function checkApproval(command: string, confirmed = false): Promise
         message: `🚫 Command blocked: ${classification.reason}\nThis command is permanently refused for safety.`,
       };
 
-    case 'DANGEROUS':
+    case 'DANGEROUS': {
       if (confirmed) {
         log.warn({ command: command.slice(0, 80) }, 'DANGEROUS command confirmed by user');
         return { allowed: true, tier: 'DANGEROUS', reason: classification.reason, requiresApproval: false };
       }
       log.warn({ command: command.slice(0, 80), reason: classification.reason }, 'DANGEROUS command requires approval');
+
+      // Check if any recommended areas would cover this command
+      const matchingAreas = findMatchingAreas(command);
+      let areaHint = '';
+      if (matchingAreas.length > 0) {
+        const areaList = matchingAreas
+          .map((a) => `  • "${a.id}" — ${a.name}: ${a.description}`)
+          .join('\n');
+        areaHint =
+          `\n\nRecommended area(s) that cover this command:\n${areaList}\n` +
+          `Approve an area to auto-allow similar commands in the future.`;
+      }
+
       return {
         allowed: false,
         tier: 'DANGEROUS',
@@ -59,8 +73,10 @@ export async function checkApproval(command: string, confirmed = false): Promise
         message:
           `⚠️ [REQUIRES APPROVAL] This command is classified as DANGEROUS:\n\n\`${command}\`\n\n` +
           `Reason: ${classification.reason}\n\n` +
-          `To proceed: re-run with confirmed=true, or add this command to ~/.nexus/allowlist.json`,
+          `To proceed: re-run with confirmed=true, or add this command to ~/.nexus/allowlist.json` +
+          areaHint,
       };
+    }
 
     case 'MODERATE':
       log.info({ command: command.slice(0, 80), reason: classification.reason }, 'MODERATE command — allowed with logging');
