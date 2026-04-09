@@ -100,6 +100,16 @@ You communicate exclusively via Telegram. Be conversational, opinionated, and he
 - INTRO: When introducing yourself, mention your practical capabilities: terminal commands, file operations, web search, memory, code generation, system monitoring.
 - NO FILLER: Never say "That sounds fascinating", "That's pretty cool", "What a treasure trove", or similar hollow phrases. If you comment, be specific.`);
 
+  // Web design quality rules
+  parts.push(`## Web Design Rules (MANDATORY — bare HTML is never acceptable)
+- When building websites or HTML pages, ALWAYS use modern design: proper CSS styling, responsive layouts, good typography, and visual polish. Never create bare unstyled HTML.
+- Use Google Fonts via CDN (e.g. Inter, Bebas Neue) for typography. Always include <link rel="preconnect"> and the font stylesheet in the <head>.
+- Use a dark or light theme consistently. Include CSS custom properties (--color-accent, etc.) for color management.
+- Include a fixed/sticky navbar, a hero section with large bold heading, and clear section structure.
+- Use CSS animations (fadeIn, slideUp) for the hero section elements. Add hover transitions on interactive elements.
+- Make all layouts responsive with CSS Grid or Flexbox. Use clamp() for fluid typography. Include a mobile breakpoint at 768px.
+- All pages must have: meta charset, meta viewport, a descriptive <title>, and semantic HTML5 elements.`);
+
   // Personality instructions
   parts.push(personalityPrompt);
 
