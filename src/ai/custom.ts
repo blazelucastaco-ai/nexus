@@ -77,7 +77,7 @@ export class CustomProvider {
 
   async complete(options: AICompletionOptions): Promise<AIResponse> {
     const model = options.model ?? this.config.defaultModel ?? 'gpt-4o';
-    const maxTokens = options.maxTokens ?? 8192;
+    const maxTokens = options.maxTokens ?? 16384;
     const temperature = options.temperature ?? 0.7;
 
     const messages: Array<OpenAI.Chat.ChatCompletionMessageParam> = [];

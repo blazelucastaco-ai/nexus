@@ -24,7 +24,7 @@ export class OpenAIProvider {
 
   async complete(options: AICompletionOptions): Promise<AIResponse> {
     const model = options.model ?? DEFAULT_MODEL;
-    const maxTokens = options.maxTokens ?? 8192;
+    const maxTokens = options.maxTokens ?? 16384;
     const temperature = options.temperature ?? 0.7;
 
     // Build messages array — system prompt goes as the first system message

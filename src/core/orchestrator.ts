@@ -59,7 +59,7 @@ import type { LearningSystem } from '../learning/index.js';
 
 const log = createLogger('Orchestrator');
 
-const MAX_TOOL_ITERATIONS = 25;
+const MAX_TOOL_ITERATIONS = 50;
 
 // ─── Orchestrator ────────────────────────────────────────────────────
 
@@ -376,12 +376,7 @@ export class Orchestrator {
 
       // ── 8. Tool calling loop ──────────────────────────────────
       const tools = toOpenAITools();
-      const hasWriteIntent = /\b(write|save|create\s+file|write\s+to|save\s+to|save\s+it|essay|article|report|document|story)\b/i.test(text)
-        || /\bsave\b.{0,30}\.(md|txt|sh|py|js|ts|json|csv|html)\b/i.test(text);
-      const hasBuildIntent = /\b(website|webpage|web\s*page|landing\s*page|html|portfolio|homepage|web\s*app|frontend|front[\s-]?end)\b/i.test(text)
-        || /\b(build|create|make|design|generate|develop|code|program|implement|scaffold)\b.{0,30}\b(site|page|app|ui|project|program|script|tool|game|bot|api|server|dashboard|application)\b/i.test(text)
-        || /\b(make|build|create|write)\s+(?:me\s+)?(?:a\s+)?(?:full|complete|whole|entire|real|complex|proper)?\s*(?:program|app|application|website|project|game|tool|script|bot|api|server|dashboard)\b/i.test(text);
-      const maxTokens = hasBuildIntent ? 16384 : hasWriteIntent ? 8192 : Math.min(this.config.ai.maxTokens, 4096);
+      const maxTokens = this.config.ai.maxTokens;
 
       // Working messages for the tool loop — starts from conversation history (pruned to fit context)
       const loopMessages: AIMessage[] = this.pruneHistory([...this.conversationHistory.slice(-20)]);
@@ -669,7 +664,7 @@ export class Orchestrator {
               messages: forceWriteMessages,
               systemPrompt,
               model: this.config.ai.model,
-              maxTokens: 8192,
+              maxTokens: this.config.ai.maxTokens,
               temperature: this.config.ai.temperature,
               tools,
               tool_choice: 'auto',
