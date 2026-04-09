@@ -1005,9 +1005,27 @@ export class ToolExecutor {
     }
 
     try {
-      const isBase64 = !source.startsWith('http') && !source.startsWith('/') && !source.startsWith('~');
+      let resolvedSource = source;
+      let isBase64 = false;
+
+      if (source.startsWith('http')) {
+        // Remote URL — analyzeImage will fetch it
+        isBase64 = false;
+      } else if (source.startsWith('/') || source.startsWith('~')) {
+        // Local file path — read and base64-encode before sending to vision API
+        const filePath = source.startsWith('~')
+          ? source.replace(/^~/, homedir())
+          : source;
+        const buffer = await fsReadFile(filePath);
+        resolvedSource = buffer.toString('base64');
+        isBase64 = true;
+      } else {
+        // Assume already base64
+        isBase64 = true;
+      }
+
       const result = await analyzeImage({
-        source,
+        source: resolvedSource,
         isBase64,
         question,
         apiBaseUrl,
