@@ -331,25 +331,33 @@ export class TelegramGateway {
     this.bot.on('message:photo', async (ctx) => {
       try {
         const result = await handlePhoto(ctx);
-        await ctx.reply(
-          `<b>Photo received</b>\nSaved to: <code>${escapeHtml(result.filePath)}</code>`,
-          { parse_mode: 'HTML' },
-        );
 
-        // If orchestrator is connected, process the photo context
         if (this.orchestrator) {
-          const caption = ctx.message.caption ?? 'User sent a photo';
+          const caption = ctx.message.caption;
           const chatId = String(ctx.chat.id);
+          const question = caption
+            ? caption
+            : 'Describe this image in detail.';
           const response = await this.orchestrator.handleMessage(
             chatId,
-            `[Photo received: ${result.filePath}] ${caption}`,
+            `Please analyze this image using the understand_image tool.\nImage path: ${result.filePath}\nQuestion: ${question}`,
           );
           await this.sendMessage(chatId, escapeHtml(sanitizePaths(response)));
+        } else {
+          await ctx.reply(
+            `<b>Photo received</b>\nSaved to: <code>${escapeHtml(result.filePath)}</code>`,
+            { parse_mode: 'HTML' },
+          );
         }
       } catch (err) {
         log.error({ err }, 'Failed to process photo');
         await ctx.reply('Failed to process the photo.');
       }
+    });
+
+    // Sticker handler — acknowledge gracefully
+    this.bot.on('message:sticker', async (ctx) => {
+      await ctx.reply('Nice sticker! Send me a photo if you want me to analyze an image.');
     });
 
     // Document handler

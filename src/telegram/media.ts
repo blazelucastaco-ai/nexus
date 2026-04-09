@@ -77,9 +77,6 @@ export async function handlePhoto(
   const filename = `photo_${Date.now()}.${ext}`;
   const destPath = join(DOWNLOADS_DIR, filename);
 
-  await downloadFile(ctx.api as unknown as Bot, fileId, destPath);
-
-  // Use the bot instance from context to download
   const file = await ctx.api.getFile(fileId);
 
   if (!file.file_path) {
@@ -89,6 +86,11 @@ export async function handlePhoto(
   const token = extractToken(ctx);
   const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
   const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(`Failed to download photo: ${response.status} ${response.statusText}`);
+  }
+
   const buffer = Buffer.from(await response.arrayBuffer());
   await writeFile(destPath, buffer);
 
