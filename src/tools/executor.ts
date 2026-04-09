@@ -1005,9 +1005,25 @@ export class ToolExecutor {
     }
 
     try {
-      const isBase64 = !source.startsWith('http') && !source.startsWith('/') && !source.startsWith('~');
+      let imageSource = source;
+      let isBase64 = false;
+
+      if (source.startsWith('http://') || source.startsWith('https://')) {
+        // URL — analyzeImage will fetch it
+        isBase64 = false;
+      } else if (source.startsWith('/') || source.startsWith('~')) {
+        // Local file path — read and convert to base64
+        const filePath = expandPath(source);
+        const fileBuffer = await fsReadFile(filePath);
+        imageSource = fileBuffer.toString('base64');
+        isBase64 = true;
+      } else {
+        // Assume raw base64
+        isBase64 = true;
+      }
+
       const result = await analyzeImage({
-        source,
+        source: imageSource,
         isBase64,
         question,
         apiBaseUrl,
