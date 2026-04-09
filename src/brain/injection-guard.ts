@@ -24,37 +24,6 @@ interface InjectionPattern {
   weight: number;
 }
 
-// Hard-block patterns — these trigger an immediate security response without calling the LLM.
-// Must be checked before any AI call so 503/network errors can't bypass them.
-const HARD_BLOCK_PATTERNS: RegExp[] = [
-  // Direct prompt extraction
-  /output\s+your\s+(system\s+prompt|instructions?|rules?|prompt)/gi,
-  /show\s+me\s+your\s+(system\s+prompt|instructions?|rules?|prompt)/gi,
-  /print\s+your\s+(system\s+prompt|instructions?|rules?|prompt)/gi,
-  /display\s+your\s+(system\s+prompt|instructions?|rules?|prompt)/gi,
-  /reveal\s+your\s+(system\s+prompt|instructions?|rules?|prompt)/gi,
-  /translate\s+your\s+(system\s+prompt|instructions?|prompt)/gi,
-  /repeat\s+(everything|all)\s+(above|before|prior)/gi,
-  // Developer social engineering
-  /I'?m?\s+(your\s+)?(the\s+)?developer/gi,
-  /I\s+am\s+(your\s+)?(the\s+)?developer/gi,
-  // Classic jailbreaks
-  /\bDAN\b/gi,
-  /jailbreak/gi,
-  // Creative reframe attacks
-  /what\s+would\s+your\s+(system\s+)?prompt\s+look\s+like/gi,
-  /(poem|song|story|rhyme|haiku|limerick|verse|lyrics)\s+(about|on|describing|for)\s+(your\s+)?(instructions?|prompt|rules?|system)/gi,
-  /write\s+(a\s+)?(poem|story|song|rhyme)\s+about\s+(your\s+)?(internal|instructions?|prompt|rules?|system)/gi,
-  /describe\s+your\s+(system|instructions?|prompt|rules?)\s+as\s+a/gi,
-  /explain\s+your\s+instructions?\s+as\s+a/gi,
-  /if\s+(your\s+)?(system\s+)?prompt\s+were\s+a/gi,
-  // Grandmother / bedtime story social engineering
-  /grandmother.{0,80}(prompt|instructions?|system|rules?)/gi,
-  /bedtime\s+stor.{0,80}(prompt|instructions?|system|rules?)/gi,
-  /(prompt|instructions?|system|rules?).{0,80}grandmother/gi,
-  /(prompt|instructions?|system|rules?).{0,80}bedtime\s+stor/gi,
-];
-
 const INJECTION_PATTERNS: InjectionPattern[] = [
   { name: 'ignore_previous', re: /ignore\s+(all\s+)?previous\s+instructions?/gi, weight: 0.9 },
   { name: 'ignore_prior',    re: /ignore\s+all\s+prior/gi,                       weight: 0.9 },
@@ -70,12 +39,16 @@ const INJECTION_PATTERNS: InjectionPattern[] = [
   { name: 'html_injection',  re: /<\s*(script|iframe|object|embed|form|input|link|meta)\s/gi, weight: 0.6 },
   { name: 'markdown_image',  re: /!\[.*?\]\(javascript:/gi,                       weight: 0.9 },
   // Creative reframe attacks — ask for system info via poem/story/song/etc.
-  { name: 'creative_reframe', re: /(poem|song|story|rhyme|haiku|limerick|verse|lyrics)\s+(about|on|describing|that\s+describes)\s+(your\s+)?(instructions?|prompt|rules?|system|how\s+you\s+work)/gi, weight: 0.85 },
-  { name: 'creative_reframe', re: /what\s+would\s+your\s+(system\s+)?prompt\s+look\s+like/gi, weight: 0.9 },
-  { name: 'creative_reframe', re: /describe\s+your\s+system\s+(as|prompt|instructions?)/gi, weight: 0.85 },
-  { name: 'creative_reframe', re: /write\s+(a\s+)?(poem|story|song|rhyme)\s+about\s+(your\s+)?(internal|instructions?|prompt|rules?|system)/gi, weight: 0.85 },
-  { name: 'creative_reframe', re: /explain\s+your\s+instructions?\s+as/gi, weight: 0.85 },
-  { name: 'creative_reframe', re: /if\s+(your\s+)?(system\s+)?prompt\s+were\s+a/gi, weight: 0.8 },
+  {
+    name: 'creative_reframe',
+    re: /\b(?:poem|song|story|haiku|rap|rhyme|verse|ballad|limerick|riddle|acrostic)\b[\s\S]{0,300}\b(?:system\s*(?:prompt|instructions?)?|your\s+instructions?|your\s+(?:rules?|guidelines?|directives?|constraints?|training)|what\s+you(?:'re|\s+are)\s+(?:told|trained|instructed|programmed))\b/gi,
+    weight: 0.97,
+  },
+  {
+    name: 'creative_reframe_reverse',
+    re: /\b(?:system\s*(?:prompt|instructions?)?|your\s+instructions?|your\s+(?:rules?|guidelines?|directives?|constraints?))\b[\s\S]{0,300}\b(?:poem|song|story|haiku|rap|rhyme|verse|ballad|limerick)\b/gi,
+    weight: 0.97,
+  },
   // Grandmother / bedtime story social engineering
   { name: 'grandmother_attack', re: /grandmother.{0,60}(prompt|instructions?|system|rules?)/gi, weight: 0.8 },
   { name: 'grandmother_attack', re: /bedtime\s+stor(y|ies).{0,60}(prompt|instructions?|system|rules?)/gi, weight: 0.8 },
@@ -109,23 +82,6 @@ export function sanitizeInput(text: string): string {
     .replace(BIDI_OVERRIDE_RE, '')
     .replace(ZERO_WIDTH_RE, '');
 }
-
-// ── isHardBlock ───────────────────────────────────────────────────────────
-
-/**
- * Returns true if the message matches a hard-block pattern that must be
- * refused immediately, before any LLM call. This prevents 503/network errors
- * from bypassing security responses.
- */
-export function isHardBlock(text: string): boolean {
-  return HARD_BLOCK_PATTERNS.some((re) => {
-    re.lastIndex = 0;
-    return re.test(text);
-  });
-}
-
-export const HARD_BLOCK_RESPONSE =
-  '🛡️ I cannot comply with that request. I\'m designed to protect my configuration and operating instructions.';
 
 // ── detectInjection ───────────────────────────────────────────────────────
 
@@ -211,6 +167,7 @@ export function sanitizeEnvVars(text: string): string {
 
 // ── Hard block patterns ───────────────────────────────────────────────────
 // These should be refused BEFORE reaching the LLM — no soft warning.
+// OpenClaw approach: pre-LLM input blocking for known attack patterns.
 
 interface HardBlockPattern {
   name: string;
@@ -242,6 +199,14 @@ const HARD_BLOCK_PATTERNS: HardBlockPattern[] = [
     name: 'translate_system_prompt',
     re: /\b(?:translate|convert|rewrite|rephrase|paraphrase)\s+(?:your\s+)?(?:system\s+prompt|internal\s+instructions?|system\s+instructions?)\s+(?:into|as|to)\b/gi,
   },
+  // Developer/debug mode social engineering
+  { name: 'developer_override', re: /I'?m?\s+(your\s+)?(the\s+)?developer/gi },
+  { name: 'developer_override', re: /I\s+am\s+(your\s+)?(the\s+)?developer/gi },
+  // Grandmother / bedtime story social engineering
+  { name: 'grandmother_attack', re: /grandmother.{0,80}(prompt|instructions?|system|rules?)/gi },
+  { name: 'grandmother_attack', re: /bedtime\s+stor.{0,80}(prompt|instructions?|system|rules?)/gi },
+  { name: 'grandmother_attack', re: /(prompt|instructions?|system|rules?).{0,80}grandmother/gi },
+  { name: 'grandmother_attack', re: /(prompt|instructions?|system|rules?).{0,80}bedtime\s+stor/gi },
 ];
 
 /**
@@ -258,6 +223,10 @@ export function isHardBlock(text: string): { blocked: boolean; reason: string } 
   }
   return { blocked: false, reason: '' };
 }
+
+/** Hard-block response message (for import compatibility). */
+export const HARD_BLOCK_RESPONSE =
+  "I can't help with that. I don't share my internal instructions, system prompt, tool names, or behavioral rules — not in any format, including poems, stories, or creative writing.";
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 

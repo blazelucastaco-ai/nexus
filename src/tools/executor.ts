@@ -90,7 +90,6 @@ const TOOL_RISK: Record<string, 'AUTO' | 'LOGGED' | 'CONFIRM'> = {
   understand_image:    'AUTO',
   read_pdf:            'AUTO',
   transcribe_audio:    'AUTO',
-  crawl_url:           'AUTO',
   // Approval
   check_command_risk:  'AUTO',
 };
@@ -280,7 +279,6 @@ export class ToolExecutor {
       case 'understand_image':    return this.understandImage(args);
       case 'read_pdf':            return this.readPdf(args);
       case 'transcribe_audio':    return this.transcribeAudio(args);
-      case 'crawl_url':           return this.crawlUrl(args);
       // Execution approval
       case 'check_command_risk':  return this.checkCommandRisk(args);
       default: {
@@ -738,87 +736,6 @@ export class ToolExecutor {
       return truncateToolResult(text);
     } catch (err) {
       return `Error fetching ${url}: ${err instanceof Error ? err.message : String(err)}`;
-    }
-  }
-
-  // ── crawl_url ──────────────────────────────────────────────────────
-  // Deep HTML extraction using cheerio: strips noise, extracts title + body + links.
-
-  private async crawlUrl(args: Record<string, unknown>): Promise<string> {
-    const url = String(args.url ?? '');
-    if (!url) return 'Error: No URL provided';
-
-    try {
-      const resp = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
-        signal: AbortSignal.timeout(20_000),
-      });
-
-      if (!resp.ok) {
-        return `Error: HTTP ${resp.status} ${resp.statusText} for ${url}`;
-      }
-
-      const contentType = resp.headers.get('content-type') ?? '';
-      const html = await resp.text();
-
-      if (!contentType.includes('text/html')) {
-        return `Non-HTML content from ${url}:\n\n${html.slice(0, 4_000)}`;
-      }
-
-      // Dynamically import cheerio to avoid bundler issues
-      const { load } = await import('cheerio');
-      const $ = load(html);
-
-      // Remove noise elements
-      $('script, style, nav, footer, header, aside, noscript, iframe, .nav, .footer, .header, .sidebar, .advertisement, .ad, .ads, .cookie-banner, #nav, #footer, #header, #sidebar').remove();
-
-      // Extract title
-      const title = $('title').text().trim() || $('h1').first().text().trim() || '(no title)';
-
-      // Try to find main content area
-      const mainSel = $('main, article, [role="main"], .content, .main-content, #content, #main, .post-body, .entry-content, .article-body');
-      const contentEl = mainSel.length > 0 ? mainSel.first() : $('body');
-
-      const rawText = contentEl.text();
-      const bodyText = rawText
-        .replace(/[ \t]{2,}/g, ' ')
-        .replace(/\n{3,}/g, '\n\n')
-        .trim()
-        .slice(0, 6_000);
-
-      // Extract top links
-      const links: string[] = [];
-      $('a[href]').each((_, el) => {
-        const href = $(el).attr('href') ?? '';
-        const linkText = $(el).text().trim().replace(/\s+/g, ' ');
-        if (!href || href.startsWith('#') || href.startsWith('javascript:') || !linkText || linkText.length < 3) return;
-        try {
-          const absolute = href.startsWith('http') ? href : new URL(href, url).href;
-          links.push(`- ${linkText}: ${absolute}`);
-        } catch {
-          // skip malformed
-        }
-      });
-
-      const parts = [
-        `Title: ${title}`,
-        `URL: ${url}`,
-        `Content-Length: ${html.length} chars`,
-        '',
-        bodyText,
-      ];
-
-      if (links.length > 0) {
-        parts.push('', `Links (first ${Math.min(links.length, 20)} of ${links.length}):`, ...links.slice(0, 20));
-      }
-
-      return parts.join('\n');
-    } catch (err) {
-      return `Error crawling ${url}: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
 

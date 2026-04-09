@@ -16,10 +16,8 @@ import {
   sanitizeInput,
   detectInjection,
   isHardBlock,
-  HARD_BLOCK_RESPONSE,
   wrapUntrustedContent,
   sanitizeEnvVars,
-  isHardBlock,
 } from '../brain/injection-guard.js';
 import { SelfAwareness } from '../brain/self-awareness.js';
 import { summarizeSession, storeSessionSummary } from '../brain/session-summary.js';

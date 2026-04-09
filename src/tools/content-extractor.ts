@@ -2,6 +2,7 @@
 // Strips HTML noise and returns clean, readable text with structure.
 
 import * as cheerio from 'cheerio';
+import type { AnyNode } from 'domhandler';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('ContentExtractor');
@@ -74,7 +75,9 @@ export function extractContent(html: string, baseUrl = ''): ExtractedContent {
 
   // Extract links
   const links: Array<{ text: string; href: string }> = [];
-  $('a[href]').each((_i, el) => {
+  $('a[href]').each(function(this: AnyNode) {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const el = this;
     const href = $(el).attr('href') ?? '';
     const text = $(el).text().trim().replace(/\s+/g, ' ');
     if (href && text && !href.startsWith('#') && !href.startsWith('javascript:') && links.length < 25) {
@@ -88,7 +91,9 @@ export function extractContent(html: string, baseUrl = ''): ExtractedContent {
 
   // Extract images
   const images: Array<{ alt: string; src: string }> = [];
-  $('img[src]').each((_i, el) => {
+  $('img[src]').each(function(this: AnyNode) {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const el = this;
     const src = $(el).attr('src') ?? '';
     const alt = $(el).attr('alt') ?? '';
     if (src && images.length < 10) {

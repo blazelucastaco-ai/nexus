@@ -2,6 +2,7 @@
 // Fetches a URL and extracts clean readable text content
 
 import * as cheerio from 'cheerio';
+import type { AnyNode } from 'domhandler';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('LinkCrawler');
@@ -82,7 +83,9 @@ export async function crawlUrl(url: string): Promise<CrawlResult> {
 
   // Extract links
   const links: Array<{ text: string; href: string }> = [];
-  $('a[href]').each((_i, el) => {
+  $('a[href]').each(function(this: AnyNode) {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const el = this;
     const href = $(el).attr('href') ?? '';
     const text = $(el).text().trim();
     if (href && text && !href.startsWith('#') && links.length < 20) {
