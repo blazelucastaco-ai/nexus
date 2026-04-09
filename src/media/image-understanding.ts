@@ -70,7 +70,7 @@ export async function analyzeImage(params: {
     max_tokens: 1024,
   };
 
-  const resp = await fetch(`${apiBaseUrl}/chat/completions`, {
+  const resp = await fetch(`${apiBaseUrl.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
