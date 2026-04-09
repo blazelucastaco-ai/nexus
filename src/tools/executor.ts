@@ -1030,9 +1030,7 @@ export class ToolExecutor {
         apiKey,
         model,
       });
-      return question
-        ? `Image analysis — Answer: ${result.answer ?? result.description}`
-        : `Image description:\n\n${result.description}`;
+      return result.answer ?? result.description;
     } catch (err) {
       return `Error analyzing image: ${err instanceof Error ? err.message : String(err)}`;
     }

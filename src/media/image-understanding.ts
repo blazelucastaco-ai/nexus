@@ -49,9 +49,11 @@ export async function analyzeImage(params: {
     mimeType = fetched.mimeType;
   }
 
-  const prompt = question
-    ? `Answer this question about the image: ${question}\nAlso provide a brief description of the image.`
-    : 'Describe this image in detail. Extract any visible text. Note key objects, people, and context.';
+  const personalityPrefix = `You are NEXUS, a personal AI assistant with a warm, direct, and occasionally witty personality. Respond naturally as yourself — like a friend reacting to a photo someone just showed you. Be conversational. Skip headers like "Image Description:" or "Image analysis:". Don't open with "Yes, I can see the image." Just react to it.\n\n`;
+
+  const prompt = question && question !== 'Describe this image in detail.'
+    ? `${personalityPrefix}The user sent you this image and asked: "${question}"\nAnswer their question and react naturally to what you see.`
+    : `${personalityPrefix}The user just sent you this image. React to it — describe what you see in a natural, conversational way. If there's text visible, mention it. If it's interesting or funny, say so.`;
 
   const body = {
     model,
