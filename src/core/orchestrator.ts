@@ -59,7 +59,7 @@ import type { LearningSystem } from '../learning/index.js';
 
 const log = createLogger('Orchestrator');
 
-const MAX_TOOL_ITERATIONS = 10;
+const MAX_TOOL_ITERATIONS = 25;
 
 // ─── Orchestrator ────────────────────────────────────────────────────
 
@@ -378,9 +378,10 @@ export class Orchestrator {
       const tools = toOpenAITools();
       const hasWriteIntent = /\b(write|save|create\s+file|write\s+to|save\s+to|save\s+it|essay|article|report|document|story)\b/i.test(text)
         || /\bsave\b.{0,30}\.(md|txt|sh|py|js|ts|json|csv|html)\b/i.test(text);
-      const hasWebIntent = /\b(website|webpage|web\s*page|landing\s*page|html|portfolio|homepage|site|web\s*app|frontend|front[\s-]?end)\b/i.test(text)
-        || /\b(build|create|make|design|generate)\b.{0,30}\b(site|page|app|ui)\b/i.test(text);
-      const maxTokens = hasWebIntent ? 16384 : hasWriteIntent ? 8192 : Math.min(this.config.ai.maxTokens, 1500);
+      const hasBuildIntent = /\b(website|webpage|web\s*page|landing\s*page|html|portfolio|homepage|web\s*app|frontend|front[\s-]?end)\b/i.test(text)
+        || /\b(build|create|make|design|generate|develop|code|program|implement|scaffold)\b.{0,30}\b(site|page|app|ui|project|program|script|tool|game|bot|api|server|dashboard|application)\b/i.test(text)
+        || /\b(make|build|create|write)\s+(?:me\s+)?(?:a\s+)?(?:full|complete|whole|entire|real|complex|proper)?\s*(?:program|app|application|website|project|game|tool|script|bot|api|server|dashboard)\b/i.test(text);
+      const maxTokens = hasBuildIntent ? 16384 : hasWriteIntent ? 8192 : Math.min(this.config.ai.maxTokens, 4096);
 
       // Working messages for the tool loop — starts from conversation history (pruned to fit context)
       const loopMessages: AIMessage[] = this.pruneHistory([...this.conversationHistory.slice(-20)]);
@@ -889,6 +890,14 @@ show more if needed. Do not silently ignore the truncation notice.
 
 Keep your conversational responses SHORT (2-4 sentences). When you execute tools,
 just say what you did briefly — don't explain every step.
+
+IMPORTANT — Code quality: When building projects, programs, or apps:
+- Generate COMPLETE, production-quality code. Not stubs, skeletons, or "starter" templates.
+- Include proper project structure with separate files, real dependencies, and working scripts.
+- Use established libraries and frameworks — don't reinvent the wheel.
+- Every file must be complete and runnable. No placeholder "TODO" comments.
+- Create ALL files for the project in one turn. Don't stop after writing one file.
+- After creating a project, tell the user what commands to run to set it up.
 
 IMPORTANT — Web projects: When creating websites, HTML pages, or any UI:
 - Default to Tailwind CSS via CDN for styling. Never generate plain unstyled HTML.
