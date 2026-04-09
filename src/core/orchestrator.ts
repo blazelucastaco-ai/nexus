@@ -18,6 +18,7 @@ import {
   isHardBlock,
   wrapUntrustedContent,
   sanitizeEnvVars,
+  filterSystemPromptLeak,
 } from '../brain/injection-guard.js';
 import { SelfAwareness } from '../brain/self-awareness.js';
 import { summarizeSession, storeSessionSummary } from '../brain/session-summary.js';
@@ -744,7 +745,16 @@ export class Orchestrator {
       );
 
       // Scrub any secrets before returning/sending via Telegram
-      return sanitizeEnvVars(finalContent);
+      const scrubbed = sanitizeEnvVars(finalContent);
+
+      // Post-LLM output filter: catch any system prompt leakage (OpenClaw pattern)
+      const leaked = filterSystemPromptLeak(scrubbed);
+      if (leaked) {
+        log.warn({ chatId }, 'System prompt leak detected in LLM response — blocked');
+        return leaked;
+      }
+
+      return scrubbed;
     } catch (err) {
       log.error({ err, chatId, text: truncate(text, 200) }, 'Failed to process message');
       this.personality.processEvent('task_failure');

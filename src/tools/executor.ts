@@ -513,6 +513,44 @@ export class ToolExecutor {
     const query = String(args.query ?? '');
     if (!query) return 'Error: No query provided';
 
+    // Broad identity queries: "everything you know about me", "what do you remember"
+    const isBroadIdentityQuery =
+      /\b(?:everything|all|anything)\b[\s\S]{0,80}\b(?:you\s+(?:know|remember|recall|learned?|stored?|have)\b[\s\S]{0,40}\b(?:about\s+me|me\b)|about\s+me)\b/i.test(query) ||
+      /\bwhat\s+(?:do\s+you|have\s+you)\s+(?:know|remember|stored?|learned?)\b[\s\S]{0,60}\b(?:about\s+me|about\s+the\s+user)\b/i.test(query) ||
+      /\btell\s+me\s+(?:everything|all)\b[\s\S]{0,40}\b(?:you\s+(?:know|remember)|about\s+me)\b/i.test(query);
+
+    if (isBroadIdentityQuery) {
+      const facts = this.memory.getRelevantFacts('user preference name age hobby like dislike', 30);
+      const memoriesByTerm = [
+        ...this.memory.recall('remember user', { limit: 20 }),
+        ...this.memory.recall('preference like dislike', { limit: 10 }),
+        ...this.memory.recall('fact personal', { limit: 10 }),
+      ];
+      const seen = new Set<string>();
+      const allMemories = memoriesByTerm.filter((m) => {
+        if (seen.has(m.id)) return false;
+        seen.add(m.id);
+        return true;
+      });
+
+      const lines: string[] = [];
+      if (facts.length > 0) {
+        lines.push(`**Stored facts about you (${facts.length}):**`);
+        for (const f of facts) lines.push(`- [${f.category}] ${f.key}: ${f.value}`);
+      }
+      if (allMemories.length > 0) {
+        lines.push(`\n**Memory entries (${allMemories.length}):**`);
+        for (const m of allMemories) {
+          const summary = m.summary ?? truncate(m.content, 200);
+          lines.push(`- [${m.type}/${m.layer}] ${summary}`);
+        }
+      }
+      if (lines.length === 0) {
+        return "I don't have any stored information about you yet. You can tell me things with 'Remember that...' and I'll store them.";
+      }
+      return lines.join('\n');
+    }
+
     const memories = this.memory.recall(query, { limit: 8 });
     if (memories.length === 0) {
       return 'No relevant memories found.';
@@ -692,7 +730,57 @@ export class ToolExecutor {
       log.warn({ err }, 'DuckDuckGo HTML scraper failed');
     }
 
-    // ── Step 3: Last resort — open browser ────────────────────────
+    // ── Step 3: DDG Lite scraper (OpenClaw pattern — lite.duckduckgo.com) ────
+    try {
+      const liteUrl = `https://lite.duckduckgo.com/lite/?q=${encodedQuery}`;
+      const liteResp = await fetch(liteUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+        signal: AbortSignal.timeout(15_000),
+      });
+
+      if (liteResp.ok) {
+        const html = await liteResp.text();
+        const results: string[] = [];
+
+        // DDG Lite: result links have class='result-link', snippets in td class='result-snippet'
+        const linkRe = /<a\s[^>]*class=['"]result-link['"][^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+        const snippetRe = /<td[^>]*class=['"]result-snippet['"][^>]*>([\s\S]*?)<\/td>/gi;
+
+        const links: Array<{ url: string; title: string }> = [];
+        let m: RegExpExecArray | null;
+        while ((m = linkRe.exec(html)) !== null && links.length < 8) {
+          const rawHref = m[1];
+          const uddgMatch = rawHref.match(/uddg=([^&]+)/);
+          const url = uddgMatch ? decodeURIComponent(uddgMatch[1]) : rawHref;
+          const title = m[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+          if (title && url) links.push({ url, title });
+        }
+
+        const snippets: string[] = [];
+        while ((m = snippetRe.exec(html)) !== null && snippets.length < 8) {
+          const text = m[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+          if (text) snippets.push(text);
+        }
+
+        if (links.length > 0) {
+          results.push(`Search results for: "${query}"\n`);
+          for (let i = 0; i < Math.min(links.length, 5); i++) {
+            results.push(`**${i + 1}. ${links[i].title}**`);
+            if (snippets[i]) results.push(snippets[i]);
+            results.push(`${links[i].url}\n`);
+          }
+          return results.join('\n');
+        }
+      }
+    } catch (err) {
+      log.warn({ err }, 'DDG Lite scraper failed — falling back to browser');
+    }
+
+    // ── Step 4: Last resort — open browser ────────────────────────
     try {
       await execFileAsync('open', [`https://duckduckgo.com/?q=${encodedQuery}`], { timeout: 5_000 });
     } catch {

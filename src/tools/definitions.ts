@@ -481,25 +481,6 @@ export const toolDefinitions: ToolDefinition[] = [
       required: ['path'],
     },
   },
-  {
-    name: 'crawl_url',
-    description:
-      'Fetch a URL and return clean readable text content using a full HTML parser. ' +
-      'Strips navigation, ads, and boilerplate. Returns title, main content, and links. ' +
-      'More thorough than web_fetch — use when you need structured content extraction. ' +
-      'Do NOT use for searching — use web_search for that.',
-    parameters: {
-      type: 'object',
-      properties: {
-        url: {
-          type: 'string',
-          description: 'The full URL to crawl (https://...)',
-        },
-      },
-      required: ['url'],
-    },
-  },
-
   // ── Execution Approval ────────────────────────────────────────────────────
 
   {
