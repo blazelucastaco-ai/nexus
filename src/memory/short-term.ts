@@ -80,7 +80,7 @@ export class ShortTermMemory {
     if (terms.length === 0) return [];
 
     return this.buffer.filter((entry) => {
-      const content = entry.message.content.toLowerCase();
+      const content = (entry.message.content ?? '').toLowerCase();
       return terms.some((term) => content.includes(term));
     });
   }
@@ -93,7 +93,7 @@ export class ShortTermMemory {
       id: entry.id,
       layer: 'buffer' as const,
       type,
-      content: entry.message.content,
+      content: entry.message.content ?? '',
       summary: null,
       importance: 0.3,
       confidence: 1.0,

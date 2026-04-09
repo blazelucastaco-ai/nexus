@@ -164,11 +164,11 @@ export class PersonalityEngine {
     // Apply circadian modifiers as a small additional nudge
     const circadian = this.getCircadianModifiers();
     const combinedForce: EmotionForce = {
-      valence: (force.valence ?? 0) + circadian.valence * 0.3,
-      arousal: (force.arousal ?? 0) + circadian.arousal * 0.3,
-      confidence: (force.confidence ?? 0) + circadian.confidence * 0.3,
-      engagement: (force.engagement ?? 0) + circadian.engagement * 0.3,
-      patience: (force.patience ?? 0) + circadian.patience * 0.3,
+      valence: (force.valence ?? 0) + (circadian.valence ?? 0) * 0.3,
+      arousal: (force.arousal ?? 0) + (circadian.arousal ?? 0) * 0.3,
+      confidence: (force.confidence ?? 0) + (circadian.confidence ?? 0) * 0.3,
+      engagement: (force.engagement ?? 0) + (circadian.engagement ?? 0) * 0.3,
+      patience: (force.patience ?? 0) + (circadian.patience ?? 0) * 0.3,
     };
 
     this.emotions.update(combinedForce);

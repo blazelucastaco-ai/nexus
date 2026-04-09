@@ -165,7 +165,7 @@ export class MemoryManager {
           id: entry.id,
           layer: 'buffer' as const,
           type: 'conversation' as const,
-          content: entry.message.content,
+          content: entry.message.content ?? '',
           summary: null,
           importance: 0.5,
           confidence: 1.0,
