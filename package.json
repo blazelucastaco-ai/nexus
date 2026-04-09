@@ -8,7 +8,9 @@
     "nexus": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && cp dist/index.cjs ~/.nexus/app/index.cjs",
+    "deploy": "pnpm build && launchctl kickstart -k gui/$(id -u)/com.nexus.ai",
+    "restart": "launchctl kickstart -k gui/$(id -u)/com.nexus.ai",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "setup": "tsx scripts/setup.ts",
