@@ -24,6 +24,7 @@ import {
 } from './commands.js';
 import { escapeHtml, sanitizePaths, truncateMessage } from './messages.js';
 import { handlePhoto, handleDocument, handleVoice } from './media.js';
+import { analyzeImage } from '../media/image-understanding.js';
 
 const log = createLogger('TelegramGateway');
 
@@ -327,28 +328,33 @@ export class TelegramGateway {
   // ─── Media Handling ────────────────────────────────────────────
 
   private setupMediaHandlers(): void {
-    // Photo handler
+    // Photo handler — Buffer-based pipeline (no disk write, base64 at API call point)
     this.bot.on('message:photo', async (ctx) => {
+      const chatId = String(ctx.chat.id);
       try {
-        const result = await handlePhoto(ctx);
+        await ctx.replyWithChatAction('typing');
 
-        if (this.orchestrator) {
-          const caption = ctx.message.caption;
-          const chatId = String(ctx.chat.id);
-          const question = caption
-            ? caption
-            : 'Describe this image in detail.';
-          const response = await this.orchestrator.handleMessage(
-            chatId,
-            `Please analyze this image using the understand_image tool.\nImage path: ${result.filePath}\nQuestion: ${question}`,
-          );
-          await this.sendMessage(chatId, escapeHtml(sanitizePaths(response)));
-        } else {
-          await ctx.reply(
-            `<b>Photo received</b>\nSaved to: <code>${escapeHtml(result.filePath)}</code>`,
-            { parse_mode: 'HTML' },
-          );
+        // Download photo as raw Buffer (retries built into handlePhoto)
+        const { buffer, mimeType } = await handlePhoto(ctx);
+        const caption = ctx.message.caption;
+        const question = caption || 'Describe this image in detail.';
+
+        const apiBaseUrl = process.env.OPENAI_BASE_URL ?? process.env.AI_BASE_URL ?? '';
+        const apiKey = process.env.OPENAI_API_KEY ?? process.env.AI_API_KEY ?? process.env.GEMINI_API_KEY ?? '';
+        const model = process.env.AI_MODEL ?? 'gemini-2.5-flash';
+
+        if (!apiBaseUrl || !apiKey) {
+          await ctx.reply('Vision API not configured.');
+          return;
         }
+
+        // Pass Buffer directly — base64 conversion happens inside analyzeImage at API call
+        const result = await analyzeImage({ buffer, mimeType, question, apiBaseUrl, apiKey, model });
+        const reply = question !== 'Describe this image in detail.'
+          ? `<b>Image analysis:</b>\n${escapeHtml(result.answer ?? result.description)}`
+          : `<b>Image description:</b>\n${escapeHtml(result.description)}`;
+
+        await this.sendMessage(chatId, reply);
       } catch (err) {
         log.error({ err }, 'Failed to process photo');
         await ctx.reply('Failed to process the photo.');

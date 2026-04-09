@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { Bot, Context } from 'grammy';
 import { createLogger } from '../utils/logger.js';
+import { retryAsync, isTransientError } from '../utils/retry.js';
 
 const log = createLogger('TelegramMedia');
 
@@ -13,6 +14,13 @@ const DOWNLOADS_DIR = join(homedir(), '.nexus', 'downloads');
 
 async function ensureDownloadsDir(): Promise<void> {
   await mkdir(DOWNLOADS_DIR, { recursive: true });
+}
+
+// ─── Build Telegram File Download URL ────────────────────────────────
+
+function buildTelegramFileUrl(ctx: Context, filePath: string): string {
+  const token = extractToken(ctx);
+  return `https://api.telegram.org/file/bot${token}/${filePath}`;
 }
 
 // ─── Download Any File by ID ─────────────────────────────────────────
@@ -56,11 +64,12 @@ export async function downloadFile(
 
 /**
  * Handle a received photo message.
- * Downloads the highest resolution version and saves it locally.
+ * Downloads the highest resolution version as a raw Buffer — no disk write.
+ * Retries up to 3 times with exponential backoff on transient errors.
  */
 export async function handlePhoto(
   ctx: Context,
-): Promise<{ fileId: string; filePath: string }> {
+): Promise<{ fileId: string; buffer: Buffer; mimeType: string }> {
   const photos = ctx.message?.photo;
 
   if (!photos || photos.length === 0) {
@@ -71,31 +80,34 @@ export async function handlePhoto(
   const largest = photos[photos.length - 1];
   const fileId = largest.file_id;
 
-  await ensureDownloadsDir();
-
-  const ext = 'jpg';
-  const filename = `photo_${Date.now()}.${ext}`;
-  const destPath = join(DOWNLOADS_DIR, filename);
-
-  const file = await ctx.api.getFile(fileId);
+  const file = await retryAsync(() => ctx.api.getFile(fileId), {
+    attempts: 3,
+    minDelay: 300,
+    maxDelay: 4_000,
+    shouldRetry: isTransientError,
+  });
 
   if (!file.file_path) {
     throw new Error('No file_path returned for photo');
   }
 
-  const token = extractToken(ctx);
-  const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-  const response = await fetch(url);
+  const url = buildTelegramFileUrl(ctx, file.file_path);
 
-  if (!response.ok) {
-    throw new Error(`Failed to download photo: ${response.status} ${response.statusText}`);
-  }
+  const buffer = await retryAsync(async () => {
+    const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) {
+      throw new Error(`Failed to download photo: ${response.status} ${response.statusText}`);
+    }
+    return Buffer.from(await response.arrayBuffer());
+  }, {
+    attempts: 3,
+    minDelay: 300,
+    maxDelay: 4_000,
+    shouldRetry: isTransientError,
+  });
 
-  const buffer = Buffer.from(await response.arrayBuffer());
-  await writeFile(destPath, buffer);
-
-  log.info({ fileId, filePath: destPath }, 'Photo downloaded');
-  return { fileId, filePath: destPath };
+  log.info({ fileId, size: buffer.length }, 'Photo downloaded as Buffer');
+  return { fileId, buffer, mimeType: 'image/jpeg' };
 }
 
 // ─── Document Handler ────────────────────────────────────────────────

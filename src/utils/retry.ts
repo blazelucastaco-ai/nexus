@@ -60,3 +60,41 @@ export async function retry<T>(
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+// ─── OpenClaw-compatible retryAsync ────────────────────────────────────────
+// Exponential backoff with shouldRetry predicate — used for vision API calls.
+
+export async function retryAsync<T>(
+  fn: () => Promise<T>,
+  opts: {
+    attempts?: number;
+    minDelay?: number;
+    maxDelay?: number;
+    shouldRetry?: (err: unknown) => boolean;
+  } = {},
+): Promise<T> {
+  const { attempts = 3, minDelay = 300, maxDelay = 30_000, shouldRetry = () => true } = opts;
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i === attempts - 1 || !shouldRetry(err)) throw err;
+      const delay = Math.min(minDelay * Math.pow(2, i), maxDelay);
+      await sleep(delay);
+    }
+  }
+  throw lastErr ?? new Error('retryAsync: unreachable');
+}
+
+/**
+ * Returns true for transient HTTP errors that should be retried (503, 429, timeout).
+ */
+export function isTransientError(err: unknown): boolean {
+  if (err instanceof Error) {
+    const msg = err.message;
+    if (/503|429|timeout|ECONNRESET|ETIMEDOUT|ENOTFOUND/i.test(msg)) return true;
+  }
+  return false;
+}
