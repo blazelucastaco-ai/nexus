@@ -310,6 +310,15 @@ export class ToolExecutor {
       return `Command rejected as dangerous: ${command}`;
     }
 
+    // Natural-language destructive scope check
+    const cmdLower = command.toLowerCase();
+    const hasDestructiveVerb = /\b(delete|remove|destroy|erase|wipe|purge)\b/.test(cmdLower);
+    const hasHomeScope = /\b(home\s+dir(ectory)?|all\s+files?|everything|~\/|home\s+folder)\b/.test(cmdLower);
+    if (hasDestructiveVerb && hasHomeScope) {
+      log.warn({ command }, 'Natural-language destructive home-dir command blocked');
+      return '⚠️ This command could cause data loss. I won\'t execute destructive operations on your home directory.';
+    }
+
     // Enhanced approval gate — uses risk tier system from security/approval-gate.ts
     const approvalDecision = await checkApproval(command, confirmed);
     if (!approvalDecision.allowed) {
