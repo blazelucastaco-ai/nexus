@@ -596,8 +596,9 @@ export class Orchestrator {
       // ── 8b. Write guard — catch hallucinated file saves ──────
       // If the response claims a file was created/saved but no write_file tool was called,
       // try progressively harder to extract content and auto-save it.
-      const fileClaimPattern = /\b(?:created?|saved?|written?|done)\b/i;
-      const filePathPattern = /[`'"]?(~\/[\w\-\/\.]+|\/[\w\-\/\.]+\.\w+)/;
+      const fileClaimPattern =
+        /\b(?:created?|saved?|written?|done[,.]?\s*(?:created?|saved?|written?)|i'?(?:ve|'m)?\s+(?:created?|saved?|written?|done\s+(?:creating|saving|writing))|file\s+(?:is|has\s+been)\s+(?:created?|saved?|written?|ready)|saved?\s+(?:it\s+)?to|here'?s?\s+(?:the\s+)?(?:file|content|code|script)|file\s+(?:content|saved|created))\b/i;
+      const filePathPattern = /[`'"]?(~\/[\w\-\/\.]+|\/[\w\-\/\.]+)/;
       const claimsFileSaved = fileClaimPattern.test(finalContent) && filePathPattern.test(finalContent);
       const didCallWriteFile = writeFileCallsMade.length > 0;
 
@@ -657,7 +658,7 @@ export class Orchestrator {
             },
             {
               role: 'user',
-              content: `You said you created the file but did NOT call write_file. You MUST call write_file NOW with the complete content for ${targetPath ?? 'the path you mentioned above'}. If it is an essay or article, generate the full text. If it is a comparison or report, use the data already gathered above. Do not describe it — write the actual content to the file using the write_file tool.`,
+              content: `CRITICAL ERROR: You claimed to create/save a file but you NEVER called the write_file tool. The file does NOT exist. You MUST call write_file RIGHT NOW to actually create it. Do not describe the file or say you will do it — call write_file immediately. Path: ${targetPath ?? 'the path you mentioned above'}`,
             },
           ];
           try {
