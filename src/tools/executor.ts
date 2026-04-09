@@ -669,61 +669,69 @@ export class ToolExecutor {
       log.warn({ err }, 'DuckDuckGo Instant API failed — trying HTML scraper');
     }
 
-    // ── Step 2: DDG HTML Lite scraper ─────────────────────────────
+    // ── Step 2: DDG HTML scraper (OpenClaw pattern) ───────────────
     // html.duckduckgo.com returns a plain HTML page with real search results.
+    // Uses Linux Chrome UA (same as OpenClaw) to avoid bot detection.
     try {
-      const htmlUrl = `https://html.duckduckgo.com/html/?q=${encodedQuery}`;
+      const htmlUrl = `https://html.duckduckgo.com/html/?q=${encodedQuery}&kl=us-en`;
       const htmlResp = await fetch(htmlUrl, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'Accept-Language': 'en-US,en;q=0.9',
         },
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(20_000),
       });
 
       if (htmlResp.ok) {
         const html = await htmlResp.text();
-        const { load } = await import('cheerio');
-        const $ = load(html);
 
-        const results: string[] = [];
+        // OpenClaw pattern: detect bot challenge / CAPTCHA page
+        const hasBotChallenge = !/class="[^"]*\bresult__a\b[^"]*"/.test(html) &&
+          /g-recaptcha|are you a human|id="challenge-form"|name="challenge"/i.test(html);
 
-        // DDG HTML result structure: .result with .result__title, .result__snippet, .result__url
-        $('.result').each((i, el) => {
-          if (i >= 8) return false; // top 8 results
+        if (hasBotChallenge) {
+          log.warn({}, 'DDG HTML: bot challenge detected, skipping to lite scraper');
+        } else {
+          // OpenClaw regex-based extraction (faster and more reliable than cheerio for DDG)
+          const resultAnchorRe = /<a\b(?=[^>]*\bclass="[^"]*\bresult__a\b[^"]*")[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+          const snippetRe = /<a\b(?=[^>]*\bclass="[^"]*\bresult__snippet\b[^"]*")[^>]*>([\s\S]*?)<\/a>/gi;
 
-          const titleEl = $(el).find('.result__title a, .result__a');
-          const snippetEl = $(el).find('.result__snippet');
-          const urlEl = $(el).find('.result__url');
+          const links: Array<{ url: string; title: string }> = [];
+          const snippets: string[] = [];
 
-          const title = titleEl.text().trim();
-          const snippet = snippetEl.text().trim();
-          const displayUrl = urlEl.text().trim();
-
-          // Extract actual href (DDG wraps it in a redirect)
-          let href = titleEl.attr('href') ?? '';
-          // DDG uses uddg= param for the real URL
-          try {
-            if (href.includes('uddg=')) {
-              href = decodeURIComponent(href.split('uddg=')[1]?.split('&')[0] ?? href);
-            } else if (!href.startsWith('http')) {
-              href = displayUrl ? `https://${displayUrl}` : href;
+          let m: RegExpExecArray | null;
+          while ((m = resultAnchorRe.exec(html)) !== null && links.length < 8) {
+            const rawHref = m[1];
+            const titleHtml = m[2];
+            // Decode DDG redirect URL (uddg= param)
+            let url = rawHref;
+            try {
+              const uddg = new URL('https://duckduckgo.com' + (rawHref.startsWith('/') ? rawHref : '/' + rawHref)).searchParams.get('uddg');
+              if (uddg) url = uddg;
+            } catch {
+              const uddgMatch = rawHref.match(/uddg=([^&]+)/);
+              if (uddgMatch) url = decodeURIComponent(uddgMatch[1]);
             }
-          } catch {
-            href = displayUrl ? `https://${displayUrl}` : href;
+            const title = titleHtml.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim();
+            if (title && url) links.push({ url, title });
           }
 
-          if (title && (snippet || displayUrl)) {
-            results.push(`**${i + 1}. ${title}**`);
-            if (href) results.push(`   ${href}`);
-            if (snippet) results.push(`   ${snippet}`);
-            results.push('');
+          while ((m = snippetRe.exec(html)) !== null && snippets.length < 8) {
+            const text = m[1].replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/\s+/g, ' ').trim();
+            if (text) snippets.push(text);
           }
-        });
 
-        if (results.length > 0) {
-          return `DuckDuckGo search results for: "${query}"\n\n${results.join('\n').trim()}`;
+          if (links.length > 0) {
+            const results: string[] = [`DuckDuckGo search results for: "${query}"\n`];
+            for (let i = 0; i < Math.min(links.length, 6); i++) {
+              results.push(`**${i + 1}. ${links[i].title}**`);
+              results.push(`   ${links[i].url}`);
+              if (snippets[i]) results.push(`   ${snippets[i]}`);
+              results.push('');
+            }
+            return results.join('\n').trim();
+          }
         }
       }
     } catch (err) {
@@ -797,7 +805,11 @@ export class ToolExecutor {
 
     try {
       const resp = await fetch(url, {
-        headers: { 'User-Agent': 'NEXUS/1.0 (personal AI assistant)' },
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
         signal: AbortSignal.timeout(15_000),
       });
 

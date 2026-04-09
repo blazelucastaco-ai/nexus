@@ -376,7 +376,8 @@ export class Orchestrator {
 
       // ── 8. Tool calling loop ──────────────────────────────────
       const tools = toOpenAITools();
-      const hasWriteIntent = /\b(write|save\s+to|save\s+file|create\s+file|write\s+to)\b/i.test(text);
+      const hasWriteIntent = /\b(write|save|create\s+file|write\s+to|save\s+to|save\s+it|essay|article|report|document|story)\b/i.test(text)
+        || /\bsave\b.{0,30}\.(md|txt|sh|py|js|ts|json|csv|html)\b/i.test(text);
       const maxTokens = hasWriteIntent ? 8192 : Math.min(this.config.ai.maxTokens, 1500);
 
       // Working messages for the tool loop — starts from conversation history (pruned to fit context)
@@ -594,15 +595,16 @@ export class Orchestrator {
 
       // ── 8b. Write guard — catch hallucinated file saves ──────
       // If the response claims a file was created/saved but no write_file tool was called,
-      // try progressively harder to extract code and auto-save it.
-      const fileClaimPattern = /\b(?:created?|saved?|written?)\b/i;
-      const filePathPattern = /[`'"]?(~\/[\w\-\/\.]+|\/[\w\-\/\.]+)/;
+      // try progressively harder to extract content and auto-save it.
+      const fileClaimPattern = /\b(?:created?|saved?|written?|done)\b/i;
+      const filePathPattern = /[`'"]?(~\/[\w\-\/\.]+|\/[\w\-\/\.]+\.\w+)/;
       const claimsFileSaved = fileClaimPattern.test(finalContent) && filePathPattern.test(finalContent);
       const didCallWriteFile = writeFileCallsMade.length > 0;
 
       if (claimsFileSaved && !didCallWriteFile) {
         const pathMatch = finalContent.match(filePathPattern);
-        const targetPath = pathMatch ? pathMatch[1] : null;
+        // Strip any trailing punctuation from path (e.g. "path." → "path")
+        const targetPath = pathMatch ? pathMatch[1].replace(/[.,;:!?)]+$/, '') : null;
 
         // Strategy 1: fenced code block (``` ... ```)
         const fencedMatch = finalContent.match(/```(?:\w+)?\n([\s\S]*?)```/);
@@ -618,37 +620,44 @@ export class Orchestrator {
         ).length;
         const looksLikeCode = nonEmpty.length > 0 && codeLineCount / nonEmpty.length > 0.5;
 
-        const codeContent = fencedMatch?.[1] ?? (indentedMatch) ?? (looksLikeCode ? finalContent : null);
+        const extractedContent = fencedMatch?.[1] ?? (indentedMatch) ?? (looksLikeCode ? finalContent : null);
 
         log.warn(
           { targetPath, strategy: fencedMatch ? 'fenced' : indentedMatch ? 'indented' : looksLikeCode ? 'whole-response' : 'none' },
           'Write guard triggered: response claims file saved but write_file was not called',
         );
 
-        if (targetPath && codeContent) {
+        if (targetPath && extractedContent) {
           try {
             await this.toolExecutor.execute('write_file', {
               path: targetPath,
-              content: codeContent,
+              content: extractedContent,
             });
             finalContent += '\n\n[Auto-saved by NEXUS write guard]';
-            log.info({ targetPath }, 'Write guard: auto-saved extracted code');
+            log.info({ targetPath }, 'Write guard: auto-saved extracted content');
           } catch (err) {
             log.warn({ err, targetPath }, 'Write guard: auto-save failed');
-            finalContent += '\n\n[Note: I described the code but failed to save it automatically. Please ask me to try again.]';
+            finalContent += '\n\n[Note: I described the content but failed to save it automatically. Please ask me to try again.]';
           }
         } else {
-          // Strategy 4: re-prompt the LLM to call write_file now
-          log.warn({ targetPath }, 'Write guard: no extractable code — re-prompting LLM to call write_file');
+          // Strategy 4: re-prompt the LLM to generate content AND call write_file
+          log.warn({ targetPath }, 'Write guard: no extractable content — re-prompting LLM to generate and call write_file');
+
+          // Use only current-turn context (messages since the last user message)
+          // to avoid polluting with stale [Write guard re-prompt:] entries from history
+          const lastUserIdx = [...loopMessages].reverse().findIndex((m) => m.role === 'user');
+          const currentTurnMessages = lastUserIdx >= 0
+            ? loopMessages.slice(loopMessages.length - 1 - lastUserIdx)
+            : loopMessages.slice(-6);
           const forceWriteMessages: AIMessage[] = [
-            ...loopMessages,
+            ...currentTurnMessages,
             {
               role: 'assistant',
               content: finalContent,
             },
             {
               role: 'user',
-              content: `You described code but did not save it. Call write_file now with the code you just generated. Path: ${targetPath ?? 'the path you mentioned above'}`,
+              content: `You said you created the file but did NOT call write_file. You MUST call write_file NOW with the complete content for ${targetPath ?? 'the path you mentioned above'}. If it is an essay or article, generate the full text. If it is a comparison or report, use the data already gathered above. Do not describe it — write the actual content to the file using the write_file tool.`,
             },
           ];
           try {
@@ -661,6 +670,7 @@ export class Orchestrator {
               tools,
               tool_choice: 'auto',
             });
+            let wroteFile = false;
             if (forceResponse.toolCalls && forceResponse.toolCalls.length > 0) {
               for (const tc of forceResponse.toolCalls) {
                 if (tc.function.name === 'write_file') {
@@ -669,12 +679,14 @@ export class Orchestrator {
                   if (typeof tcArgs.path === 'string') {
                     writeFileCallsMade.push({ path: tcArgs.path as string });
                   }
-                  const writeResult = await this.toolExecutor.execute('write_file', JSON.parse(tc.function.arguments));
+                  const writeResult = await this.toolExecutor.execute('write_file', tcArgs);
                   finalContent += `\n\n[Write guard re-prompt: ${writeResult}]`;
                   log.info({ path: tcArgs.path }, 'Write guard: re-prompt write_file succeeded');
+                  wroteFile = true;
                 }
               }
-            } else {
+            }
+            if (!wroteFile) {
               finalContent += '\n\n[Note: Could not auto-save — re-prompt did not produce a write_file call. Please ask me to create the file(s) again.]';
             }
           } catch (err) {
@@ -690,9 +702,15 @@ export class Orchestrator {
       }
 
       // ── 9. Store assistant response ───────────────────────────
+      // Strip write guard annotations before storing — they pollute history and cause cascading guard triggers
+      const cleanContent = finalContent
+        .replace(/\n\n\[Write guard re-prompt:.*?\]/gs, '')
+        .replace(/\n\n\[Auto-saved by NEXUS write guard\]/g, '')
+        .replace(/\n\n\[Note: Could not auto-save[^\]]*\]/g, '')
+        .trim();
       this.conversationHistory.push({
         role: 'assistant',
-        content: finalContent,
+        content: cleanContent,
       });
       this.memory.addToBuffer('assistant', finalContent);
 
