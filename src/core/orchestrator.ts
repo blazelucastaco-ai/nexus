@@ -375,6 +375,9 @@ export class Orchestrator {
       }
 
       // ── 8. Tool calling loop ──────────────────────────────────
+      // Set Telegram context so tools like send_photo know the current chat
+      this.toolExecutor.setCurrentContext(chatId, this.telegram);
+
       const tools = toOpenAITools();
       const hasWriteIntent = /\b(write|save|create\s+file|write\s+to|save\s+to|save\s+it|essay|article|report|document|story)\b/i.test(text)
         || /\bsave\b.{0,30}\.(md|txt|sh|py|js|ts|json|csv|html)\b/i.test(text);
@@ -688,11 +691,10 @@ export class Orchestrator {
               }
             }
             if (!wroteFile) {
-              finalContent += '\n\n[Note: Could not auto-save — re-prompt did not produce a write_file call. Please ask me to create the file(s) again.]';
+              log.warn('Write guard: re-prompt did not produce a write_file call');
             }
           } catch (err) {
             log.warn({ err }, 'Write guard: re-prompt failed');
-            finalContent += '\n\n[Note: Could not auto-save — re-prompt failed. Please ask me to create the file(s) again.]';
           }
         }
       }

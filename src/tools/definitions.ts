@@ -114,6 +114,27 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
   {
+    name: 'send_photo',
+    description:
+      'Send a photo/image to the user via Telegram. ' +
+      'Use this after taking a screenshot or generating an image to deliver it to the user. ' +
+      'Provide the absolute file path to the image.',
+    parameters: {
+      type: 'object',
+      properties: {
+        file_path: {
+          type: 'string',
+          description: 'Absolute path to the image file to send',
+        },
+        caption: {
+          type: 'string',
+          description: 'Optional caption to show with the photo',
+        },
+      },
+      required: ['file_path'],
+    },
+  },
+  {
     name: 'get_system_info',
     description:
       'Get macOS system information including CPU, memory, disk, battery, uptime, network, and installed apps. ' +

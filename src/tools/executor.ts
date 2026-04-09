@@ -37,6 +37,7 @@ import { checkApproval } from '../security/approval-gate.js';
 
 import type { AgentManager } from '../agents/index.js';
 import type { MemoryManager } from '../memory/index.js';
+import type { TelegramGateway } from '../telegram/gateway.js';
 
 const log = createLogger('ToolExecutor');
 const execFileAsync = promisify(execFile);
@@ -77,6 +78,7 @@ const TOOL_RISK: Record<string, 'AUTO' | 'LOGGED' | 'CONFIRM'> = {
   run_terminal_command:'LOGGED',
   remember:            'LOGGED',
   take_screenshot:     'CONFIRM',
+  send_photo:          'LOGGED',
   toggle_think_mode:   'AUTO',
   schedule_task:       'LOGGED',
   list_tasks:          'AUTO',
@@ -177,6 +179,8 @@ export class ToolExecutor {
   private beforeHooks: ToolHook[] = [];
   private afterHooks: ToolHook[] = [];
   private plugins: LoadedPlugin[] = [];
+  private currentChatId: string | null = null;
+  private gateway: TelegramGateway | null = null;
 
   constructor(
     private agents: AgentManager,
@@ -184,6 +188,12 @@ export class ToolExecutor {
     private selfAwareness?: SelfAwareness,
     private innerMonologue?: InnerMonologue,
   ) {}
+
+  /** Set the current Telegram context so tools like send_photo know who to reply to */
+  setCurrentContext(chatId: string, gateway: TelegramGateway): void {
+    this.currentChatId = chatId;
+    this.gateway = gateway;
+  }
 
   /** Register loaded plugins so their tools can be dispatched */
   setPlugins(plugins: LoadedPlugin[]): void {
@@ -258,6 +268,7 @@ export class ToolExecutor {
       case 'read_file':           return this.readFile(args);
       case 'list_directory':      return this.listDirectory(args);
       case 'take_screenshot':     return this.takeScreenshot();
+      case 'send_photo':          return this.sendPhoto(args);
       case 'get_system_info':     return this.getSystemInfo(args);
       case 'remember':            return this.remember(args);
       case 'recall':              return this.recall(args);
@@ -447,6 +458,27 @@ export class ToolExecutor {
     }
     const data = result.data as { path: string };
     return `Screenshot saved to: ${data.path}`;
+  }
+
+  // ── send_photo ─────────────────────────────────────────────────────
+
+  private async sendPhoto(args: Record<string, unknown>): Promise<string> {
+    const filePath = expandPath(String(args.file_path ?? ''));
+    const caption = args.caption ? String(args.caption) : undefined;
+
+    if (!filePath) return 'Error: file_path is required';
+    if (!this.gateway || !this.currentChatId) {
+      return 'Error: No Telegram context available — send_photo can only be used during a conversation';
+    }
+
+    try {
+      const buffer = await fsReadFile(filePath);
+      await this.gateway.sendPhoto(this.currentChatId, buffer, caption);
+      return `Photo sent: ${filePath}`;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `Error sending photo: ${msg}`;
+    }
   }
 
   // ── get_system_info ────────────────────────────────────────────────
