@@ -47,7 +47,10 @@ export const toolDefinitions: ToolDefinition[] = [
       'Use for: saving code, scripts, configs, reports, notes, any file output. ' +
       'Always include the COMPLETE file content — never write partial files or placeholders. ' +
       'Always use absolute paths starting with ~ or /. ' +
-      'Do NOT use for running commands (use run_terminal_command) or reading files (use read_file).',
+      'Do NOT use for running commands (use run_terminal_command) or reading files (use read_file). ' +
+      'For HTML/CSS files: ALWAYS use modern styling (Tailwind CSS via CDN, or Bootstrap 5). ' +
+      'Never write plain unstyled HTML — include responsive design, proper typography, color palette, ' +
+      'spacing, hover states, and visual hierarchy. Every website must look professional and polished.',
     parameters: {
       type: 'object',
       properties: {

@@ -378,7 +378,9 @@ export class Orchestrator {
       const tools = toOpenAITools();
       const hasWriteIntent = /\b(write|save|create\s+file|write\s+to|save\s+to|save\s+it|essay|article|report|document|story)\b/i.test(text)
         || /\bsave\b.{0,30}\.(md|txt|sh|py|js|ts|json|csv|html)\b/i.test(text);
-      const maxTokens = hasWriteIntent ? 8192 : Math.min(this.config.ai.maxTokens, 1500);
+      const hasWebIntent = /\b(website|webpage|web\s*page|landing\s*page|html|portfolio|homepage|site|web\s*app|frontend|front[\s-]?end)\b/i.test(text)
+        || /\b(build|create|make|design|generate)\b.{0,30}\b(site|page|app|ui)\b/i.test(text);
+      const maxTokens = hasWebIntent ? 16384 : hasWriteIntent ? 8192 : Math.min(this.config.ai.maxTokens, 1500);
 
       // Working messages for the tool loop — starts from conversation history (pruned to fit context)
       const loopMessages: AIMessage[] = this.pruneHistory([...this.conversationHistory.slice(-20)]);
@@ -886,7 +888,14 @@ and last N of X total characters]", tell the user that the output was truncated 
 show more if needed. Do not silently ignore the truncation notice.
 
 Keep your conversational responses SHORT (2-4 sentences). When you execute tools,
-just say what you did briefly — don't explain every step.`);
+just say what you did briefly — don't explain every step.
+
+IMPORTANT — Web projects: When creating websites, HTML pages, or any UI:
+- Default to Tailwind CSS via CDN for styling. Never generate plain unstyled HTML.
+- Include responsive viewport meta tag, semantic HTML5 elements, and mobile-first design.
+- Use a cohesive color palette, proper typography (Google Fonts), generous spacing, hover states, and transitions.
+- Every page must look professional and production-ready — not a wireframe or skeleton.
+- For multi-page sites, maintain consistent navigation, footer, and styling across all pages.`);
 
     // ── Workspace ──
     const workspacePath = this.config.workspace.replace('~', process.env.HOME ?? '~');
