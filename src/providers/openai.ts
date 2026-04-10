@@ -96,10 +96,11 @@ export class OpenAIProvider {
     try {
       return await this.client.chat.completions.create(params) as OpenAI.ChatCompletion;
     } catch (error: unknown) {
+      const retryableStatus = new Set([429, 500, 502, 503, 529]);
       if (
         attempt < MAX_RETRIES &&
         error instanceof OpenAI.APIError &&
-        error.status === 429
+        retryableStatus.has(error.status ?? 0)
       ) {
         const retryAfter = this.parseRetryAfter(error) ?? INITIAL_RETRY_DELAY_MS * 2 ** attempt;
         await this.sleep(retryAfter);

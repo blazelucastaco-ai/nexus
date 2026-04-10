@@ -18,9 +18,17 @@ const log = createLogger('AgentManager');
 export class AgentManager {
   private agents: Map<AgentName, BaseAgent> = new Map();
   private taskHistory: AgentTask[] = [];
+  private static readonly MAX_TASK_HISTORY = 500;
 
   constructor() {
     this.registerAll();
+  }
+
+  private recordTask(task: AgentTask): void {
+    this.taskHistory.push(task);
+    if (this.taskHistory.length > AgentManager.MAX_TASK_HISTORY) {
+      this.taskHistory = this.taskHistory.slice(-AgentManager.MAX_TASK_HISTORY);
+    }
   }
 
   private registerAll(): void {
@@ -62,7 +70,7 @@ export class AgentManager {
       };
       task.status = 'failed';
       task.result = result;
-      this.taskHistory.push(task);
+      this.recordTask(task);
       return result;
     }
 
@@ -76,7 +84,7 @@ export class AgentManager {
       };
       task.status = 'failed';
       task.result = result;
-      this.taskHistory.push(task);
+      this.recordTask(task);
       return result;
     }
 
@@ -87,7 +95,7 @@ export class AgentManager {
       const result = await agent.execute(task.action, task.params);
       task.status = result.success ? 'completed' : 'failed';
       task.result = result;
-      this.taskHistory.push(task);
+      this.recordTask(task);
 
       log.info(
         { taskId: task.id, success: result.success, duration: result.duration },
@@ -106,7 +114,7 @@ export class AgentManager {
       };
       task.status = 'failed';
       task.result = result;
-      this.taskHistory.push(task);
+      this.recordTask(task);
 
       log.error({ taskId: task.id, error }, 'Task failed');
       return result;

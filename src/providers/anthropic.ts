@@ -14,6 +14,7 @@ export interface ToolCall {
 export interface ChatResponse {
   content: string;
   toolCalls?: ToolCall[];
+  stopReason?: string;
   usage: {
     inputTokens: number;
     outputTokens: number;
@@ -86,6 +87,7 @@ export class AnthropicProvider {
     return {
       content,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      stopReason: response.stop_reason ?? undefined,
       usage: {
         inputTokens: response.usage.input_tokens,
         outputTokens: response.usage.output_tokens,
@@ -100,10 +102,11 @@ export class AnthropicProvider {
     try {
       return await this.client.messages.create(params) as Anthropic.Message;
     } catch (error: unknown) {
+      const retryableStatus = new Set([429, 500, 502, 503, 529]);
       if (
         attempt < MAX_RETRIES &&
         error instanceof Anthropic.APIError &&
-        error.status === 429
+        retryableStatus.has(error.status)
       ) {
         const retryAfter = this.parseRetryAfter(error) ?? INITIAL_RETRY_DELAY_MS * 2 ** attempt;
         await this.sleep(retryAfter);

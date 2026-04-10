@@ -297,9 +297,10 @@ export class EpisodicMemory {
     }
 
     if (options.tags && options.tags.length > 0) {
-      const tagConditions = options.tags.map(() => 'tags LIKE ?');
+      const tagConditions = options.tags.map(() => 'tags LIKE ? ESCAPE \'\\\'');
       conditions.push(`(${tagConditions.join(' OR ')})`);
-      params.push(...options.tags.map((t) => `%"${t}"%`));
+      // Escape SQL LIKE wildcards in tag values to prevent injection
+      params.push(...options.tags.map((t) => `%"${t.replace(/[%_\\]/g, '\\$&')}"%`));
     }
 
     if (options.query) {

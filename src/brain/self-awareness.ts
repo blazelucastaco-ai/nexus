@@ -4,7 +4,9 @@
 // memory statistics, emotional state, and host environment.
 
 import { homedir, cpus, totalmem, release } from 'node:os';
-import { statSync, readdirSync, existsSync } from 'node:fs';
+import { statSync, readdirSync, existsSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
 import { getDataDir, getDbPath } from '../config.js';
 import type { MemoryManager } from '../memory/index.js';
 import type { PersonalityEngine } from '../personality/index.js';
@@ -37,11 +39,124 @@ function formatUptime(seconds: number): string {
   return `${seconds}s`;
 }
 
+/** Resolve the NEXUS source directory (where package.json lives). */
+function getSourceDir(): string {
+  // Try common locations
+  const candidates = [
+    join(HOME, 'Desktop', 'nexus'),
+    join(HOME, 'nexus'),
+    join(HOME, 'Projects', 'nexus'),
+  ];
+  for (const dir of candidates) {
+    if (existsSync(join(dir, 'package.json'))) return dir;
+  }
+  // Fallback: walk up from this file's compiled location
+  let dir = __dirname ?? process.cwd();
+  for (let i = 0; i < 5; i++) {
+    if (existsSync(join(dir, 'package.json'))) return dir;
+    dir = join(dir, '..');
+  }
+  return process.cwd();
+}
+
+function runGit(args: string[], cwd: string): string {
+  try {
+    return execFileSync('git', args, { cwd, timeout: 5000, encoding: 'utf-8' }).trim();
+  } catch {
+    return '';
+  }
+}
+
+export interface VersionInfo {
+  version: string;
+  branch: string;
+  commitHash: string;
+  commitDate: string;
+  commitMessage: string;
+  sourceDir: string;
+}
+
+export interface UpdateStatus {
+  currentVersion: string;
+  currentCommit: string;
+  branch: string;
+  behindBy: number;
+  aheadBy: number;
+  isUpToDate: boolean;
+  latestRemoteCommit: string;
+  latestRemoteMessage: string;
+  summary: string;
+}
+
 export class SelfAwareness {
+  private sourceDir: string;
+
   constructor(
     private memory: MemoryManager,
     private personality: PersonalityEngine,
-  ) {}
+  ) {
+    this.sourceDir = getSourceDir();
+  }
+
+  /** Get the current version, branch, and commit info. */
+  getVersionInfo(): VersionInfo {
+    let version = '0.0.0';
+    try {
+      const pkgPath = join(this.sourceDir, 'package.json');
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+      version = pkg.version ?? '0.0.0';
+    } catch { /* ignore */ }
+
+    const branch = runGit(['branch', '--show-current'], this.sourceDir) || 'unknown';
+    const commitHash = runGit(['rev-parse', '--short', 'HEAD'], this.sourceDir) || 'unknown';
+    const commitDate = runGit(['log', '-1', '--format=%ci'], this.sourceDir) || 'unknown';
+    const commitMessage = runGit(['log', '-1', '--format=%s'], this.sourceDir) || 'unknown';
+
+    return { version, branch, commitHash, commitDate, commitMessage, sourceDir: this.sourceDir };
+  }
+
+  /** Check the remote for updates and return a status summary. */
+  checkForUpdates(): UpdateStatus {
+    const info = this.getVersionInfo();
+
+    // Fetch latest from remote (silent, best-effort)
+    runGit(['fetch', '--quiet'], this.sourceDir);
+
+    const branch = info.branch;
+    const behind = runGit(['rev-list', '--count', `HEAD..origin/${branch}`], this.sourceDir);
+    const ahead = runGit(['rev-list', '--count', `origin/${branch}..HEAD`], this.sourceDir);
+    const behindBy = parseInt(behind, 10) || 0;
+    const aheadBy = parseInt(ahead, 10) || 0;
+
+    let latestRemoteCommit = '';
+    let latestRemoteMessage = '';
+    if (behindBy > 0) {
+      latestRemoteCommit = runGit(['rev-parse', '--short', `origin/${branch}`], this.sourceDir);
+      latestRemoteMessage = runGit(['log', '-1', '--format=%s', `origin/${branch}`], this.sourceDir);
+    }
+
+    const isUpToDate = behindBy === 0;
+    let summary: string;
+    if (isUpToDate && aheadBy === 0) {
+      summary = `Up to date on branch "${branch}" at commit ${info.commitHash}.`;
+    } else if (isUpToDate && aheadBy > 0) {
+      summary = `On branch "${branch}" at commit ${info.commitHash}. ${aheadBy} local commit(s) ahead of remote.`;
+    } else {
+      summary = `${behindBy} update(s) available on branch "${branch}". Current: ${info.commitHash}. Latest remote: ${latestRemoteCommit} — "${latestRemoteMessage}".`;
+    }
+
+    return {
+      currentVersion: info.version,
+      currentCommit: info.commitHash,
+      branch,
+      behindBy,
+      aheadBy,
+      isUpToDate,
+      latestRemoteCommit,
+      latestRemoteMessage,
+      summary,
+    };
+  }
 
   /**
    * Full introspection report — detailed text block covering process, files,
@@ -53,7 +168,6 @@ export class SelfAwareness {
     const mem = process.memoryUsage();
     const nodeVersion = process.version;
 
-    const sourceDir = `${HOME}/Desktop/nexus`;
     const dataDir = getDataDir();
     const dbPath = getDbPath();
     const brainStatePath = `${dataDir}/brain-state.json`;
@@ -108,10 +222,20 @@ export class SelfAwareness {
       timeZoneName: 'short',
     });
 
+    const vInfo = this.getVersionInfo();
+
     return [
       '╔══════════════════════════════════════════╗',
       '║       NEXUS SELF-AWARENESS REPORT        ║',
       '╚══════════════════════════════════════════╝',
+      '',
+      '── Version ──────────────────────────────────',
+      `  Version:       ${vInfo.version}`,
+      `  Branch:        ${vInfo.branch}`,
+      `  Commit:        ${vInfo.commitHash}`,
+      `  Commit date:   ${vInfo.commitDate}`,
+      `  Last change:   ${vInfo.commitMessage}`,
+      `  Source dir:    ${vInfo.sourceDir}`,
       '',
       '── Process ──────────────────────────────────',
       `  PID:           ${pid}`,
@@ -122,7 +246,6 @@ export class SelfAwareness {
       `  External:      ${externalMB} MB`,
       '',
       '── Filesystem ───────────────────────────────',
-      `  Source dir:    ${sourceDir}`,
       `  Data dir:      ${dataDir}`,
       `  Memory DB:     ${dbPath}  (${dbSize})`,
       `  Brain state:   ${brainStatePath}  (${brainStateSize})`,
@@ -170,9 +293,11 @@ export class SelfAwareness {
     const heapMB = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(0);
     const stats = this.memory.getStats();
     const ps = this.personality.getPersonalityState();
+    const vInfo = this.getVersionInfo();
 
     return (
       `[self: pid=${pid} uptime=${formatUptime(uptimeSecs)} ` +
+      `v=${vInfo.version} commit=${vInfo.commitHash} branch=${vInfo.branch} ` +
       `heap=${heapMB}MB memories=${stats.totalMemories} ` +
       `facts=${stats.totalFacts} emotion=${ps.emotionLabel} ` +
       `mood=${ps.mood.toFixed(2)}]`

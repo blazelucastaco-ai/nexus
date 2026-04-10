@@ -47,7 +47,10 @@ export const toolDefinitions: ToolDefinition[] = [
       'Use for: saving code, scripts, configs, reports, notes, any file output. ' +
       'Always include the COMPLETE file content — never write partial files or placeholders. ' +
       'Always use absolute paths starting with ~ or /. ' +
-      'Do NOT use for running commands (use run_terminal_command) or reading files (use read_file).',
+      'Do NOT use for running commands (use run_terminal_command) or reading files (use read_file). ' +
+      'For HTML/CSS files: ALWAYS use modern styling (Tailwind CSS via CDN, or Bootstrap 5). ' +
+      'Never write plain unstyled HTML — include responsive design, proper typography, color palette, ' +
+      'spacing, hover states, and visual hierarchy. Every website must look professional and polished.',
     parameters: {
       type: 'object',
       properties: {
@@ -215,10 +218,11 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'introspect',
     description:
-      'Get your own system status: PID, uptime, heap usage, memory DB size, total memories stored, ' +
-      'current emotional state, workspace contents, and host machine info. ' +
-      'Use when asked about yourself, your state, your PID, your uptime, or how you are doing. ' +
-      'Do NOT make up numbers — always call this tool when asked about your runtime status.',
+      'Get your own system status: version, git commit, branch, PID, uptime, heap usage, memory DB size, ' +
+      'total memories stored, current emotional state, workspace contents, and host machine info. ' +
+      'Use when asked about yourself, your state, your PID, your uptime, your version, or how you are doing. ' +
+      'Do NOT make up numbers — always call this tool when asked about your runtime status. ' +
+      'For update checks, use check_updates instead (it fetches from the remote).',
     parameters: {
       type: 'object',
       properties: {},
@@ -483,6 +487,21 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   // ── Execution Approval ────────────────────────────────────────────────────
 
+  {
+    name: 'check_updates',
+    description:
+      'Check if NEXUS has updates available by comparing local git state to the remote. ' +
+      'Returns current version, commit hash, branch, how many commits behind/ahead, ' +
+      'and whether an update is available. ' +
+      'Use when the user asks: "are you up to date?", "what version are you?", ' +
+      '"any updates?", "can you update yourself?", "what was your last update?", ' +
+      'or anything about your version or update status.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
   {
     name: 'check_command_risk',
     description:

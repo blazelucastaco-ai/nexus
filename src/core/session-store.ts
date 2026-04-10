@@ -3,7 +3,7 @@
 // Each chat gets its own file at ~/.nexus/sessions/{chatId}.jsonl
 // Each line is a JSON array of messages for that turn: [{role, content}, ...]
 
-import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'fs';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, statSync, openSync, readSync, closeSync } from 'fs';
 import { appendFile } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -52,7 +52,25 @@ export function loadSession(chatId: string, lastN = 20): SessionMessage[] {
     const path = sessionPath(chatId);
     if (!existsSync(path)) return [];
 
-    const raw = readFileSync(path, 'utf8');
+    // Read only the tail of the file to avoid loading huge session files into memory.
+    // We read the last ~64KB which is enough for dozens of recent turns.
+    const fileSize = statSync(path).size;
+    const TAIL_BYTES = 64 * 1024;
+    let raw: string;
+
+    if (fileSize <= TAIL_BYTES) {
+      raw = readFileSync(path, 'utf8');
+    } else {
+      const buf = Buffer.alloc(TAIL_BYTES);
+      const fd = openSync(path, 'r');
+      readSync(fd, buf, 0, TAIL_BYTES, fileSize - TAIL_BYTES);
+      closeSync(fd);
+      raw = buf.toString('utf8');
+      // Drop the first (likely partial) line
+      const firstNewline = raw.indexOf('\n');
+      if (firstNewline >= 0) raw = raw.slice(firstNewline + 1);
+    }
+
     const lines = raw.trim().split('\n').filter(Boolean);
 
     // Take last N turns

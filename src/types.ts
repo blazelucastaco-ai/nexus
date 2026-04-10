@@ -172,6 +172,8 @@ export interface AIResponse {
   tokensUsed: { input: number; output: number };
   duration: number;
   toolCalls?: AIToolCall[];
+  /** Why the model stopped: 'end_turn', 'tool_use', 'max_tokens', 'stop_sequence', etc. */
+  stopReason?: string;
 }
 
 export interface AICompletionOptions {
@@ -182,6 +184,8 @@ export interface AICompletionOptions {
   systemPrompt?: string;
   tools?: Array<{ type: 'function'; function: { name: string; description: string; parameters: Record<string, unknown> } }>;
   tool_choice?: 'auto' | 'none';
+  /** Called with partial text as tokens stream in. If provided, enables streaming. */
+  onToken?: (chunk: string) => void;
 }
 
 // ─── Context ───────────────────────────────────────────────────────
@@ -234,7 +238,7 @@ export const NexusConfigSchema = z.object({
       provider: z.enum(['anthropic', 'openai', 'ollama']).default('anthropic'),
       model: z.string().default('claude-sonnet-4-20250514'),
       fallbackModel: z.string().default('claude-haiku-4-5-20251001'),
-      maxTokens: z.number().default(8192),
+      maxTokens: z.number().default(16384),
       temperature: z.number().default(0.7),
     })
     .default({}),

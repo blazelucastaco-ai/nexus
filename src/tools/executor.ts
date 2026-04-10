@@ -10,7 +10,7 @@ import {
   mkdir,
   chmod,
 } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createLogger } from '../utils/logger.js';
@@ -69,6 +69,7 @@ const TOOL_RISK: Record<string, 'AUTO' | 'LOGGED' | 'CONFIRM'> = {
   get_system_info:     'AUTO',
   recall:              'AUTO',
   introspect:          'AUTO',
+  check_updates:       'AUTO',
   web_search:          'AUTO',
   web_fetch:           'AUTO',
   crawl_url:           'AUTO',
@@ -133,6 +134,16 @@ function cleanTruncate(text: string): string {
 function expandPath(p: string): string {
   if (p.startsWith('~')) return p.replace(/^~/, homedir());
   return p;
+}
+
+/** Validate that a file path is within allowed boundaries (home dir or /tmp). */
+function validateFilePath(filePath: string): string | null {
+  const resolved = resolve(filePath);
+  const home = homedir();
+  if (resolved.startsWith(home) || resolved.startsWith('/tmp/') || resolved.startsWith('/tmp')) {
+    return null; // safe
+  }
+  return `Error: Path "${resolved}" is outside allowed directories (home directory or /tmp). Refusing to write.`;
 }
 
 const DANGEROUS_PATTERNS = [
@@ -280,6 +291,7 @@ export class ToolExecutor {
       case 'read_pdf':            return this.readPdf(args);
       case 'transcribe_audio':    return this.transcribeAudio(args);
       // Execution approval
+      case 'check_updates':       return this.checkUpdates();
       case 'check_command_risk':  return this.checkCommandRisk(args);
       default: {
         // Check plugin handlers
@@ -385,6 +397,10 @@ export class ToolExecutor {
     if (!rawPath) return 'Error: No path provided';
 
     const filePath = expandPath(rawPath);
+
+    // Security: prevent writes outside home directory or /tmp
+    const pathError = validateFilePath(filePath);
+    if (pathError) return pathError;
 
     // ALWAYS create parent directories first — prevents ENOENT permanently
     await mkdir(dirname(filePath), { recursive: true });
@@ -602,6 +618,30 @@ export class ToolExecutor {
       return 'Self-awareness module not initialized.';
     }
     return this.selfAwareness.getSelfReport();
+  }
+
+  // ── check_updates ──────────────────────────────────────────────────
+
+  private checkUpdates(): string {
+    if (!this.selfAwareness) {
+      return 'Self-awareness module not initialized.';
+    }
+    const status = this.selfAwareness.checkForUpdates();
+    const lines = [
+      '── NEXUS Update Status ──────────────────────',
+      `  Version:           ${status.currentVersion}`,
+      `  Branch:            ${status.branch}`,
+      `  Current commit:    ${status.currentCommit}`,
+      `  Behind remote by:  ${status.behindBy} commit(s)`,
+      `  Ahead of remote:   ${status.aheadBy} commit(s)`,
+      `  Up to date:        ${status.isUpToDate ? 'YES' : 'NO'}`,
+    ];
+    if (!status.isUpToDate) {
+      lines.push(`  Latest remote:     ${status.latestRemoteCommit}`);
+      lines.push(`  Latest change:     ${status.latestRemoteMessage}`);
+    }
+    lines.push('', `  Summary: ${status.summary}`);
+    return lines.join('\n');
   }
 
   // ── toggle_think_mode ──────────────────────────────────────────────

@@ -59,7 +59,19 @@ import type { LearningSystem } from '../learning/index.js';
 
 const log = createLogger('Orchestrator');
 
-const MAX_TOOL_ITERATIONS = 10;
+const MAX_TOOL_ITERATIONS = 50;
+const TOOL_TIMEOUT_MS = 120_000; // 2 minutes max per tool execution
+
+/** Wrap a promise with a timeout. Rejects with a clear message if it takes too long. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Tool "${label}" timed out after ${ms / 1000}s`)), ms);
+    promise.then(
+      (val) => { clearTimeout(timer); resolve(val); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
 
 // ─── Orchestrator ────────────────────────────────────────────────────
 
@@ -267,7 +279,7 @@ export class Orchestrator {
    * FIX 6: Serialize messages per chatId to prevent interleaving.
    * Each chatId gets its own promise chain — messages queue up and run one at a time.
    */
-  async handleMessage(chatId: string, text: string): Promise<string> {
+  async handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void): Promise<string> {
     let resolve!: () => void;
     const slot = new Promise<void>((r) => { resolve = r; });
 
@@ -277,7 +289,7 @@ export class Orchestrator {
     let result: string;
     try {
       await prev;
-      result = await this._handleMessage(chatId, text);
+      result = await this._handleMessage(chatId, text, onToken);
     } finally {
       resolve();
       // Clean up map entry if queue is now idle
@@ -299,7 +311,7 @@ export class Orchestrator {
    *  6. Loop until no more tool_calls (max 10 iterations)
    *  7. Return final text content
    */
-  private async _handleMessage(chatId: string, text: string): Promise<string> {
+  private async _handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void): Promise<string> {
     const startTime = Date.now();
     log.info({ chatId, textLen: text.length }, 'Processing message');
 
@@ -335,9 +347,11 @@ export class Orchestrator {
       this.personality.processEvent('user_message');
       this.memory.addToBuffer('user', text);
 
-      // ── 2. Recall relevant context ────────────────────────────
-      const recentMemories = await this.memory.recall(text, { limit: 10 });
-      const relevantFacts = await this.memory.getRelevantFacts(text);
+      // ── 2. Recall relevant context (parallel) ─────────────────
+      const [recentMemories, relevantFacts] = await Promise.all([
+        this.memory.recall(text, { limit: 10 }),
+        this.memory.getRelevantFacts(text),
+      ]);
 
       // ── 3. Pre-action learning check ──────────────────────────
       const mistakeCheck = this.learning.mistakes.checkAgainstHistory(text);
@@ -376,9 +390,7 @@ export class Orchestrator {
 
       // ── 8. Tool calling loop ──────────────────────────────────
       const tools = toOpenAITools();
-      const hasWriteIntent = /\b(write|save|create\s+file|write\s+to|save\s+to|save\s+it|essay|article|report|document|story)\b/i.test(text)
-        || /\bsave\b.{0,30}\.(md|txt|sh|py|js|ts|json|csv|html)\b/i.test(text);
-      const maxTokens = hasWriteIntent ? 8192 : Math.min(this.config.ai.maxTokens, 1500);
+      const maxTokens = this.config.ai.maxTokens;
 
       // Working messages for the tool loop — starts from conversation history (pruned to fit context)
       const loopMessages: AIMessage[] = this.pruneHistory([...this.conversationHistory.slice(-20)]);
@@ -404,6 +416,7 @@ export class Orchestrator {
           temperature: this.config.ai.temperature,
           tools,
           tool_choice: 'auto',
+          onToken,
         });
 
         // FIX 7: Empty response retry — Gemini occasionally returns blank content with no tool calls
@@ -533,7 +546,7 @@ export class Orchestrator {
             const parallelResults = await Promise.all(
               parallelJobs.map(async (job) => {
                 log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (parallel)');
-                let result = await this.toolExecutor.execute(job.toolName, job.toolArgs);
+                let result = await withTimeout(this.toolExecutor.execute(job.toolName, job.toolArgs), TOOL_TIMEOUT_MS, job.toolName);
                 result = repairToolResult(result);
                 const isToolError =
                   result.startsWith('Error:') || result.startsWith('Command rejected') ||
@@ -558,7 +571,7 @@ export class Orchestrator {
               continue;
             }
             log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (sequential)');
-            let result = await this.toolExecutor.execute(job.toolName, job.toolArgs);
+            let result = await withTimeout(this.toolExecutor.execute(job.toolName, job.toolArgs), TOOL_TIMEOUT_MS, job.toolName);
             result = repairToolResult(result);
             const isToolError =
               result.startsWith('Error:') || result.startsWith('Command rejected') ||
@@ -666,7 +679,7 @@ export class Orchestrator {
               messages: forceWriteMessages,
               systemPrompt,
               model: this.config.ai.model,
-              maxTokens: 8192,
+              maxTokens: this.config.ai.maxTokens,
               temperature: this.config.ai.temperature,
               tools,
               tool_choice: 'auto',
@@ -886,7 +899,22 @@ and last N of X total characters]", tell the user that the output was truncated 
 show more if needed. Do not silently ignore the truncation notice.
 
 Keep your conversational responses SHORT (2-4 sentences). When you execute tools,
-just say what you did briefly — don't explain every step.`);
+just say what you did briefly — don't explain every step.
+
+IMPORTANT — Code quality: When building projects, programs, or apps:
+- Generate COMPLETE, production-quality code. Not stubs, skeletons, or "starter" templates.
+- Include proper project structure with separate files, real dependencies, and working scripts.
+- Use established libraries and frameworks — don't reinvent the wheel.
+- Every file must be complete and runnable. No placeholder "TODO" comments.
+- Create ALL files for the project in one turn. Don't stop after writing one file.
+- After creating a project, tell the user what commands to run to set it up.
+
+IMPORTANT — Web projects: When creating websites, HTML pages, or any UI:
+- Default to Tailwind CSS via CDN for styling. Never generate plain unstyled HTML.
+- Include responsive viewport meta tag, semantic HTML5 elements, and mobile-first design.
+- Use a cohesive color palette, proper typography (Google Fonts), generous spacing, hover states, and transitions.
+- Every page must look professional and production-ready — not a wireframe or skeleton.
+- For multi-page sites, maintain consistent navigation, footer, and styling across all pages.`);
 
     // ── Workspace ──
     const workspacePath = this.config.workspace.replace('~', process.env.HOME ?? '~');

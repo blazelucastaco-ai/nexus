@@ -48,7 +48,7 @@ const AISchema = z
     provider: z.enum(['anthropic', 'openai', 'ollama']).default('anthropic'),
     model: z.string().default('claude-sonnet-4-20250514'),
     fallbackModel: z.string().default('claude-haiku-4-5-20251001'),
-    maxTokens: z.number().default(8192),
+    maxTokens: z.number().default(16384),
     temperature: z.number().default(0.7),
   })
   .default({});
@@ -136,8 +136,14 @@ function applyEnvOverrides(cfg: Record<string, unknown>): Record<string, unknown
   if (env.NEXUS_AI_PROVIDER) ai.provider = env.NEXUS_AI_PROVIDER;
   if (env.NEXUS_AI_MODEL) ai.model = env.NEXUS_AI_MODEL;
   if (env.NEXUS_AI_FALLBACK_MODEL) ai.fallbackModel = env.NEXUS_AI_FALLBACK_MODEL;
-  if (env.NEXUS_AI_MAX_TOKENS) ai.maxTokens = Number(env.NEXUS_AI_MAX_TOKENS);
-  if (env.NEXUS_AI_TEMPERATURE) ai.temperature = Number(env.NEXUS_AI_TEMPERATURE);
+  if (env.NEXUS_AI_MAX_TOKENS) {
+    const parsed = parseInt(env.NEXUS_AI_MAX_TOKENS, 10);
+    if (!Number.isNaN(parsed) && parsed > 0) ai.maxTokens = parsed;
+  }
+  if (env.NEXUS_AI_TEMPERATURE) {
+    const parsed = parseFloat(env.NEXUS_AI_TEMPERATURE);
+    if (!Number.isNaN(parsed) && parsed >= 0 && parsed <= 2) ai.temperature = parsed;
+  }
   cfg.ai = ai;
 
   return cfg;

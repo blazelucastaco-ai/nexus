@@ -270,6 +270,109 @@ export class CodeAgent extends BaseAgent {
         ),
         '.gitignore': 'node_modules/\n.env\n',
       },
+      web: {
+        'index.html': `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${name}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-white text-slate-800 font-sans antialiased">
+
+  <!-- Header -->
+  <header class="border-b border-slate-200">
+    <nav class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <span class="text-xl font-bold text-slate-900">${name}</span>
+      <div class="hidden sm:flex gap-6 text-sm font-medium text-slate-600">
+        <a href="#features" class="hover:text-slate-900 transition-colors duration-200">Features</a>
+        <a href="#about" class="hover:text-slate-900 transition-colors duration-200">About</a>
+        <a href="#contact" class="hover:text-slate-900 transition-colors duration-200">Contact</a>
+      </div>
+    </nav>
+  </header>
+
+  <!-- Hero -->
+  <section class="py-20 sm:py-32">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+      <h1 class="text-4xl sm:text-6xl font-bold tracking-tight text-slate-900">
+        Welcome to <span class="text-blue-600">${name}</span>
+      </h1>
+      <p class="mt-6 text-lg sm:text-xl text-slate-600 max-w-2xl mx-auto leading-relaxed">
+        A modern, responsive website built with Tailwind CSS. Edit this template to make it your own.
+      </p>
+      <div class="mt-10 flex justify-center gap-4">
+        <a href="#features" class="px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors duration-200 shadow-sm">
+          Get Started
+        </a>
+        <a href="#about" class="px-6 py-3 bg-white text-slate-700 font-medium rounded-lg border border-slate-300 hover:bg-slate-50 transition-colors duration-200">
+          Learn More
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section id="features" class="py-20 bg-slate-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <h2 class="text-3xl font-bold text-center text-slate-900">Features</h2>
+      <p class="mt-4 text-center text-slate-600 max-w-xl mx-auto">Everything you need to get started.</p>
+      <div class="mt-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 hover:shadow-md transition-shadow duration-200">
+          <div class="w-10 h-10 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center text-lg font-bold">1</div>
+          <h3 class="mt-4 text-lg font-semibold text-slate-900">Responsive Design</h3>
+          <p class="mt-2 text-slate-600 leading-relaxed">Looks great on every device — phones, tablets, and desktops.</p>
+        </div>
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 hover:shadow-md transition-shadow duration-200">
+          <div class="w-10 h-10 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center text-lg font-bold">2</div>
+          <h3 class="mt-4 text-lg font-semibold text-slate-900">Modern Stack</h3>
+          <p class="mt-2 text-slate-600 leading-relaxed">Built with Tailwind CSS and clean semantic HTML5.</p>
+        </div>
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 hover:shadow-md transition-shadow duration-200">
+          <div class="w-10 h-10 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center text-lg font-bold">3</div>
+          <h3 class="mt-4 text-lg font-semibold text-slate-900">Easy to Customize</h3>
+          <p class="mt-2 text-slate-600 leading-relaxed">Clean code structure that's simple to modify and extend.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- About -->
+  <section id="about" class="py-20">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+      <h2 class="text-3xl font-bold text-slate-900">About</h2>
+      <p class="mt-6 text-lg text-slate-600 max-w-2xl mx-auto leading-relaxed">
+        This is a starter template. Replace this content with information about your project, product, or idea.
+      </p>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-200 py-8">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-sm text-slate-500">
+      &copy; ${new Date().getFullYear()} ${name}. All rights reserved.
+    </div>
+  </footer>
+
+</body>
+</html>
+`,
+        'styles.css': `/* Custom styles — extend Tailwind with project-specific overrides here */\n`,
+        '.gitignore': 'node_modules/\n.env\n.DS_Store\n',
+      },
     };
 
     const structure = structures[template] ?? structures.typescript;
