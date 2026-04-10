@@ -172,6 +172,8 @@ export interface AIResponse {
   tokensUsed: { input: number; output: number };
   duration: number;
   toolCalls?: AIToolCall[];
+  /** Why the model stopped: 'end_turn', 'tool_use', 'max_tokens', 'stop_sequence', etc. */
+  stopReason?: string;
 }
 
 export interface AICompletionOptions {

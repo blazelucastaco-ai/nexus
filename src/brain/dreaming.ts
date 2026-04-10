@@ -74,6 +74,7 @@ export class DreamingEngine {
              SELECT CAST(json_extract(metadata, '$.sourceEpisodicId') AS TEXT)
              FROM memories
              WHERE layer = 'semantic'
+               AND metadata IS NOT NULL
                AND json_extract(metadata, '$.sourceEpisodicId') IS NOT NULL
            )
          ORDER BY access_count DESC

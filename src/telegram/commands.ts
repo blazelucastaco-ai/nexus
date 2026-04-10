@@ -107,7 +107,7 @@ export async function handleScreenshot(ctx: Context): Promise<void> {
 
     // Clean up
     const { unlink } = await import('node:fs/promises');
-    await unlink(screenshotPath).catch(() => {});
+    await unlink(screenshotPath).catch((err) => log.debug({ err, screenshotPath }, 'Failed to clean up screenshot temp file'));
 
     log.info({ chatId: ctx.chat?.id }, '/screenshot captured');
   } catch (err) {

@@ -335,9 +335,11 @@ export class Orchestrator {
       this.personality.processEvent('user_message');
       this.memory.addToBuffer('user', text);
 
-      // ── 2. Recall relevant context ────────────────────────────
-      const recentMemories = await this.memory.recall(text, { limit: 10 });
-      const relevantFacts = await this.memory.getRelevantFacts(text);
+      // ── 2. Recall relevant context (parallel) ─────────────────
+      const [recentMemories, relevantFacts] = await Promise.all([
+        this.memory.recall(text, { limit: 10 }),
+        this.memory.getRelevantFacts(text),
+      ]);
 
       // ── 3. Pre-action learning check ──────────────────────────
       const mistakeCheck = this.learning.mistakes.checkAgainstHistory(text);

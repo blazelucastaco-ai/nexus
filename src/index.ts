@@ -82,7 +82,7 @@ async function main() {
           '⚠️ *NEXUS permission check*\n\n' +
           warnings.join('\n\n') +
           '\n\nRestart NEXUS after granting permissions.';
-        await telegram.sendMessage(chatId, msg, { parseMode: 'Markdown' }).catch(() => {});
+        await telegram.sendMessage(chatId, msg, { parseMode: 'Markdown' }).catch((err) => log.warn({ err }, 'Failed to send permission warning'));
       }
     } catch (err) {
       log.warn({ err }, 'Permission check failed — skipping');
