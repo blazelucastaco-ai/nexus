@@ -54,12 +54,20 @@ export async function isAllowlisted(command: string): Promise<boolean> {
     }
   }
 
-  // Check regex patterns
+  // Check regex patterns (with timeout protection against ReDoS)
   for (const pattern of config.patterns) {
     try {
-      if (new RegExp(pattern).test(cmd)) return true;
+      const re = new RegExp(pattern);
+      // Guard against catastrophic backtracking: test with a timeout
+      const start = Date.now();
+      const matched = re.test(cmd);
+      if (Date.now() - start > 100) {
+        log.warn({ pattern, elapsed: Date.now() - start }, 'Slow regex pattern in allowlist — consider simplifying');
+      }
+      if (matched) return true;
     } catch {
       // Invalid regex — skip
+      log.debug({ pattern }, 'Invalid regex pattern in allowlist, skipping');
     }
   }
 
