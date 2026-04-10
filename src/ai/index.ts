@@ -115,7 +115,7 @@ export class AIManager {
         }
 
         log.info({ provider: providerName }, 'Attempting completion');
-        const result = await this.callProvider(providerName, options);
+        const result = await this.callProvider(providerName, { ...options });
         return result;
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));

@@ -137,6 +137,11 @@ export class CustomProvider {
 
     const start = performance.now();
 
+    // ── Streaming path: if onToken callback is provided and no tools ──
+    if (options.onToken && (!requestParams.tools || requestParams.tools.length === 0)) {
+      return this.completeStreaming(requestParams, options.onToken, start);
+    }
+
     const response = await retry(
       async () => this.client.chat.completions.create(requestParams),
       {
@@ -171,6 +176,50 @@ export class CustomProvider {
       },
       duration,
       toolCalls,
+      stopReason: response.choices[0]?.finish_reason ?? undefined,
+    };
+  }
+
+  /**
+   * Streaming completion — sends tokens to onToken callback as they arrive.
+   * Used for final text responses (not tool-calling turns).
+   */
+  private async completeStreaming(
+    params: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming,
+    onToken: (chunk: string) => void,
+    start: number,
+  ): Promise<AIResponse> {
+    const streamParams = { ...params, stream: true as const };
+    const stream = await this.client.chat.completions.create(streamParams);
+
+    let content = '';
+    let model = params.model;
+    let finishReason: string | undefined;
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content;
+      if (delta) {
+        content += delta;
+        onToken(delta);
+      }
+      if (chunk.model) model = chunk.model;
+      if (chunk.choices[0]?.finish_reason) {
+        finishReason = chunk.choices[0].finish_reason;
+      }
+    }
+
+    const duration = Math.round(performance.now() - start);
+
+    return {
+      content,
+      provider: this.config.name as AIResponse['provider'],
+      model,
+      tokensUsed: {
+        input: 0,
+        output: Math.ceil(content.length / 4),
+      },
+      duration,
+      stopReason: finishReason,
     };
   }
 }

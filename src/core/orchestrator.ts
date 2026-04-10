@@ -60,6 +60,18 @@ import type { LearningSystem } from '../learning/index.js';
 const log = createLogger('Orchestrator');
 
 const MAX_TOOL_ITERATIONS = 50;
+const TOOL_TIMEOUT_MS = 120_000; // 2 minutes max per tool execution
+
+/** Wrap a promise with a timeout. Rejects with a clear message if it takes too long. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Tool "${label}" timed out after ${ms / 1000}s`)), ms);
+    promise.then(
+      (val) => { clearTimeout(timer); resolve(val); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
 
 // ─── Orchestrator ────────────────────────────────────────────────────
 
@@ -267,7 +279,7 @@ export class Orchestrator {
    * FIX 6: Serialize messages per chatId to prevent interleaving.
    * Each chatId gets its own promise chain — messages queue up and run one at a time.
    */
-  async handleMessage(chatId: string, text: string): Promise<string> {
+  async handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void): Promise<string> {
     let resolve!: () => void;
     const slot = new Promise<void>((r) => { resolve = r; });
 
@@ -277,7 +289,7 @@ export class Orchestrator {
     let result: string;
     try {
       await prev;
-      result = await this._handleMessage(chatId, text);
+      result = await this._handleMessage(chatId, text, onToken);
     } finally {
       resolve();
       // Clean up map entry if queue is now idle
@@ -299,7 +311,7 @@ export class Orchestrator {
    *  6. Loop until no more tool_calls (max 10 iterations)
    *  7. Return final text content
    */
-  private async _handleMessage(chatId: string, text: string): Promise<string> {
+  private async _handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void): Promise<string> {
     const startTime = Date.now();
     log.info({ chatId, textLen: text.length }, 'Processing message');
 
@@ -404,6 +416,7 @@ export class Orchestrator {
           temperature: this.config.ai.temperature,
           tools,
           tool_choice: 'auto',
+          onToken,
         });
 
         // FIX 7: Empty response retry — Gemini occasionally returns blank content with no tool calls
@@ -533,7 +546,7 @@ export class Orchestrator {
             const parallelResults = await Promise.all(
               parallelJobs.map(async (job) => {
                 log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (parallel)');
-                let result = await this.toolExecutor.execute(job.toolName, job.toolArgs);
+                let result = await withTimeout(this.toolExecutor.execute(job.toolName, job.toolArgs), TOOL_TIMEOUT_MS, job.toolName);
                 result = repairToolResult(result);
                 const isToolError =
                   result.startsWith('Error:') || result.startsWith('Command rejected') ||
@@ -558,7 +571,7 @@ export class Orchestrator {
               continue;
             }
             log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (sequential)');
-            let result = await this.toolExecutor.execute(job.toolName, job.toolArgs);
+            let result = await withTimeout(this.toolExecutor.execute(job.toolName, job.toolArgs), TOOL_TIMEOUT_MS, job.toolName);
             result = repairToolResult(result);
             const isToolError =
               result.startsWith('Error:') || result.startsWith('Command rejected') ||

@@ -194,6 +194,64 @@ export class TelegramGateway {
   }
 
   /**
+   * Send an initial message and return its ID for later editing.
+   * Used for streaming: send a placeholder, then edit it as tokens arrive.
+   */
+  async sendStreamingMessage(chatId: string, initialText: string): Promise<number | null> {
+    try {
+      const msg = await this.bot.api.sendMessage(chatId, initialText || '▍', {
+        parse_mode: undefined, // plain text for streaming — avoids parse errors on partial HTML
+      });
+      return msg.message_id;
+    } catch (err) {
+      log.error({ err, chatId }, 'Failed to send streaming message');
+      return null;
+    }
+  }
+
+  /**
+   * Edit an existing message's text (for streaming updates).
+   * Silently ignores "message is not modified" errors from Telegram.
+   */
+  async editMessage(chatId: string, messageId: number, text: string): Promise<void> {
+    try {
+      const truncated = truncateMessage(text);
+      await this.bot.api.editMessageText(chatId, messageId, truncated, {
+        parse_mode: undefined, // plain text to avoid partial-HTML parse errors
+      });
+    } catch (err: unknown) {
+      // Telegram returns 400 "message is not modified" if text hasn't changed — ignore it
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes('message is not modified')) {
+        log.debug({ err, chatId, messageId }, 'Failed to edit message');
+      }
+    }
+  }
+
+  /**
+   * Finalize a streaming message with proper HTML formatting.
+   */
+  async finalizeStreamingMessage(chatId: string, messageId: number, text: string): Promise<void> {
+    try {
+      const truncated = truncateMessage(text);
+      await this.bot.api.editMessageText(chatId, messageId, truncated, {
+        parse_mode: 'HTML',
+      });
+    } catch (err: unknown) {
+      // If HTML formatting fails, try plain text
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes('message is not modified')) {
+        try {
+          const plain = text.replace(/<[^>]+>/g, '').slice(0, 4096);
+          await this.bot.api.editMessageText(chatId, messageId, plain);
+        } catch {
+          log.debug({ chatId, messageId }, 'Failed to finalize streaming message');
+        }
+      }
+    }
+  }
+
+  /**
    * Send a "typing..." indicator to a specific chat.
    */
   async sendTypingAction(chatId: string): Promise<void> {
@@ -308,11 +366,41 @@ export class TelegramGateway {
         }
       }
 
-      // Default: route through orchestrator
+      // Default: route through orchestrator with streaming
       if (this.orchestrator) {
         try {
-          const response = await this.orchestrator.handleMessage(chatId, text);
-          await this.sendMessage(chatId, escapeHtml(sanitizePaths(response)));
+          // Send a placeholder message that we'll edit as tokens stream in
+          let streamMsgId: number | null = null;
+          let streamBuffer = '';
+          let lastEditTime = 0;
+          const EDIT_INTERVAL_MS = 800; // Don't edit faster than this (Telegram rate limits)
+
+          const onToken = (chunk: string) => {
+            streamBuffer += chunk;
+            const now = Date.now();
+            // Throttle edits to avoid Telegram rate limits
+            if (streamMsgId && now - lastEditTime >= EDIT_INTERVAL_MS) {
+              lastEditTime = now;
+              const preview = streamBuffer.slice(0, 4000) + ' ▍';
+              this.editMessage(chatId, streamMsgId, preview).catch(() => {});
+            }
+          };
+
+          // Send initial "thinking" message
+          streamMsgId = await this.sendStreamingMessage(chatId, '⏳');
+
+          const response = await this.orchestrator.handleMessage(chatId, text, onToken);
+
+          // Finalize: edit the streaming message with the complete formatted response
+          if (streamMsgId && streamBuffer.length > 0) {
+            await this.finalizeStreamingMessage(chatId, streamMsgId, escapeHtml(sanitizePaths(response)));
+          } else if (streamMsgId) {
+            // Non-streaming response (tool calls happened) — edit the placeholder
+            await this.finalizeStreamingMessage(chatId, streamMsgId, escapeHtml(sanitizePaths(response)));
+          } else {
+            // Fallback: couldn't create streaming message, send normally
+            await this.sendMessage(chatId, escapeHtml(sanitizePaths(response)));
+          }
         } catch (err) {
           log.error({ err, chatId }, 'Orchestrator message handling failed');
           await ctx.reply('Something went wrong processing your message. I\'ll look into it.');

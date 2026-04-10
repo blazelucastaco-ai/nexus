@@ -184,6 +184,8 @@ export interface AICompletionOptions {
   systemPrompt?: string;
   tools?: Array<{ type: 'function'; function: { name: string; description: string; parameters: Record<string, unknown> } }>;
   tool_choice?: 'auto' | 'none';
+  /** Called with partial text as tokens stream in. If provided, enables streaming. */
+  onToken?: (chunk: string) => void;
 }
 
 // ─── Context ───────────────────────────────────────────────────────
