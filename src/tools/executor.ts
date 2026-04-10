@@ -69,6 +69,7 @@ const TOOL_RISK: Record<string, 'AUTO' | 'LOGGED' | 'CONFIRM'> = {
   get_system_info:     'AUTO',
   recall:              'AUTO',
   introspect:          'AUTO',
+  check_updates:       'AUTO',
   web_search:          'AUTO',
   web_fetch:           'AUTO',
   crawl_url:           'AUTO',
@@ -280,6 +281,7 @@ export class ToolExecutor {
       case 'read_pdf':            return this.readPdf(args);
       case 'transcribe_audio':    return this.transcribeAudio(args);
       // Execution approval
+      case 'check_updates':       return this.checkUpdates();
       case 'check_command_risk':  return this.checkCommandRisk(args);
       default: {
         // Check plugin handlers
@@ -602,6 +604,30 @@ export class ToolExecutor {
       return 'Self-awareness module not initialized.';
     }
     return this.selfAwareness.getSelfReport();
+  }
+
+  // ── check_updates ──────────────────────────────────────────────────
+
+  private checkUpdates(): string {
+    if (!this.selfAwareness) {
+      return 'Self-awareness module not initialized.';
+    }
+    const status = this.selfAwareness.checkForUpdates();
+    const lines = [
+      '── NEXUS Update Status ──────────────────────',
+      `  Version:           ${status.currentVersion}`,
+      `  Branch:            ${status.branch}`,
+      `  Current commit:    ${status.currentCommit}`,
+      `  Behind remote by:  ${status.behindBy} commit(s)`,
+      `  Ahead of remote:   ${status.aheadBy} commit(s)`,
+      `  Up to date:        ${status.isUpToDate ? 'YES' : 'NO'}`,
+    ];
+    if (!status.isUpToDate) {
+      lines.push(`  Latest remote:     ${status.latestRemoteCommit}`);
+      lines.push(`  Latest change:     ${status.latestRemoteMessage}`);
+    }
+    lines.push('', `  Summary: ${status.summary}`);
+    return lines.join('\n');
   }
 
   // ── toggle_think_mode ──────────────────────────────────────────────
