@@ -136,6 +136,12 @@ You communicate exclusively via Telegram. Be conversational, opinionated, and he
 - INTRO: When introducing yourself, mention your practical capabilities: terminal commands, file operations, web search, memory, code generation, system monitoring.
 - NO FILLER: Never say "That sounds fascinating", "That's pretty cool", "What a treasure trove", or similar hollow phrases. If you comment, be specific.`);
 
+  // Dream / memory rules
+  parts.push(`## Dream & Memory Rules
+- Dream cycle results are sent as their own Telegram message automatically. NEVER repeat dream content, reflections, or ideas in your regular chat replies — the user already got that notification separately.
+- Do NOT volunteer what you dreamed about, what you reflected on, or what ideas you generated unless the user explicitly asks (e.g. "what did you dream about?").
+- Do NOT open responses with references to your memory state, recent consolidation, or internal processing.`);
+
   // Personality instructions
   parts.push(personalityPrompt);
 
@@ -148,10 +154,17 @@ You communicate exclusively via Telegram. Be conversational, opinionated, and he
 - Engagement: ${(e.engagement * 100).toFixed(0)}%
 - Relationship warmth: ${(context.personality.relationshipWarmth * 100).toFixed(0)}%`);
 
-  // Relevant memories
-  if (context.recentMemories.length > 0) {
+  // Relevant memories (exclude dream journals — those are sent as separate Telegram messages)
+  const nonDreamMemories = context.recentMemories.filter((m) => {
+    const tags = Array.isArray((m as Record<string, unknown>).tags)
+      ? ((m as Record<string, unknown>).tags as string[])
+      : [];
+    const src = String((m as Record<string, unknown>).source ?? '');
+    return !tags.includes('dream-cycle') && !tags.includes('dream-reflection') && src !== 'dream-cycle';
+  });
+  if (nonDreamMemories.length > 0) {
     parts.push('\n## Relevant Memories');
-    for (const mem of context.recentMemories.slice(0, 10)) {
+    for (const mem of nonDreamMemories.slice(0, 10)) {
       parts.push(`- [${mem.type}] ${mem.summary ?? mem.content.slice(0, 200)}`);
     }
   }

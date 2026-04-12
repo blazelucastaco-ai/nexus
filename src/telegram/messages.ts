@@ -24,6 +24,56 @@ export function escapeHtml(text: string): string {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * Convert LLM markdown output to Telegram HTML.
+ * Handles code blocks first (escaped but not markdown-processed),
+ * then converts **bold**, *italic*, `inline code` in the rest.
+ * Safe to call instead of plain escapeHtml() on LLM responses.
+ */
+export function markdownToHtml(text: string): string {
+  const segments: Array<{ type: 'code' | 'text'; content: string; lang?: string }> = [];
+
+  // Split out fenced code blocks (``` ... ```) first
+  const fenceRe = /```(\w*)\n?([\s\S]*?)```/g;
+  let lastIdx = 0;
+  let m: RegExpExecArray | null;
+
+  // eslint-disable-next-line no-cond-assign
+  while ((m = fenceRe.exec(text)) !== null) {
+    if (m.index > lastIdx) {
+      segments.push({ type: 'text', content: text.slice(lastIdx, m.index) });
+    }
+    segments.push({ type: 'code', content: m[2] ?? '', lang: m[1] || undefined });
+    lastIdx = m.index + m[0].length;
+  }
+  if (lastIdx < text.length) {
+    segments.push({ type: 'text', content: text.slice(lastIdx) });
+  }
+
+  return segments.map((seg) => {
+    if (seg.type === 'code') {
+      const escaped = escapeHtml(seg.content.trimEnd());
+      return `<pre>${escaped}</pre>`;
+    }
+
+    // Process inline elements — escape first, then replace markdown tokens with HTML tags
+    let s = escapeHtml(seg.content);
+
+    // Inline code  `code`
+    s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+    // Bold  **text** or __text__
+    s = s.replace(/\*\*(.+?)\*\*/gs, '<b>$1</b>');
+    s = s.replace(/__(.+?)__/gs, '<b>$1</b>');
+
+    // Italic  *text* or _text_  (must come after bold)
+    s = s.replace(/\*([^*\n]+)\*/g, '<i>$1</i>');
+    s = s.replace(/_([^_\n]+)_/g, '<i>$1</i>');
+
+    return s;
+  }).join('');
+}
+
 // ─── Truncation ───────────────────────────────────────────────────────
 
 /**

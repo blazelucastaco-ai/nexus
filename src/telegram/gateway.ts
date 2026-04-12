@@ -31,7 +31,7 @@ import {
   handleStop,
   handleHelp,
 } from './commands.js';
-import { escapeHtml, sanitizePaths, truncateMessage } from './messages.js';
+import { escapeHtml, markdownToHtml, sanitizePaths, truncateMessage } from './messages.js';
 import { handlePhoto, handleDocument, handleVoice } from './media.js';
 
 const log = createLogger('TelegramGateway');
@@ -444,13 +444,13 @@ export class TelegramGateway {
 
           // Finalize: edit the streaming message with the complete formatted response
           if (streamMsgId && streamBuffer.length > 0) {
-            await this.finalizeStreamingMessage(chatId, streamMsgId, escapeHtml(sanitizePaths(response)));
+            await this.finalizeStreamingMessage(chatId, streamMsgId, markdownToHtml(sanitizePaths(response)));
           } else if (streamMsgId) {
             // Non-streaming response (tool calls happened) — edit the placeholder
-            await this.finalizeStreamingMessage(chatId, streamMsgId, escapeHtml(sanitizePaths(response)));
+            await this.finalizeStreamingMessage(chatId, streamMsgId, markdownToHtml(sanitizePaths(response)));
           } else {
             // Fallback: couldn't create streaming message, send normally
-            await this.sendMessage(chatId, escapeHtml(sanitizePaths(response)));
+            await this.sendMessage(chatId, markdownToHtml(sanitizePaths(response)));
           }
         } catch (err) {
           log.error({ err, chatId }, 'Orchestrator message handling failed');
@@ -481,7 +481,7 @@ export class TelegramGateway {
             chatId,
             `Please analyze this image using the understand_image tool.\nImage path: ${result.filePath}\nQuestion: ${question}`,
           );
-          await this.sendMessage(chatId, escapeHtml(sanitizePaths(response)));
+          await this.sendMessage(chatId, markdownToHtml(sanitizePaths(response)));
         } else {
           await ctx.reply(
             `<b>Photo received</b>\nSaved to: <code>${escapeHtml(result.filePath)}</code>`,
@@ -515,7 +515,7 @@ export class TelegramGateway {
             chatId,
             `[Document received: ${result.filePath}] ${caption}`,
           );
-          await this.sendMessage(chatId, escapeHtml(sanitizePaths(response)));
+          await this.sendMessage(chatId, markdownToHtml(sanitizePaths(response)));
         }
       } catch (err) {
         log.error({ err }, 'Failed to process document');
@@ -538,7 +538,7 @@ export class TelegramGateway {
             chatId,
             `[Voice message received: ${result.filePath}, duration: ${result.duration}s]`,
           );
-          await this.sendMessage(chatId, escapeHtml(sanitizePaths(response)));
+          await this.sendMessage(chatId, markdownToHtml(sanitizePaths(response)));
         }
       } catch (err) {
         log.error({ err }, 'Failed to process voice message');
