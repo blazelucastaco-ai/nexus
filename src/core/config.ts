@@ -46,9 +46,9 @@ const MemorySchema = z
 const AISchema = z
   .object({
     provider: z.enum(['anthropic', 'openai', 'ollama']).default('anthropic'),
-    model: z.string().default('claude-sonnet-4-20250514'),
+    model: z.string().default('claude-sonnet-4-6'),
     fallbackModel: z.string().default('claude-haiku-4-5-20251001'),
-    maxTokens: z.number().default(16384),
+    maxTokens: z.number().default(32768),
     temperature: z.number().default(0.7),
   })
   .default({});

@@ -1,6 +1,7 @@
-// Media Understanding — Image analysis via Gemini vision endpoint
+// Media Understanding — Image analysis via Anthropic Claude vision
 // Accepts image URLs or base64, returns description / extracted text / answers
 
+import Anthropic from '@anthropic-ai/sdk';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('ImageUnderstanding');
@@ -14,83 +15,90 @@ export interface ImageAnalysisResult {
 /**
  * Fetch a remote image and convert to base64.
  */
-async function fetchImageAsBase64(url: string): Promise<{ data: string; mimeType: string }> {
+async function fetchImageAsBase64(url: string): Promise<{ data: string; mimeType: Anthropic.Base64ImageSource['media_type'] }> {
   const resp = await fetch(url, { signal: AbortSignal.timeout(15_000) });
   if (!resp.ok) throw new Error(`Failed to fetch image: HTTP ${resp.status}`);
   const contentType = resp.headers.get('content-type') ?? 'image/jpeg';
-  const mimeType = contentType.split(';')[0]?.trim() ?? 'image/jpeg';
+  const rawMime = contentType.split(';')[0]?.trim() ?? 'image/jpeg';
+  // Anthropic only accepts these four MIME types
+  const allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] as const;
+  const mimeType = (allowed.includes(rawMime as any) ? rawMime : 'image/jpeg') as Anthropic.Base64ImageSource['media_type'];
   const buffer = await resp.arrayBuffer();
   const data = Buffer.from(buffer).toString('base64');
   return { data, mimeType };
 }
 
 /**
- * Analyze an image using Gemini's vision capabilities via the OpenAI-compat endpoint.
- * Supports URL or raw base64 input.
+ * Analyze an image using Claude's vision capabilities.
+ * Supports URL or base64 input. No external Gemini/OpenAI endpoint needed.
  */
 export async function analyzeImage(params: {
-  source: string;          // URL or base64 string
+  source: string;       // URL or base64 string
   isBase64?: boolean;
-  question?: string;       // Optional question about the image
-  apiBaseUrl: string;
-  apiKey: string;
-  model: string;
+  question?: string;    // Optional question about the image
+  // Legacy params kept for backward compat — ignored, uses ANTHROPIC_API_KEY
+  apiBaseUrl?: string;
+  apiKey?: string;
+  model?: string;
 }): Promise<ImageAnalysisResult> {
-  const { source, isBase64 = false, question, apiBaseUrl, apiKey, model } = params;
+  const { source, isBase64 = false, question } = params;
 
-  let imageData: string;
-  let mimeType = 'image/jpeg';
-
-  if (isBase64) {
-    imageData = source;
-  } else {
-    const fetched = await fetchImageAsBase64(source);
-    imageData = fetched.data;
-    mimeType = fetched.mimeType;
+  const anthropicKey = process.env.ANTHROPIC_API_KEY ?? '';
+  if (!anthropicKey) {
+    throw new Error('ANTHROPIC_API_KEY is not set — cannot analyze image');
   }
+
+  const client = new Anthropic({ apiKey: anthropicKey });
 
   const prompt = question
     ? `Answer this question about the image: ${question}\nAlso provide a brief description of the image.`
     : 'Describe this image in detail. Extract any visible text. Note key objects, people, and context.';
 
-  const body = {
-    model,
+  let imageBlock: Anthropic.ImageBlockParam;
+
+  if (!isBase64 && (source.startsWith('http://') || source.startsWith('https://'))) {
+    // Use URL source directly — Claude can fetch public URLs
+    imageBlock = {
+      type: 'image',
+      source: { type: 'url', url: source },
+    };
+  } else {
+    // Base64 — need media type
+    let imageData = source;
+    let mimeType: Anthropic.Base64ImageSource['media_type'] = 'image/jpeg';
+
+    if (!isBase64) {
+      // It's a local file that was already read into base64 by the caller
+      imageData = source;
+    } else if (source.startsWith('http://') || source.startsWith('https://')) {
+      const fetched = await fetchImageAsBase64(source);
+      imageData = fetched.data;
+      mimeType = fetched.mimeType;
+    }
+
+    imageBlock = {
+      type: 'image',
+      source: { type: 'base64', media_type: mimeType, data: imageData },
+    };
+  }
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 1024,
     messages: [
       {
         role: 'user',
-        content: [
-          {
-            type: 'image_url',
-            image_url: { url: `data:${mimeType};base64,${imageData}` },
-          },
-          { type: 'text', text: prompt },
-        ],
+        content: [imageBlock, { type: 'text', text: prompt }],
       },
     ],
-    max_tokens: 1024,
-  };
-
-  const resp = await fetch(`${apiBaseUrl.replace(/\/$/, '')}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
   });
 
-  if (!resp.ok) {
-    const err = await resp.text().catch(() => '');
-    throw new Error(`Vision API error: HTTP ${resp.status} — ${err.slice(0, 200)}`);
-  }
+  const content = response.content
+    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+    .map((b) => b.text)
+    .join('');
 
-  const data = await resp.json() as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const content = data.choices?.[0]?.message?.content ?? '';
-
-  log.info({ sourceLen: source.length, hasQuestion: !!question }, 'Image analyzed');
+  log.info({ sourceLen: source.length, hasQuestion: !!question }, 'Image analyzed via Claude vision');
 
   return {
     description: content,

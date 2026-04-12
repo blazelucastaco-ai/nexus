@@ -34,7 +34,7 @@ export class AnthropicProvider {
   private client: Anthropic;
   private model: string;
 
-  constructor(apiKey: string, model = "claude-sonnet-4-20250514") {
+  constructor(apiKey: string, model = "claude-sonnet-4-6") {
     this.client = new Anthropic({ apiKey });
     this.model = model;
   }

@@ -1036,12 +1036,8 @@ export class ToolExecutor {
     const question = args.question ? String(args.question) : undefined;
     if (!source) return 'Error: No image source provided';
 
-    const apiBaseUrl = process.env.OPENAI_BASE_URL ?? process.env.AI_BASE_URL ?? '';
-    const apiKey = process.env.OPENAI_API_KEY ?? process.env.AI_API_KEY ?? process.env.GEMINI_API_KEY ?? '';
-    const model = process.env.AI_MODEL ?? 'gemini-2.5-flash';
-
-    if (!apiBaseUrl || !apiKey) {
-      return 'Error: Vision API not configured (need OPENAI_BASE_URL + OPENAI_API_KEY or AI_* env vars)';
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return 'Error: ANTHROPIC_API_KEY is not set — cannot analyze image';
     }
 
     try {
@@ -1049,10 +1045,9 @@ export class ToolExecutor {
       let isBase64 = false;
 
       if (source.startsWith('http://') || source.startsWith('https://')) {
-        // URL — analyzeImage will fetch it
         isBase64 = false;
       } else if (source.startsWith('/') || source.startsWith('~')) {
-        // Local file path — read and convert to base64
+        // Local file — read and pass as base64
         const filePath = expandPath(source);
         const fileBuffer = await fsReadFile(filePath);
         imageSource = fileBuffer.toString('base64');
@@ -1062,14 +1057,7 @@ export class ToolExecutor {
         isBase64 = true;
       }
 
-      const result = await analyzeImage({
-        source: imageSource,
-        isBase64,
-        question,
-        apiBaseUrl,
-        apiKey,
-        model,
-      });
+      const result = await analyzeImage({ source: imageSource, isBase64, question });
       return question
         ? `Image analysis — Answer: ${result.answer ?? result.description}`
         : `Image description:\n\n${result.description}`;
