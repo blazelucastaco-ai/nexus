@@ -20,6 +20,7 @@ const MAX_STEP_ITERATIONS = 25;  // Per-step tool loop limit
 const MAX_STEP_RETRIES    = 2;   // Retry a failing step up to N times
 const TOOL_TIMEOUT_MS     = 120_000;
 const TELEGRAM_EDIT_THROTTLE_MS = 1200; // Telegram rate limit buffer
+const DEGENERATE_LOOP_LIMIT = 3; // Break if same malformed tool call repeats N times
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -66,20 +67,25 @@ STEP GOAL: ${step.description}
 PREVIOUS STEPS COMPLETED:
 ${prevSummary}
 
-━━━ CRITICAL EXECUTION RULES ━━━
+━━━ RULES — READ EVERY ONE ━━━
 
-1. FOCUS: Execute ONLY this step. Do not attempt future steps.
-2. REAL WORK: Use tools to do actual work. Call write_file to write files. Call run_terminal_command to run commands. Do NOT describe what you would do — do it.
-3. COMPLETE FILES: When writing code, write COMPLETE files. No stubs, no placeholders, no "add your code here" comments. Every file must be fully functional.
-4. PATHS: Always use absolute paths. Save project files to ${plan.projectDir}/.
-5. VERIFY WRITES: After calling write_file, immediately call read_file on the same path to confirm it was saved correctly.
-6. TERMINAL OUTPUT: After running commands, show the actual output. If a command fails, fix it and retry.
-7. REPORT: When done with this step, briefly state what was accomplished and what files/outputs were produced.
+1. TOOLS ONLY. Never put code or file content in your response text. If this step requires writing a file, call write_file. If it requires running a command, call run_terminal_command. Do NOT describe, explain, or show code in your message — just call the tool.
 
-macOS shell rules:
-- Use /bin/zsh for shell commands
-- No GNU-only flags (no --sort, no declare -A)
-- Use os.path.expanduser() in Python for ~ paths
+2. COMPLETE FILES. Every write_file call must contain the FULL, working file content. No stubs, no "// TODO", no placeholders, no truncation. If a file is 500 lines, write all 500 lines.
+
+3. ABSOLUTE PATHS. Always use ~/... paths. Project files go in ${plan.projectDir}/
+
+4. VERIFY WRITES. After every write_file call, immediately call read_file on the same path to confirm it was saved.
+
+5. FIX ERRORS. If a tool returns an error, diagnose it and retry with a corrected approach. Never claim success after an error.
+
+6. ONE STEP ONLY. Complete this step and stop. Do not do future steps.
+
+7. BRIEF REPORT. After all tool calls, write 1-2 sentences saying what was done. Do not include code.
+
+macOS notes:
+- Shell: /bin/zsh. No GNU-only flags. No declare -A.
+- Python paths: os.path.expanduser('~/...')
 - Make scripts executable: chmod +x <script>`;
 }
 
@@ -150,6 +156,8 @@ async function executeStep(
   const filesWritten: string[] = [];
   const commandsRun: string[] = [];
   let finalContent = '';
+  // Degenerate loop detection: track last N malformed call signatures
+  const recentMalformedCalls: string[] = [];
 
   for (let iteration = 0; iteration < MAX_STEP_ITERATIONS; iteration++) {
     let aiResponse = await withTimeout(
@@ -190,6 +198,7 @@ async function executeStep(
     });
 
     // Execute all tool calls
+    let degenerateBreak = false;
     for (const toolCall of aiResponse.toolCalls) {
       const toolName = toolCall.function.name;
       let toolArgs: Record<string, unknown> = {};
@@ -198,6 +207,55 @@ async function executeStep(
         toolArgs = JSON.parse(toolCall.function.arguments);
       } catch {
         toolArgs = {};
+      }
+
+      // ── Detect malformed/incomplete tool calls (e.g. max_tokens truncation) ──
+      let malformedError: string | null = null;
+      if (toolName === 'write_file') {
+        if (typeof toolArgs.path !== 'string' || !toolArgs.path) {
+          malformedError = 'Error: write_file called without a "path" argument. You MUST provide both "path" and "content".';
+        } else if (typeof toolArgs.content !== 'string' || toolArgs.content.length === 0) {
+          malformedError = `Error: write_file called for "${toolArgs.path}" but "content" was empty or missing. This usually happens when the file content is very large. Break the content into sections and write one section at a time using multiple write_file calls. Always include the full content — never call write_file with an empty content field.`;
+        }
+      } else if (toolName === 'run_terminal_command') {
+        if (typeof toolArgs.command !== 'string' || !toolArgs.command) {
+          malformedError = 'Error: run_terminal_command called without a "command" argument. You MUST provide a "command" string.';
+        }
+      } else if (toolName === 'read_file') {
+        if (typeof toolArgs.path !== 'string' || !toolArgs.path) {
+          malformedError = 'Error: read_file called without a "path" argument.';
+        }
+      }
+
+      if (malformedError) {
+        // Track for degenerate loop detection
+        const callSig = `${toolName}:${JSON.stringify(toolArgs)}`;
+        recentMalformedCalls.push(callSig);
+        // Keep only last N entries
+        if (recentMalformedCalls.length > DEGENERATE_LOOP_LIMIT * 2) {
+          recentMalformedCalls.shift();
+        }
+        // Check if same malformed call is repeating
+        const repeatCount = recentMalformedCalls.filter((s) => s === callSig).length;
+        if (repeatCount >= DEGENERATE_LOOP_LIMIT) {
+          log.warn({ toolName, step: step.id, repeatCount }, 'Degenerate loop detected — breaking step');
+          finalContent = `Step ${step.id} encountered a repeated tool error and could not complete. The file may need to be written manually or in smaller sections.`;
+          loopMessages.push({
+            role: 'tool',
+            content: malformedError,
+            tool_call_id: toolCall.id,
+          });
+          degenerateBreak = true;
+          break;
+        }
+
+        log.warn({ toolName, step: step.id, toolArgs: Object.keys(toolArgs) }, 'Malformed tool call — missing required args');
+        loopMessages.push({
+          role: 'tool',
+          content: malformedError + '\n\n[TOOL ERROR — do not claim success. Fix and retry with all required arguments.]',
+          tool_call_id: toolCall.id,
+        });
+        continue;
       }
 
       // Track what's being done
@@ -248,8 +306,46 @@ async function executeStep(
       });
     }
 
+    if (degenerateBreak) break;
+
     if (iteration === MAX_STEP_ITERATIONS - 1) {
       finalContent = aiResponse.content ?? `Step ${step.id} hit iteration limit.`;
+    }
+  }
+
+  // ── Rescue pass: detect when model described code instead of calling write_file ──
+  // If the final response contains fenced code blocks but no files were written,
+  // extract and save them automatically.
+  if (filesWritten.length === 0 && finalContent.length > 500) {
+    const codeBlocks = [...finalContent.matchAll(/```(?:(\w+)\n)?([\s\S]*?)```/g)];
+    // Look for a path mentioned near each code block
+    const pathPattern = /[`'"]?(~\/[\w\-\/\.]+|\/[\w\-\/\.]+)/g;
+    const mentionedPaths = [...finalContent.matchAll(pathPattern)].map((m) => m[1]);
+
+    if (codeBlocks.length > 0 && mentionedPaths.length > 0) {
+      log.warn({ step: step.id, blocks: codeBlocks.length, paths: mentionedPaths.length }, 'Rescue pass: model described code without calling write_file — auto-saving');
+
+      for (let i = 0; i < codeBlocks.length; i++) {
+        const content = codeBlocks[i]?.[2];
+        if (!content || content.trim().length < 50) continue;
+
+        // Match code block to path by index, or use project dir with inferred name
+        let targetPath = mentionedPaths[i] ?? mentionedPaths[0];
+        if (!targetPath) continue;
+
+        // Expand ~ properly
+        targetPath = targetPath.replace(/[.,;:!?)]+$/, '');
+
+        try {
+          const writeResult = await toolExecutor.execute('write_file', { path: targetPath, content });
+          if (!writeResult.startsWith('Error')) {
+            filesWritten.push(targetPath);
+            log.info({ path: targetPath }, 'Rescue pass: auto-saved code block');
+          }
+        } catch (err) {
+          log.warn({ err, path: targetPath }, 'Rescue pass: auto-save failed');
+        }
+      }
     }
   }
 
@@ -279,7 +375,10 @@ export async function runTask(opts: {
   model: string;
   maxTokens: number;
 }): Promise<TaskRunResult> {
-  const { plan, originalRequest, chatId, ai, toolExecutor, telegram, model, maxTokens } = opts;
+  const { plan, originalRequest, chatId, ai, toolExecutor, telegram, model } = opts;
+  // Task steps need more room than regular chat — large files can easily hit 16K tokens.
+  // Use at least 32768 tokens per step so write_file content is never truncated.
+  const maxTokens = Math.max(opts.maxTokens, 32768);
   const startTime = Date.now();
 
   const completedIds = new Set<number>();

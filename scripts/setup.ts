@@ -283,10 +283,12 @@ async function setupAI(): Promise<AIConfig> {
 
   console.log(
     boxen(
-      chalk.dim(
-        "Select which AI providers to use.\n" +
-          "Anthropic (Claude) is recommended as the primary provider."
-      ),
+      chalk.bold.cyan("Anthropic (Claude)") +
+        chalk.dim(" is the only supported provider.\n") +
+        chalk.dim(
+          "Claude Sonnet 4.6 produces the best results for agentic tasks.\n" +
+            "Get your key at console.anthropic.com"
+        ),
       {
         padding: { left: 2, right: 2, top: 0, bottom: 0 },
         margin: { left: 2, right: 0, top: 0, bottom: 0 },
@@ -298,126 +300,23 @@ async function setupAI(): Promise<AIConfig> {
   );
   console.log("");
 
-  const providers = await checkbox({
-    message: chalk.magenta("Select AI providers:"),
-    choices: [
-      {
-        name:
-          chalk.bold("Anthropic (Claude)") +
-          chalk.dim(" — Recommended primary"),
-        value: "anthropic",
-        checked: true,
-      },
-      {
-        name: chalk.bold("OpenAI (GPT-4)") + chalk.dim(" — Fallback option"),
-        value: "openai",
-        checked: false,
-      },
-      {
-        name:
-          chalk.bold("Google Gemini") +
-          chalk.dim(" — gemini-2.5-flash via OpenAI-compat endpoint"),
-        value: "gemini",
-        checked: false,
-      },
-      {
-        name:
-          chalk.bold("Ollama (Local)") + chalk.dim(" — Free, runs on device"),
-        value: "ollama",
-        checked: false,
-      },
-    ],
+  const providers = ["anthropic"];
+
+  const anthropicKey = await password({
+    message: chalk.magenta("Anthropic API Key:"),
+    mask: "•",
+    validate: (val: string) => {
+      if (!val || val.length < 10) {
+        return "API key looks too short.";
+      }
+      if (!val.startsWith("sk-ant-")) {
+        return "Anthropic keys start with sk-ant-";
+      }
+      return true;
+    },
   });
 
-  let anthropicKey = "";
-  let openaiKey = "";
-  let geminiKey = "";
-  let ollamaEnabled = false;
-
-  if (providers.includes("anthropic")) {
-    console.log("");
-    anthropicKey = await password({
-      message: chalk.magenta("Anthropic API Key:"),
-      mask: "•",
-      validate: (val: string) => {
-        if (!val || val.length < 10) {
-          return "API key looks too short.";
-        }
-        return true;
-      },
-    });
-  }
-
-  if (providers.includes("openai")) {
-    console.log("");
-    openaiKey = await password({
-      message: chalk.magenta("OpenAI API Key:"),
-      mask: "•",
-      validate: (val: string) => {
-        if (!val || val.length < 10) {
-          return "API key looks too short.";
-        }
-        return true;
-      },
-    });
-  }
-
-  if (providers.includes("gemini")) {
-    console.log("");
-    geminiKey = await password({
-      message: chalk.magenta("Google Gemini API Key:"),
-      mask: "•",
-      validate: (val: string) => {
-        if (!val || val.length < 10) {
-          return "API key looks too short.";
-        }
-        return true;
-      },
-    });
-  }
-
-  if (providers.includes("ollama")) {
-    ollamaEnabled = true;
-    const spin = ora({
-      text: "Checking Ollama local server...",
-      color: "cyan",
-      indent: 2,
-    }).start();
-    await sleep(600);
-    try {
-      execSync("curl -s http://localhost:11434/api/tags", {
-        timeout: 3000,
-      });
-      spin.succeed(chalk.green("Ollama is running locally"));
-    } catch {
-      spin.warn(
-        chalk.yellow("Ollama not detected") +
-          chalk.dim(" — make sure it's running before starting NEXUS")
-      );
-    }
-  }
-
-  if (!anthropicKey && !openaiKey && !geminiKey && !ollamaEnabled) {
-    console.log("");
-    console.log(
-      boxen(
-        chalk.yellow.bold("⚠  No AI Provider Configured") +
-          "\n\n" +
-          chalk.dim(
-            "NEXUS requires at least one AI provider to function.\n" +
-              "You can add API keys later in ~/.nexus/config.json"
-          ),
-        {
-          padding: 1,
-          margin: { left: 2, right: 0, top: 0, bottom: 0 },
-          borderStyle: "round",
-          borderColor: "yellow",
-        }
-      )
-    );
-  }
-
-  return { providers, anthropicKey, openaiKey, geminiKey, ollamaEnabled };
+  return { providers, anthropicKey, openaiKey: "", geminiKey: "", ollamaEnabled: false };
 }
 
 // ─── Step 4: Agent Selection ────────────────────────────────────────
@@ -914,29 +813,12 @@ async function writeConfiguration(opts: {
       importanceThreshold: 0.3,
     },
     ai: {
-      provider: opts.ai.anthropicKey
-        ? "anthropic"
-        : opts.ai.openaiKey
-          ? "openai"
-          : opts.ai.geminiKey
-            ? "gemini"
-            : "ollama",
-      model: opts.ai.anthropicKey
-        ? "claude-sonnet-4-20250514"
-        : opts.ai.openaiKey
-          ? "gpt-4o"
-          : opts.ai.geminiKey
-            ? "gemini-2.5-flash"
-            : "llama3",
-      baseURL: opts.ai.geminiKey
-        ? "https://generativelanguage.googleapis.com/v1beta/openai/"
-        : undefined,
-      fallbackModel: opts.ai.openaiKey
-        ? "gpt-4o-mini"
-        : "claude-haiku-4-5-20251001",
-      maxTokens: 8192,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackModel: "claude-haiku-4-5-20251001",
+      maxTokens: 16384,
       temperature: 0.7,
-      providers: opts.ai.providers,
+      providers: ["anthropic"],
     },
     telegram: {
       allowedUsers: [opts.telegram.chatId],
@@ -966,19 +848,10 @@ async function writeConfiguration(opts: {
     `TELEGRAM_BOT_TOKEN=${opts.telegram.botToken}`,
     `TELEGRAM_CHAT_ID=${opts.telegram.chatId}`,
     "",
-    "# AI Providers",
-    opts.ai.anthropicKey
-      ? `ANTHROPIC_API_KEY=${opts.ai.anthropicKey}`
-      : "# ANTHROPIC_API_KEY=",
-    opts.ai.openaiKey
-      ? `OPENAI_API_KEY=${opts.ai.openaiKey}`
-      : "# OPENAI_API_KEY=",
-    opts.ai.geminiKey
-      ? `GEMINI_API_KEY=${opts.ai.geminiKey}`
-      : "# GEMINI_API_KEY=",
-    opts.ai.ollamaEnabled
-      ? "OLLAMA_BASE_URL=http://localhost:11434"
-      : "# OLLAMA_BASE_URL=http://localhost:11434",
+    "# AI Provider — Anthropic (Claude)",
+    `ANTHROPIC_API_KEY=${opts.ai.anthropicKey}`,
+    `NEXUS_AI_PROVIDER=anthropic`,
+    `NEXUS_AI_MODEL=claude-sonnet-4-6`,
     "",
     "# System",
     `NEXUS_DATA_DIR=${NEXUS_DIR}`,
