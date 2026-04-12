@@ -21,7 +21,7 @@ function connect() {
   ws.addEventListener('open', () => {
     connected = true;
     updateBadge(true);
-    chrome.storage.local.set({ connected: true, connectedAt: Date.now() });
+    chrome.storage.local.set({ connected: true, connectedAt: Date.now(), commandCount: 0, recentCommands: [] });
     startPing();
     console.log('[NEXUS] Connected to bridge');
   });
@@ -48,6 +48,14 @@ function connect() {
     if (msg.type === 'command') {
       const result = await handleCommand(msg);
       ws.send(JSON.stringify({ id: msg.id, type: 'response', ...result }));
+
+      // Track command stats for popup
+      chrome.storage.local.get(['commandCount', 'recentCommands'], (data) => {
+        const count   = (data.commandCount   ?? 0) + 1;
+        const recent  = (data.recentCommands ?? []).slice(-19);
+        recent.push({ action: msg.action, ts: Date.now(), success: !!result.success });
+        chrome.storage.local.set({ commandCount: count, recentCommands: recent });
+      });
     }
   });
 }

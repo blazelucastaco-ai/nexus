@@ -5,174 +5,496 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>NEXUS Bridge</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
-    body {
-      width: 260px;
-      background: #0d0d12;
-      color: #e2e8f0;
-      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
-      font-size: 13px;
-      padding: 16px;
-      user-select: none;
+    :root {
+      --bg:      #0b0b11;
+      --surface: #111118;
+      --card:    #16161f;
+      --border:  #1e1e2c;
+      --border2: #252535;
+      --violet:  #8B5CF6;
+      --violet2: #6D28D9;
+      --emerald: #34D399;
+      --rose:    #F87171;
+      --amber:   #FBBF24;
+      --sky:     #38BDF8;
+      --t1:      #f1f5f9;
+      --t2:      #94a3b8;
+      --t3:      #475569;
+      --t4:      #2d3548;
     }
 
-    /* ── Header ── */
+    body {
+      width: 310px;
+      background: var(--bg);
+      color: var(--t1);
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Segoe UI', sans-serif;
+      font-size: 12px;
+      user-select: none;
+      overflow: hidden;
+    }
+
+    /* ── Header ──────────────────────────────────── */
     .header {
       display: flex;
       align-items: center;
-      gap: 8px;
-      margin-bottom: 14px;
+      justify-content: space-between;
+      padding: 13px 14px 11px;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, #13131c 0%, var(--bg) 100%);
     }
 
     .logo {
-      font-size: 15px;
-      font-weight: 700;
-      color: #8B5CF6;
-      letter-spacing: 0.02em;
-    }
-
-    .logo-sub {
-      font-size: 11px;
-      color: #4B5563;
-      font-weight: 400;
-      margin-left: 2px;
-    }
-
-    /* ── Status pill ── */
-    .status-row {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 10px 12px;
-      border-radius: 8px;
-      background: #161622;
-      border: 1px solid #1f1f2e;
-      margin-bottom: 12px;
+      gap: 7px;
     }
 
-    .dot {
-      width: 8px;
-      height: 8px;
+    .logo-icon {
+      width: 22px;
+      height: 22px;
+      border-radius: 5px;
+      background: linear-gradient(135deg, var(--violet) 0%, var(--violet2) 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: -0.5px;
+      box-shadow: 0 0 10px #8B5CF640;
+    }
+
+    .logo-name {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--t1);
+      letter-spacing: 0.04em;
+    }
+
+    .logo-bridge {
+      font-size: 10px;
+      color: var(--t3);
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-left: -3px;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .version-badge {
+      font-size: 9.5px;
+      color: var(--t3);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-weight: 500;
+      letter-spacing: 0.03em;
+    }
+
+    /* ── Status hero ─────────────────────────────── */
+    .status-hero {
+      padding: 14px 14px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 9px 12px;
+      border-radius: 9px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      transition: border-color 0.3s, background 0.3s;
+    }
+
+    .status-pill.connected {
+      border-color: #34D39930;
+      background: #0d1f18;
+    }
+
+    .status-pill.disconnected {
+      border-color: #F8717130;
+      background: #1a0f0f;
+    }
+
+    .status-dot {
+      width: 9px;
+      height: 9px;
       border-radius: 50%;
       flex-shrink: 0;
       transition: background 0.3s, box-shadow 0.3s;
     }
 
-    .dot.connected {
-      background: #34D399;
-      box-shadow: 0 0 6px #34D39966;
+    .status-dot.connected {
+      background: var(--emerald);
+      box-shadow: 0 0 8px #34D39980;
+      animation: breathe 2.5s ease-in-out infinite;
     }
 
-    .dot.disconnected {
-      background: #F87171;
+    .status-dot.disconnected {
+      background: var(--rose);
+      box-shadow: 0 0 6px #F8717150;
     }
 
-    .dot.connecting {
-      background: #FBBF24;
-      animation: pulse 1.2s ease-in-out infinite;
+    .status-dot.connecting {
+      background: var(--amber);
+      box-shadow: 0 0 6px #FBBF2460;
+      animation: blink 1s ease-in-out infinite;
     }
 
-    @keyframes pulse {
+    @keyframes breathe {
+      0%, 100% { box-shadow: 0 0 6px #34D39970; }
+      50%       { box-shadow: 0 0 12px #34D399b0; }
+    }
+
+    @keyframes blink {
       0%, 100% { opacity: 1; }
-      50% { opacity: 0.3; }
+      50%       { opacity: 0.3; }
     }
 
-    .status-text {
+    .status-info { flex: 1; }
+
+    .status-label {
       font-size: 12px;
-      font-weight: 500;
-      color: #9CA3AF;
-    }
-
-    .status-text strong {
       font-weight: 600;
-      color: #e2e8f0;
+      color: var(--t1);
     }
 
-    /* ── Info rows ── */
-    .info-block {
+    .status-sub {
+      font-size: 10.5px;
+      color: var(--t3);
+      margin-top: 1px;
+    }
+
+    .uptime-badge {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 3px 7px;
+      border-radius: 5px;
+      background: #1a2e22;
+      color: var(--emerald);
+      border: 1px solid #34D39930;
+      white-space: nowrap;
+    }
+
+    /* ── Stats row ───────────────────────────────── */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .stat {
+      padding: 10px 0;
       display: flex;
       flex-direction: column;
-      gap: 6px;
-      margin-bottom: 14px;
+      align-items: center;
+      gap: 3px;
+      border-right: 1px solid var(--border);
     }
 
-    .info-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      gap: 8px;
+    .stat:last-child { border-right: none; }
+
+    .stat-value {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--t1);
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
     }
 
-    .info-label {
-      color: #4B5563;
-      font-size: 11px;
-      font-weight: 500;
+    .stat-value.accent { color: var(--violet); }
+
+    .stat-label {
+      font-size: 9.5px;
+      color: var(--t3);
       text-transform: uppercase;
-      letter-spacing: 0.05em;
-      white-space: nowrap;
+      letter-spacing: 0.07em;
+      font-weight: 500;
     }
 
-    .info-value {
-      color: #9CA3AF;
-      font-size: 11px;
-      text-align: right;
+    /* ── Section ─────────────────────────────────── */
+    .section {
+      padding: 10px 14px 0;
+    }
+
+    .section-header {
+      font-size: 9.5px;
+      font-weight: 600;
+      color: var(--t3);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 7px;
+    }
+
+    /* ── Active tab card ─────────────────────────── */
+    .tab-card {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 8px 10px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      margin-bottom: 10px;
+      min-height: 38px;
+    }
+
+    .tab-favicon {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      flex-shrink: 0;
+      background: var(--border2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .tab-favicon img {
+      width: 14px;
+      height: 14px;
+      object-fit: contain;
+    }
+
+    .tab-info { flex: 1; overflow: hidden; }
+
+    .tab-title {
+      font-size: 11.5px;
+      font-weight: 500;
+      color: var(--t1);
+      white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: 140px;
     }
 
-    /* ── Divider ── */
-    .divider {
-      height: 1px;
-      background: #1f1f2e;
-      margin: 10px 0;
-    }
-
-    /* ── Install hint ── */
-    .hint {
-      font-size: 11px;
-      color: #374151;
-      line-height: 1.5;
-      padding: 8px 10px;
-      background: #0f0f1a;
-      border-radius: 6px;
-      border: 1px solid #1f1f2e;
-    }
-
-    .hint code {
-      font-family: 'SF Mono', Menlo, monospace;
-      color: #6B7280;
+    .tab-url {
       font-size: 10px;
+      color: var(--t3);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-top: 1px;
+    }
+
+    .tab-count-badge {
+      font-size: 9.5px;
+      color: var(--violet);
+      background: #8B5CF615;
+      border: 1px solid #8B5CF625;
+      border-radius: 4px;
+      padding: 2px 6px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    /* ── Recent commands ─────────────────────────── */
+    .activity-list {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      margin-bottom: 12px;
+    }
+
+    .activity-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 8px;
+      border-radius: 5px;
+      background: var(--card);
+      border: 1px solid var(--border);
+    }
+
+    .activity-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .activity-dot.ok   { background: var(--emerald); }
+    .activity-dot.fail { background: var(--rose); }
+
+    .activity-action {
+      flex: 1;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--t2);
+      font-family: 'SF Mono', 'Menlo', monospace;
+    }
+
+    .activity-time {
+      font-size: 10px;
+      color: var(--t4);
+      white-space: nowrap;
+    }
+
+    /* ── Empty / offline states ──────────────────── */
+    .empty-state {
+      font-size: 10.5px;
+      color: var(--t4);
+      text-align: center;
+      padding: 8px 0 12px;
+      font-style: italic;
+    }
+
+    .offline-card {
+      margin: 0 0 12px;
+      padding: 10px 12px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      font-size: 11px;
+      color: var(--t3);
+      line-height: 1.6;
+    }
+
+    .offline-card code {
+      font-family: 'SF Mono', Menlo, monospace;
+      color: var(--violet);
+      background: #8B5CF610;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 10.5px;
+    }
+
+    /* ── Footer ──────────────────────────────────── */
+    .footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .footer-addr {
+      font-size: 10px;
+      color: var(--t4);
+      font-family: 'SF Mono', Menlo, monospace;
+    }
+
+    .footer-indicator {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      color: var(--t3);
+    }
+
+    .footer-dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--t4);
+    }
+
+    .footer-dot.live {
+      background: var(--emerald);
+      box-shadow: 0 0 4px #34D39970;
     }
   </style>
 </head>
 <body>
+
+  <!-- Header -->
   <div class="header">
-    <span class="logo">◆ NEXUS</span>
-    <span class="logo-sub">Bridge</span>
-  </div>
-
-  <div class="status-row">
-    <div class="dot connecting" id="dot"></div>
-    <div class="status-text" id="status-text">Connecting<span id="ellipsis">…</span></div>
-  </div>
-
-  <div class="info-block" id="info-block" style="display:none">
-    <div class="info-row">
-      <span class="info-label">Port</span>
-      <span class="info-value">127.0.0.1:9338</span>
+    <div class="logo">
+      <div class="logo-icon">N</div>
+      <div>
+        <div class="logo-name">NEXUS</div>
+        <div class="logo-bridge">Bridge</div>
+      </div>
     </div>
-    <div class="info-row">
-      <span class="info-label">Since</span>
-      <span class="info-value" id="since-val">—</span>
+    <div class="header-right">
+      <span class="version-badge">v1.0</span>
     </div>
   </div>
 
-  <div class="hint" id="hint" style="display:none">
-    NEXUS is not running.<br>
-    Start it with <code>nexus start</code> then reload this extension.
+  <!-- Status hero -->
+  <div class="status-hero">
+    <div class="status-pill" id="status-pill">
+      <div class="status-dot connecting" id="status-dot"></div>
+      <div class="status-info">
+        <div class="status-label" id="status-label">Connecting…</div>
+        <div class="status-sub"  id="status-sub">Waiting for NEXUS</div>
+      </div>
+      <div class="uptime-badge" id="uptime-badge" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- Stats row -->
+  <div class="stats-row" id="stats-row">
+    <div class="stat">
+      <div class="stat-value accent" id="stat-cmds">—</div>
+      <div class="stat-label">Commands</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="stat-tabs">—</div>
+      <div class="stat-label">Tabs</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="stat-port">9338</div>
+      <div class="stat-label">Port</div>
+    </div>
+  </div>
+
+  <!-- Active tab (shown when connected) -->
+  <div id="connected-content">
+    <div class="section" style="padding-top:11px">
+      <div class="section-header">Active Tab</div>
+      <div class="tab-card" id="tab-card">
+        <div class="tab-favicon" id="tab-favicon">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+            <circle cx="5" cy="5" r="4" stroke="#475569" stroke-width="1.2"/>
+          </svg>
+        </div>
+        <div class="tab-info">
+          <div class="tab-title" id="tab-title">Loading…</div>
+          <div class="tab-url"   id="tab-url">—</div>
+        </div>
+        <div class="tab-count-badge" id="tab-count"></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header">Recent Commands</div>
+      <div class="activity-list" id="activity-list">
+        <div class="empty-state">No commands yet this session</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Offline hint (shown when disconnected) -->
+  <div id="offline-content" style="display:none">
+    <div class="section" style="padding-top:11px; padding-bottom:2px">
+      <div class="offline-card">
+        NEXUS is not running.<br>
+        Start it with <code>nexus start</code> or check that the service is active.
+        <br><br>
+        The extension will reconnect automatically when NEXUS comes online.
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <span class="footer-addr">ws://127.0.0.1:9338</span>
+    <div class="footer-indicator">
+      <div class="footer-dot" id="footer-dot"></div>
+      <span id="footer-status">offline</span>
+    </div>
   </div>
 
   <script src="popup.js"></script>
