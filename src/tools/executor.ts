@@ -50,9 +50,17 @@ const TOOL_RESULT_TAIL = 3_000;
  * FIX 4: Head+tail truncation for tool results.
  * Keeps first 3000 chars (command echo, headers) and last 3000 chars (errors, summaries).
  * Ensures we never lose the tail where errors typically appear.
+ *
+ * JSON results are never truncated mid-string — if the result looks like valid JSON
+ * we leave it intact so the LLM can parse it (e.g. screenshot base64, extract data).
  */
 function truncateToolResult(text: string): string {
   if (text.length <= TOOL_RESULT_MAX) return text;
+
+  // Don't truncate JSON — cutting inside a string produces invalid JSON the LLM can't use
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) return text;
+
   const total = text.length;
   const head = text.slice(0, TOOL_RESULT_HEAD);
   const tail = text.slice(total - TOOL_RESULT_TAIL);
