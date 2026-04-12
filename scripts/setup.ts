@@ -96,6 +96,9 @@ function showWelcome(): void {
         "\n" +
         chalk.cyan("  → ") +
         chalk.white("macOS permissions") +
+        "\n" +
+        chalk.cyan("  → ") +
+        chalk.white("Chrome browser extension") +
         "\n\n" +
         chalk.dim("Press Ctrl+C at any time to cancel."),
       {
@@ -112,7 +115,7 @@ function showWelcome(): void {
 // ─── Step 1: System Checks ──────────────────────────────────────────
 
 async function runSystemChecks(): Promise<void> {
-  stepHeader(1, 8, "System Check");
+  stepHeader(1, 9, "System Check");
 
   const checks = [
     {
@@ -192,7 +195,7 @@ async function setupTelegram(): Promise<{
   botToken: string;
   chatId: string;
 }> {
-  stepHeader(2, 8, "Telegram Bot Setup");
+  stepHeader(2, 9, "Telegram Bot Setup");
 
   console.log(
     boxen(
@@ -279,7 +282,7 @@ interface AIConfig {
 }
 
 async function setupAI(): Promise<AIConfig> {
-  stepHeader(3, 8, "AI Provider Setup");
+  stepHeader(3, 9, "AI Provider Setup");
 
   console.log(
     boxen(
@@ -322,7 +325,7 @@ async function setupAI(): Promise<AIConfig> {
 // ─── Step 4: Agent Selection ────────────────────────────────────────
 
 async function setupAgents(): Promise<string[]> {
-  stepHeader(4, 8, "Agent Selection");
+  stepHeader(4, 9, "Agent Selection");
 
   console.log(
     boxen(
@@ -420,7 +423,7 @@ async function setupPersonality(): Promise<{
   preset: string;
   traits: PersonalityTraits;
 }> {
-  stepHeader(5, 8, "Personality Setup");
+  stepHeader(5, 9, "Personality Setup");
 
   console.log(
     boxen(
@@ -584,7 +587,7 @@ async function runPermissionTest(fn: () => Promise<boolean>): Promise<boolean> {
 }
 
 async function setupPermissions(): Promise<void> {
-  stepHeader(6, 8, "macOS Permissions");
+  stepHeader(6, 9, "macOS Permissions");
 
   console.log(
     boxen(
@@ -777,7 +780,7 @@ async function writeConfiguration(opts: {
   agents: string[];
   personality: { preset: string; traits: PersonalityTraits };
 }): Promise<void> {
-  stepHeader(7, 8, "Configuration Generation");
+  stepHeader(7, 9, "Configuration Generation");
 
   const spin = ora({
     text: "Generating configuration...",
@@ -880,7 +883,7 @@ async function writeConfiguration(opts: {
 // ─── Step 8: Database Init ──────────────────────────────────────────
 
 async function initDatabase(): Promise<void> {
-  stepHeader(8, 8, "Database Initialization");
+  stepHeader(8, 9, "Database Initialization");
 
   const spin = ora({
     text: "Initializing memory database...",
@@ -968,12 +971,157 @@ async function initDatabase(): Promise<void> {
   }
 }
 
+// ─── Step 9: Chrome Extension ───────────────────────────────────────
+
+function detectChrome(): string | null {
+  const candidates = [
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+    '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+  ];
+  for (const p of candidates) {
+    try {
+      execSync(`ls "${p}"`, { stdio: 'pipe' });
+      return p;
+    } catch {}
+  }
+  return null;
+}
+
+function openChromeExtensions(chromePath: string): void {
+  // AppleScript approach is most reliable for chrome:// URLs
+  const appName = chromePath.includes('Chromium') ? 'Chromium'
+    : chromePath.includes('Canary') ? 'Google Chrome Canary'
+    : chromePath.includes('Brave') ? 'Brave Browser'
+    : 'Google Chrome';
+
+  try {
+    execSync(
+      `osascript -e 'tell application "${appName}" to activate' ` +
+      `-e 'delay 0.8' ` +
+      `-e 'tell application "${appName}" to open location "chrome://extensions"'`,
+      { stdio: 'pipe' }
+    );
+  } catch {
+    // Fallback: just open the browser
+    execSync(`open -a "${appName}"`, { stdio: 'pipe' });
+  }
+}
+
+async function testExtensionConnection(timeoutMs = 10000): Promise<boolean> {
+  try {
+    const { WebSocketServer } = await import('ws');
+    return new Promise((resolve) => {
+      const wss = new WebSocketServer({ port: 9338, host: '127.0.0.1' });
+      const timer = setTimeout(() => { wss.close(); resolve(false); }, timeoutMs);
+      wss.on('connection', () => { clearTimeout(timer); wss.close(); resolve(true); });
+      wss.on('error', () => { clearTimeout(timer); resolve(false); });
+    });
+  } catch {
+    return false;
+  }
+}
+
+async function setupChromeExtension(): Promise<boolean> {
+  stepHeader(9, 9, "Chrome Browser Extension");
+
+  const chromePath = detectChrome();
+
+  if (!chromePath) {
+    console.log(chalk.yellow("  ⚠  Google Chrome not detected on this Mac."));
+    console.log(chalk.dim("  Install Chrome and run ") + chalk.cyan("nexus extension") + chalk.dim(" to set it up later."));
+    console.log("");
+    return false;
+  }
+
+  const appLabel = chromePath.includes('Chromium') ? 'Chromium'
+    : chromePath.includes('Canary') ? 'Chrome Canary'
+    : chromePath.includes('Brave') ? 'Brave'
+    : 'Google Chrome';
+
+  console.log(chalk.dim(`  Found: ${appLabel}`));
+  console.log("");
+  console.log(
+    chalk.dim("  The NEXUS Bridge extension lets NEXUS control Chrome —") + "\n" +
+    chalk.dim("  navigate pages, click links, type text, fill forms,") + "\n" +
+    chalk.dim("  screenshot tabs, and extract content from any site.")
+  );
+  console.log("");
+
+  const shouldInstall = await confirm({
+    message: "Install the Chrome extension now?",
+    default: true,
+  });
+
+  if (!shouldInstall) {
+    console.log(chalk.dim("\n  Skipped. Run ") + chalk.cyan("nexus extension") + chalk.dim(" whenever you're ready.\n"));
+    return false;
+  }
+
+  const extensionPath = join(process.cwd(), "chrome-extension");
+
+  // Open Chrome extensions page
+  const spin = ora({ text: `Opening ${appLabel}…`, color: "magenta", indent: 2 }).start();
+  try {
+    openChromeExtensions(chromePath);
+    await sleep(1800);
+    spin.succeed(`${appLabel} opened to chrome://extensions`);
+  } catch {
+    spin.warn("Could not open Chrome automatically");
+    console.log(chalk.dim("  Open Chrome manually and go to chrome://extensions"));
+  }
+
+  console.log("");
+  console.log(
+    boxen(
+      chalk.bold.white("Load the Extension\n\n") +
+      chalk.white("1. ") + chalk.cyan("Enable Developer mode") + chalk.white(" — toggle in top-right corner\n") +
+      chalk.white("2. ") + chalk.cyan("Click \"Load unpacked\"") + "\n" +
+      chalk.white("3. Select this folder:\n\n") +
+      chalk.cyan.bold(`   ${extensionPath}\n\n`) +
+      chalk.dim("The ◆ NEXUS Bridge extension will appear in the list.\n") +
+      chalk.dim("A ! badge on its icon means NEXUS isn't running yet — that's fine."),
+      {
+        padding: { top: 0, bottom: 0, left: 2, right: 2 },
+        margin: { left: 2, right: 0, top: 0, bottom: 0 },
+        borderStyle: "round",
+        borderColor: "cyan",
+        dimBorder: true,
+      }
+    )
+  );
+
+  console.log("");
+  await confirm({
+    message: "Press Enter once the extension is loaded in Chrome",
+    default: true,
+  });
+
+  // Quick connection test — start a temp WS server to see if extension connects
+  console.log("");
+  const testSpin = ora({ text: "Testing connection…", color: "cyan", indent: 2 }).start();
+  const connected = await testExtensionConnection(8000);
+
+  if (connected) {
+    testSpin.succeed(chalk.green("Chrome extension connected to NEXUS!"));
+    console.log(chalk.dim("  ✓ The extension will reconnect automatically every time Chrome and NEXUS start."));
+  } else {
+    testSpin.warn("Extension not detected yet — that's OK.");
+    console.log(chalk.dim("  The extension will connect automatically once you run ") + chalk.cyan("nexus start") + chalk.dim("."));
+  }
+
+  console.log("");
+  return connected;
+}
+
 // ─── Celebration Screen ─────────────────────────────────────────────
 
 function showCelebration(opts: {
   agents: string[];
   ai: AIConfig;
   personality: { preset: string; traits: PersonalityTraits };
+  extensionConnected: boolean;
 }): void {
   clearScreen();
   console.log(nexusGradient.multiline(LOGO));
@@ -1014,6 +1162,9 @@ function showCelebration(opts: {
         "\n" +
         chalk.cyan("  Database:     ") +
         chalk.white(DB_PATH) +
+        "\n" +
+        chalk.cyan("  Extension:    ") +
+        (opts.extensionConnected ? chalk.green("Connected ✓") : chalk.dim("Run nexus extension to install")) +
         "\n\n" +
         chalk.dim("─────────────────────────────────────────") +
         "\n\n" +
@@ -1082,8 +1233,11 @@ async function main(): Promise<void> {
   // Step 8: Database
   await initDatabase();
 
+  // Step 9: Chrome extension
+  const extensionConnected = await setupChromeExtension();
+
   // Celebration
-  showCelebration({ agents, ai, personality });
+  showCelebration({ agents, ai, personality, extensionConnected });
 }
 
 main().catch((err: unknown) => {

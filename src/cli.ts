@@ -320,12 +320,16 @@ program
       console.log(`${PAD}  ${ROSE('●')} ${chalk.dim('Stopped')}  ${chalk.dim('· nexus start to run')}`);
     }
 
+    // Check if Chrome extension is loaded (extension dir exists)
+    const extensionLoaded = existsSync(join(PROJECT_DIR, 'chrome-extension', 'manifest.json'));
+
     console.log('');
     section('System');
     console.log('');
-    row('  Config',  existsSync(CONFIG_PATH) ? 'found'         : 'missing',  existsSync(CONFIG_PATH)  ? EMERALD : ROSE);
-    row('  Logs',    existsSync(LOG_PATH)    ? 'found'         : 'not yet',  existsSync(LOG_PATH)     ? EMERALD : chalk.dim);
-    row('  launchd', existsSync(PLIST_PATH)  ? 'installed'     : 'not set',  existsSync(PLIST_PATH)   ? EMERALD : AMBER);
+    row('  Config',    existsSync(CONFIG_PATH) ? 'found'     : 'missing',  existsSync(CONFIG_PATH)  ? EMERALD : ROSE);
+    row('  Logs',      existsSync(LOG_PATH)    ? 'found'     : 'not yet',  existsSync(LOG_PATH)     ? EMERALD : chalk.dim);
+    row('  launchd',   existsSync(PLIST_PATH)  ? 'installed' : 'not set',  existsSync(PLIST_PATH)   ? EMERALD : AMBER);
+    row('  Extension', extensionLoaded         ? 'ready · nexus extension to link Chrome' : 'nexus extension to install', extensionLoaded ? chalk.dim : AMBER);
 
     showPhrase();
   });
@@ -683,15 +687,17 @@ program
       fail('Node.js', 'not found');
     }
 
-    const distOk = existsSync(join(PROJECT_DIR, 'dist', 'index.js'));
-    const configOk = existsSync(CONFIG_PATH);
-    const logsOk = existsSync(join(NEXUS_DIR, 'logs'));
-    const plistOk = existsSync(PLIST_PATH);
+    const distOk      = existsSync(join(PROJECT_DIR, 'dist', 'index.js'));
+    const configOk    = existsSync(CONFIG_PATH);
+    const logsOk      = existsSync(join(NEXUS_DIR, 'logs'));
+    const plistOk     = existsSync(PLIST_PATH);
+    const extensionOk = existsSync(join(PROJECT_DIR, 'chrome-extension', 'manifest.json'));
 
-    check('Build', distOk ? 'found' : 'missing', distOk);
-    check('Config', configOk ? 'found' : 'missing', configOk);
-    check('Logs dir', logsOk ? 'found' : 'missing', logsOk);
-    check('launchd', plistOk ? 'installed' : 'not installed', plistOk);
+    check('Build',     distOk      ? 'found'     : 'missing',       distOk);
+    check('Config',    configOk    ? 'found'     : 'missing',       configOk);
+    check('Logs dir',  logsOk      ? 'found'     : 'missing',       logsOk);
+    check('launchd',   plistOk     ? 'installed' : 'not installed', plistOk);
+    check('Extension', extensionOk ? 'found'     : 'not installed · run nexus extension', extensionOk);
 
     // Storage
     console.log('');
@@ -952,6 +958,101 @@ program
 
       showPhrase();
     });
+  });
+
+// ── nexus extension ───────────────────────────────────────────────────────────
+
+program
+  .command('extension')
+  .description('Install or reinstall the NEXUS Chrome extension')
+  .action(async () => {
+    showLogo(true);
+    section('Chrome Browser Extension');
+    console.log('');
+
+    const CHROME_PATHS = [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Chromium.app/Contents/MacOS/Chromium',
+      '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+      '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+    ];
+
+    const chromePath = CHROME_PATHS.find((p) => existsSync(p));
+
+    if (!chromePath) {
+      console.log(`${PAD}${AMBER('◆')} Chrome not found  ${chalk.dim('· install Google Chrome first')}`);
+      showPhrase();
+      return;
+    }
+
+    const appLabel = chromePath.includes('Chromium') ? 'Chromium'
+      : chromePath.includes('Canary') ? 'Chrome Canary'
+      : chromePath.includes('Brave') ? 'Brave'
+      : 'Google Chrome';
+
+    const extensionPath = join(PROJECT_DIR, 'chrome-extension');
+    row('Browser',   appLabel);
+    row('Extension', extensionPath);
+    console.log('');
+
+    // Open Chrome to chrome://extensions
+    console.log(`${PAD}${chalk.dim('→')} Opening ${appLabel} to chrome://extensions…`);
+    try {
+      const osScript = `osascript -e 'tell application "${appLabel}" to activate' -e 'delay 0.8' -e 'tell application "${appLabel}" to open location "chrome://extensions"'`;
+      execSync(osScript, { stdio: 'pipe' });
+    } catch {
+      try { execSync(`open -a "${appLabel}"`, { stdio: 'pipe' }); } catch {}
+    }
+
+    console.log('');
+    console.log(chalk.bold(`${PAD}Load the extension:`));
+    console.log(chalk.dim(`${PAD}${'─'.repeat(32)}`));
+    console.log(`${PAD}${chalk.dim('1.')} Enable ${VIOLET.bold('Developer mode')} — toggle in top-right`);
+    console.log(`${PAD}${chalk.dim('2.')} Click ${VIOLET.bold('"Load unpacked"')}`);
+    console.log(`${PAD}${chalk.dim('3.')} Select:`);
+    console.log('');
+    console.log(`${PAD}   ${VIOLET(extensionPath)}`);
+    console.log('');
+    console.log(chalk.dim(`${PAD}The ◆ NEXUS Bridge extension appears in the list.`));
+    console.log(chalk.dim(`${PAD}A ! badge means NEXUS isn't running yet — that's normal.`));
+    console.log('');
+
+    // Wait for user
+    const { createInterface } = await import('node:readline');
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    await new Promise<void>((resolve) => {
+      rl.question(chalk.dim(`${PAD}Press Enter once the extension is loaded… `), () => {
+        rl.close();
+        resolve();
+      });
+    });
+
+    // Test connection by spinning up a temporary WS server
+    console.log('');
+    process.stdout.write(`${PAD}${chalk.dim('→')} Testing connection… `);
+
+    let connected = false;
+    try {
+      const { WebSocketServer } = await import('ws');
+      connected = await new Promise<boolean>((resolve) => {
+        const wss = new WebSocketServer({ port: 9338, host: '127.0.0.1' });
+        const timer = setTimeout(() => { wss.close(); resolve(false); }, 8000);
+        wss.on('connection', () => { clearTimeout(timer); wss.close(); resolve(true); });
+        wss.on('error', () => { clearTimeout(timer); resolve(false); });
+      });
+    } catch { connected = false; }
+
+    if (connected) {
+      console.log(EMERALD('connected'));
+      console.log('');
+      console.log(`${PAD}${EMERALD('◆')} ${chalk.bold('Extension ready')}  ${chalk.dim('· auto-connects on every Chrome start')}`);
+    } else {
+      console.log(chalk.dim('not yet'));
+      console.log('');
+      console.log(`${PAD}${AMBER('◆')} Not detected  ${chalk.dim('· will connect automatically when nexus start runs')}`);
+    }
+
+    showPhrase();
   });
 
 // ── nexus mcp ─────────────────────────────────────────────────────────────────
