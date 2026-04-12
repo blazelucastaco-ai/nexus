@@ -149,7 +149,7 @@ async function cmdNavigate({ url }) {
   return ok({ url: updated.url, title: updated.title });
 }
 
-async function cmdClick({ selector, text, index = 0 }) {
+async function cmdClick({ selector = null, text = null, index = 0 }) {
   const tab = await getActiveTab();
   const result = await runInTab(tab.id, (sel, txt, idx) => {
     let el;
@@ -174,7 +174,7 @@ async function cmdClick({ selector, text, index = 0 }) {
   return ok(result);
 }
 
-async function cmdType({ selector, text, clear = false }) {
+async function cmdType({ selector = null, text, clear = false }) {
   const tab = await getActiveTab();
   const result = await runInTab(tab.id, (sel, txt, clr) => {
     const el = sel ? document.querySelector(sel) : document.activeElement;
@@ -226,7 +226,7 @@ async function cmdSelect({ selector, value }) {
   return ok(result);
 }
 
-async function cmdExtract({ selector, attribute, all = false }) {
+async function cmdExtract({ selector = null, attribute = null, all = false }) {
   const tab = await getActiveTab();
   const data = await runInTab(tab.id, (sel, attr, getAllResults) => {
     if (!sel) {
@@ -268,23 +268,28 @@ async function cmdScreenshot() {
 
 async function cmdEvaluate({ code }) {
   const tab = await getActiveTab();
-  // Use Function constructor to allow return statements
-  const result = await runInTab(tab.id, (c) => {
-    try {
-      // eslint-disable-next-line no-new-func
-      const fn = new Function(c);
-      const r = fn();
-      return { ok: true, result: typeof r === 'object' ? JSON.stringify(r) : String(r ?? '') };
-    } catch (e) {
-      return { ok: false, error: e.message };
-    }
-  }, [code]);
+  // Use MAIN world so the page's context allows Function/eval
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    world: 'MAIN',
+    func: (c) => {
+      try {
+        // eslint-disable-next-line no-new-func
+        const fn = new Function(c);
+        const r = fn();
+        return { ok: true, result: typeof r === 'object' ? JSON.stringify(r) : String(r ?? '') };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    },
+    args: [code],
+  });
 
-  if (!result.ok) return fail(result.error);
-  return ok({ result: result.result });
+  if (!result?.result?.ok) return fail(result?.result?.error ?? 'evaluate failed');
+  return ok({ result: result.result.result });
 }
 
-async function cmdScroll({ x = 0, y = 500, selector }) {
+async function cmdScroll({ x = 0, y = 500, selector = null }) {
   const tab = await getActiveTab();
   await runInTab(tab.id, (sel, dx, dy) => {
     if (sel) {

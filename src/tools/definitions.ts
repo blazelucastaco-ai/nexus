@@ -519,6 +519,195 @@ export const toolDefinitions: ToolDefinition[] = [
       required: ['command'],
     },
   },
+
+  // ── Chrome Browser Control (requires NEXUS Bridge extension) ─────────────
+
+  {
+    name: 'browser_navigate',
+    description:
+      'Navigate the active Chrome tab to a URL and wait for it to load. ' +
+      'Returns the final URL and page title. ' +
+      'Use when asked to visit a website, open a URL, or go to a page. ' +
+      'Requires the NEXUS Bridge Chrome extension to be connected.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'The full URL to navigate to (https://...)' },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'browser_extract',
+    description:
+      'Extract content from the current Chrome tab. Without a selector, returns full page text, title, URL, links, and headings. ' +
+      'With a CSS selector, returns the text of the matched element. ' +
+      'With attribute param, returns the attribute value. ' +
+      'Use when you need to read or scrape content from an open browser page.',
+    parameters: {
+      type: 'object',
+      properties: {
+        selector: { type: 'string', description: 'CSS selector to target a specific element (optional — omit for full page)' },
+        attribute: { type: 'string', description: 'HTML attribute to read (e.g. "href", "value", "src") — optional' },
+        all: { type: 'string', description: 'Set to "true" to return all matches, not just the first', enum: ['true', 'false'] },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'browser_click',
+    description:
+      'Click an element in the current Chrome tab by CSS selector or visible text. ' +
+      'Use for clicking buttons, links, checkboxes, menu items, etc.',
+    parameters: {
+      type: 'object',
+      properties: {
+        selector: { type: 'string', description: 'CSS selector of the element to click' },
+        text:     { type: 'string', description: 'Visible text of the element to click (alternative to selector)' },
+        index:    { type: 'number', description: 'Index (0-based) if multiple elements match the selector' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'browser_type',
+    description:
+      'Type text into an input field in the current Chrome tab. ' +
+      'Use for filling in search boxes, forms, text areas, etc.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text:     { type: 'string', description: 'Text to type into the element' },
+        selector: { type: 'string', description: 'CSS selector of the input to type into (optional — defaults to active element)' },
+        clear:    { type: 'string', description: 'Set to "true" to clear the field before typing', enum: ['true', 'false'] },
+      },
+      required: ['text'],
+    },
+  },
+  {
+    name: 'browser_screenshot',
+    description:
+      'Capture a screenshot of the current Chrome tab as a PNG image. ' +
+      'Returns a base64-encoded image. ' +
+      'Use when you need to see what\'s on screen, verify results, or share the current browser state.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'browser_scroll',
+    description: 'Scroll the current Chrome tab. Use to reveal more content or navigate long pages.',
+    parameters: {
+      type: 'object',
+      properties: {
+        y:        { type: 'number', description: 'Pixels to scroll vertically (positive = down, negative = up). Default 500.' },
+        x:        { type: 'number', description: 'Pixels to scroll horizontally (optional)' },
+        selector: { type: 'string', description: 'Scroll a specific element instead of the window (optional)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'browser_evaluate',
+    description:
+      'Execute arbitrary JavaScript in the current Chrome tab and return the result. ' +
+      'The code runs in the page\'s main context. ' +
+      'Use for reading page state, triggering actions, or extracting dynamic data.',
+    parameters: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'JavaScript code to execute. Can use return statements.' },
+      },
+      required: ['code'],
+    },
+  },
+  {
+    name: 'browser_wait_for',
+    description:
+      'Wait for a CSS selector to appear in the current Chrome tab. ' +
+      'Use before interacting with elements that load asynchronously.',
+    parameters: {
+      type: 'object',
+      properties: {
+        selector: { type: 'string', description: 'CSS selector to wait for' },
+        timeout:  { type: 'number', description: 'Max milliseconds to wait (default 10000)' },
+      },
+      required: ['selector'],
+    },
+  },
+  {
+    name: 'browser_get_info',
+    description: 'Get the URL, title, and tab ID of the currently active Chrome tab.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'browser_get_tabs',
+    description: 'List all open Chrome tabs with their IDs, URLs, and titles.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'browser_new_tab',
+    description: 'Open a new Chrome tab, optionally navigating to a URL.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'URL to open in the new tab (optional)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'browser_close_tab',
+    description: 'Close a Chrome tab. Closes the active tab if no tabId is given.',
+    parameters: {
+      type: 'object',
+      properties: {
+        tabId: { type: 'number', description: 'Tab ID to close (optional — defaults to active tab)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'browser_fill_form',
+    description:
+      'Fill multiple form fields in the current Chrome tab at once. ' +
+      'More efficient than multiple browser_type calls for forms with many fields.',
+    parameters: {
+      type: 'object',
+      properties: {
+        fields: {
+          type: 'string',
+          description: 'JSON array of {selector, value} pairs, e.g. [{"selector":"#email","value":"user@example.com"}]',
+        },
+      },
+      required: ['fields'],
+    },
+  },
+  {
+    name: 'browser_back',
+    description: 'Navigate the active Chrome tab back in history.',
+    parameters: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'browser_forward',
+    description: 'Navigate the active Chrome tab forward in history.',
+    parameters: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'browser_reload',
+    description: 'Reload the current Chrome tab and wait for it to finish loading.',
+    parameters: { type: 'object', properties: {}, required: [] },
+  },
 ];
 
 /**

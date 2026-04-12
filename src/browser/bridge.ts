@@ -19,6 +19,14 @@ export class BrowserBridge {
   private client: WebSocket | null = null;
   private readonly pending = new Map<string, PendingCommand>();
   private _connectedAt: Date | null = null;
+  private onConnectCb: (() => void) | null = null;
+  private onDisconnectCb: (() => void) | null = null;
+
+  /** Register a callback that fires whenever the Chrome extension connects. */
+  onConnect(cb: () => void): void { this.onConnectCb = cb; }
+
+  /** Register a callback that fires whenever the Chrome extension disconnects. */
+  onDisconnect(cb: () => void): void { this.onDisconnectCb = cb; }
 
   start(): void {
     if (this.wss) return;
@@ -37,6 +45,7 @@ export class BrowserBridge {
       log.info('Chrome extension connected');
       this.client = ws;
       this._connectedAt = new Date();
+      this.onConnectCb?.();
 
       ws.on('message', (raw) => {
         try {
@@ -70,6 +79,7 @@ export class BrowserBridge {
         if (this.client === ws) {
           this.client = null;
           this._connectedAt = null;
+          this.onDisconnectCb?.();
         }
         // Reject all pending commands
         for (const [id, pending] of this.pending) {

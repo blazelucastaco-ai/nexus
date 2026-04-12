@@ -52,6 +52,25 @@ async function main() {
   log.info('Starting browser bridge...');
   browserBridge.start();
 
+  // Notify Telegram when the Chrome extension connects / disconnects
+  browserBridge.onConnect(() => {
+    const chatId = config.telegram.chatId;
+    if (chatId) {
+      telegram.sendMessage(chatId, '🌐 Chrome extension connected — browser control is live.')
+        .catch((err) => log.warn({ err }, 'Failed to send browser connect notification'));
+    }
+    log.info('Browser bridge: Chrome extension is connected');
+  });
+
+  browserBridge.onDisconnect(() => {
+    const chatId = config.telegram.chatId;
+    if (chatId) {
+      telegram.sendMessage(chatId, '⚠️ Chrome extension disconnected — browser tools unavailable until it reconnects.')
+        .catch((err) => log.warn({ err }, 'Failed to send browser disconnect notification'));
+    }
+    log.warn('Browser bridge: Chrome extension disconnected');
+  });
+
   // Create and wire up orchestrator
   const orchestrator = new Orchestrator();
   orchestrator.init({ memory, personality, agents, ai, telegram, macos, learning });

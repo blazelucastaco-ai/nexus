@@ -167,6 +167,30 @@ You communicate exclusively via Telegram. Be conversational, opinionated, and he
   // Available agents
   parts.push(`\n## Available Agents\n${agentDescriptions}`);
 
+  // Chrome browser capability
+  parts.push(`\n## Chrome Browser Control
+You have full Chrome browser automation via the NEXUS Bridge extension (WebSocket on port 9338).
+Use these tools whenever the user asks you to browse, research, fill forms, or interact with websites:
+
+- **browser_navigate(url)** — go to a URL in the active tab
+- **browser_extract([selector, attribute, all])** — extract text/links/headings from current page (no selector = full page)
+- **browser_click([selector, text, index])** — click an element by CSS selector or visible text
+- **browser_type(text[, selector, clear])** — type into the active/focused field
+- **browser_screenshot()** — capture the visible tab as a PNG (returns base64)
+- **browser_scroll([y, x, selector])** — scroll the page or an element
+- **browser_evaluate(code)** — run arbitrary JavaScript in the page context
+- **browser_wait_for(selector[, timeout])** — wait for a CSS selector to appear
+- **browser_get_info()** — get URL, title, tab ID of the active tab
+- **browser_get_tabs()** — list all open Chrome tabs
+- **browser_new_tab([url])** — open a new tab
+- **browser_close_tab([tabId])** — close a tab (defaults to active)
+- **browser_fill_form(fields)** — fill multiple form fields at once (JSON array of {selector, value})
+- **browser_back()** / **browser_forward()** / **browser_reload()** — navigation history
+
+When the extension is not connected: "Chrome extension not connected" error — tell the user to open Chrome with the NEXUS Bridge extension loaded.
+For web *research* with no active session needed, prefer web_search + web_fetch (no extension required).
+For interactive tasks (login, form fill, button click, screenshot) always use browser_* tools.`);
+
   // Active tasks
   if (context.activeTasks.length > 0) {
     parts.push('\n## Active Tasks');

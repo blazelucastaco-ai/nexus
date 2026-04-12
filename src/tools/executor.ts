@@ -93,6 +93,23 @@ const TOOL_RISK: Record<string, 'AUTO' | 'LOGGED' | 'CONFIRM'> = {
   transcribe_audio:    'AUTO',
   // Approval
   check_command_risk:  'AUTO',
+  // Chrome Browser Control
+  browser_navigate:    'AUTO',
+  browser_extract:     'AUTO',
+  browser_screenshot:  'AUTO',
+  browser_scroll:      'AUTO',
+  browser_wait_for:    'AUTO',
+  browser_get_info:    'AUTO',
+  browser_get_tabs:    'AUTO',
+  browser_back:        'AUTO',
+  browser_forward:     'AUTO',
+  browser_reload:      'AUTO',
+  browser_click:       'LOGGED',
+  browser_type:        'LOGGED',
+  browser_evaluate:    'LOGGED',
+  browser_new_tab:     'LOGGED',
+  browser_close_tab:   'LOGGED',
+  browser_fill_form:   'LOGGED',
 };
 
 // Commands that require explicit user approval — returned as a confirmation prompt
@@ -293,6 +310,23 @@ export class ToolExecutor {
       // Execution approval
       case 'check_updates':       return this.checkUpdates();
       case 'check_command_risk':  return this.checkCommandRisk(args);
+      // Chrome Browser Control
+      case 'browser_navigate':    return this.runBrowserTool('navigate',   args);
+      case 'browser_extract':     return this.runBrowserTool('extract',    args);
+      case 'browser_click':       return this.runBrowserTool('click',      args);
+      case 'browser_type':        return this.runBrowserTool('type',       args);
+      case 'browser_screenshot':  return this.runBrowserTool('screenshot', {});
+      case 'browser_scroll':      return this.runBrowserTool('scroll',     args);
+      case 'browser_evaluate':    return this.runBrowserTool('evaluate',   args);
+      case 'browser_wait_for':    return this.runBrowserTool('wait_for',   args);
+      case 'browser_get_info':    return this.runBrowserTool('get_info',   {});
+      case 'browser_get_tabs':    return this.runBrowserTool('get_tabs',   {});
+      case 'browser_new_tab':     return this.runBrowserTool('new_tab',    args);
+      case 'browser_close_tab':   return this.runBrowserTool('close_tab',  args);
+      case 'browser_fill_form':   return this.runBrowserToolFillForm(args);
+      case 'browser_back':        return this.runBrowserTool('back',       {});
+      case 'browser_forward':     return this.runBrowserTool('forward',    {});
+      case 'browser_reload':      return this.runBrowserTool('reload',     {});
       default: {
         // Check plugin handlers
         for (const plugin of this.plugins) {
@@ -1161,5 +1195,29 @@ export class ToolExecutor {
             ? '📝 This command will run but will be logged.'
             : '✅ This command is safe to run.',
     ].filter(Boolean).join('\n');
+  }
+
+  // ── Chrome Browser Control ──────────────────────────────────────────
+
+  private async runBrowserTool(action: string, args: Record<string, unknown>): Promise<string> {
+    const result = await this.agents.dispatch('browser', action, args);
+    if (!result.success) {
+      return `Browser error: ${result.error ?? 'Extension not connected or command failed'}`;
+    }
+    return typeof result.data === 'string' ? result.data : JSON.stringify(result.data, null, 2);
+  }
+
+  /**
+   * browser_fill_form accepts fields as either a parsed array or a JSON string.
+   * The LLM passes it as a JSON string in the tool arguments.
+   */
+  private async runBrowserToolFillForm(args: Record<string, unknown>): Promise<string> {
+    let fields = args.fields;
+    if (typeof fields === 'string') {
+      try { fields = JSON.parse(fields); } catch {
+        return 'Browser error: fields must be a valid JSON array of {selector, value} objects';
+      }
+    }
+    return this.runBrowserTool('fill_form', { fields });
   }
 }

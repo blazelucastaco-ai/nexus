@@ -320,8 +320,13 @@ program
       console.log(`${PAD}  ${ROSE('●')} ${chalk.dim('Stopped')}  ${chalk.dim('· nexus start to run')}`);
     }
 
-    // Check if Chrome extension is loaded (extension dir exists)
+    // Check if Chrome extension files exist and if bridge is listening (port 9338)
     const extensionLoaded = existsSync(join(PROJECT_DIR, 'chrome-extension', 'manifest.json'));
+    let bridgeListening = false;
+    try {
+      spawnSync('nc', ['-z', '-w', '1', '127.0.0.1', '9338'], { stdio: 'ignore', timeout: 1500 });
+      bridgeListening = spawnSync('nc', ['-z', '-w', '1', '127.0.0.1', '9338'], { stdio: 'ignore', timeout: 1500 }).status === 0;
+    } catch { bridgeListening = false; }
 
     console.log('');
     section('System');
@@ -330,6 +335,7 @@ program
     row('  Logs',      existsSync(LOG_PATH)    ? 'found'     : 'not yet',  existsSync(LOG_PATH)     ? EMERALD : chalk.dim);
     row('  launchd',   existsSync(PLIST_PATH)  ? 'installed' : 'not set',  existsSync(PLIST_PATH)   ? EMERALD : AMBER);
     row('  Extension', extensionLoaded         ? 'ready · nexus extension to link Chrome' : 'nexus extension to install', extensionLoaded ? chalk.dim : AMBER);
+    row('  Browser',   bridgeListening         ? 'bridge listening on :9338' : 'bridge offline · start nexus', bridgeListening ? EMERALD : chalk.dim);
 
     showPhrase();
   });
@@ -692,12 +698,17 @@ program
     const logsOk      = existsSync(join(NEXUS_DIR, 'logs'));
     const plistOk     = existsSync(PLIST_PATH);
     const extensionOk = existsSync(join(PROJECT_DIR, 'chrome-extension', 'manifest.json'));
+    let bridgeOk = false;
+    try {
+      bridgeOk = spawnSync('nc', ['-z', '-w', '1', '127.0.0.1', '9338'], { stdio: 'ignore', timeout: 1500 }).status === 0;
+    } catch { bridgeOk = false; }
 
     check('Build',     distOk      ? 'found'     : 'missing',       distOk);
     check('Config',    configOk    ? 'found'     : 'missing',       configOk);
     check('Logs dir',  logsOk      ? 'found'     : 'missing',       logsOk);
     check('launchd',   plistOk     ? 'installed' : 'not installed', plistOk);
     check('Extension', extensionOk ? 'found'     : 'not installed · run nexus extension', extensionOk);
+    check('Bridge',    bridgeOk    ? 'listening on :9338' : 'offline · start nexus', bridgeOk);
 
     // Storage
     console.log('');
