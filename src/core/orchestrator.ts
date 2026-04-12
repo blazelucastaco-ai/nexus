@@ -611,7 +611,11 @@ export class Orchestrator {
 
       // ── FIX 3: Tool loop detection state ──────────────────────────
       const toolCallCounts = new Map<string, number>();
+      const toolNameCounts = new Map<string, number>(); // per-name count regardless of args
       const recentToolSequence: string[] = [];
+      // Hard cap on screenshot-type tools per turn — these should be used sparingly
+      const SCREENSHOT_TOOLS = new Set(['browser_screenshot', 'take_screenshot', 'understand_image']);
+      const MAX_SCREENSHOTS_PER_TURN = 2;
 
       for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
         // ── FIX 2: LLM-driven compaction ──────────────────────────
@@ -721,12 +725,22 @@ export class Orchestrator {
           const comboKey = `${toolName}:${argsHash}`;
           const comboCount = (toolCallCounts.get(comboKey) ?? 0) + 1;
           toolCallCounts.set(comboKey, comboCount);
+          const nameCount = (toolNameCounts.get(toolName) ?? 0) + 1;
+          toolNameCounts.set(toolName, nameCount);
           recentToolSequence.push(comboKey);
 
+          // Hard cap: screenshot tools max 2 per turn
+          if (SCREENSHOT_TOOLS.has(toolName) && nameCount > MAX_SCREENSHOTS_PER_TURN) {
+            log.warn({ toolName, nameCount }, 'Screenshot cap reached — blocking further screenshot calls this turn');
+            jobs.push({ toolCall, toolName, toolArgs, loopBlocked: true });
+            loopDetected = true;
+            break;
+          }
+
+          // Same tool+args called 2+ times: warn LLM on 2nd, block on 3rd
           if (comboCount >= 3) {
             log.warn({ toolName, comboKey, count: comboCount }, 'Tool loop detected — same tool+args called 3+ times');
             jobs.push({ toolCall, toolName, toolArgs, loopBlocked: true });
-            finalContent = "I noticed I was repeating the same action. Let me try a different approach.";
             loopDetected = true;
             break;
           }
@@ -825,8 +839,11 @@ export class Orchestrator {
           }
         }
 
-        // Break out of outer loop if tool loop was detected
-        if (loopDetected) break;
+        // Break out of outer loop if tool loop was detected during this iteration
+        if (loopDetected) {
+          if (!finalContent) finalContent = 'I hit a repeated action and stopped to avoid a loop. Let me know how you\'d like me to proceed.';
+          break;
+        }
 
         // If this was the last iteration, the next loop will get the final response
         // (or we'll hit the max and use whatever content we have)

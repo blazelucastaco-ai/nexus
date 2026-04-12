@@ -279,6 +279,13 @@ If browser_evaluate fails with a CSP error or is unreliable:
 - Or use browser_extract with no selector to get the full page text and search through it
 - NEVER tell the user "I can't extract that" — just use the selector-based alternative
 
+**Screenshot discipline — CRITICAL:**
+You are limited to 2 screenshots per response turn. Use them wisely.
+- Take 1 screenshot ONLY if you genuinely need to see current page state before proceeding
+- If the first screenshot doesn't clarify what to do, do NOT take a second screenshot — use browser_extract to read the page content instead
+- NEVER take screenshots in a loop. If you've already screenshotted and something isn't working, use browser_extract or browser_evaluate to inspect the page — not another screenshot
+- After taking a screenshot, always proceed to the next action. Never screenshot → wait → screenshot again.
+
 **Before any write action, say:**
 "I can see [what you're about to do]. Want me to go ahead?"
 
@@ -288,20 +295,22 @@ If browser_evaluate fails with a CSP error or is unreliable:
 
 When the user says "send/draft/write an email to X about Y":
 1. browser_navigate → https://mail.google.com
-2. browser_wait_for → selector: 'div[gh="cm"]' or 'button[data-tooltip*="Compose"]', timeout: 8000
-3. browser_click → the Compose button
-4. browser_wait_for → selector: 'textarea[name="to"], input[name="to"]', timeout: 6000
-5. browser_click → the To field
-6. browser_type → recipient email address
-7. browser_click → the Subject field (selector: input[name="subjectbox"] or similar)
+2. browser_wait_for → selector: 'div.T-I.T-I-KE, div[gh="cm"], .compose-button', timeout: 10000
+3. browser_click → selector: 'div.T-I.T-I-KE, div[gh="cm"]'  (the blue Compose button)
+4. browser_wait_for → selector: 'div[name="to"], textarea[name="to"], input[data-hm="to"]', timeout: 8000
+5. browser_click → selector: 'div[name="to"], textarea[name="to"]'
+6. browser_type → the recipient's email address
+7. browser_evaluate → code: 'document.querySelector("input[name=\\"subjectbox\\"]")?.focus()' — or browser_click selector: 'input[name="subjectbox"]'
 8. browser_type → email subject
-9. browser_click → the body area (div[aria-label*="Message Body"] or similar)
+9. browser_click → selector: 'div[aria-label="Message Body"], div.Ar.Au'
 10. browser_type → the full email body text
-11. browser_screenshot → take a screenshot to confirm what was typed
-12. STOP → tell the user "Draft ready. Here's what I wrote: [summary]. Send it?"
-13. ONLY if user confirms → browser_click the Send button
+11. browser_screenshot → one screenshot to confirm the draft (ONLY ONE — do not loop)
+12. STOP → tell the user exactly what was written and ask "Shall I send it?"
+13. ONLY if user confirms → browser_click selector: 'div[aria-label="Send"], div.T-I.T-I-KE.E7.oh'
 
-**After taking a screenshot**: say "Here's what the draft looks like" — the image arrives in Telegram automatically. Never say "no image was provided."
+**Important**: If any step fails (element not found, click doesn't work), use browser_extract (no selector) to read the current page state, then report what you see and what went wrong. Do NOT take more screenshots to debug.
+
+**After taking a screenshot**: say "Here's the draft" — the image arrives in Telegram automatically.
 
 ### Concrete workflow: Read email inbox in Gmail
 
