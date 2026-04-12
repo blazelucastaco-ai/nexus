@@ -71,6 +71,51 @@ const log = createLogger('Orchestrator');
 const MAX_TOOL_ITERATIONS = 50;
 const TOOL_TIMEOUT_MS = 120_000; // 2 minutes max per tool execution
 
+/** Map a tool call to a human-readable Telegram status line. */
+function getToolStatus(toolName: string, args: Record<string, unknown>): string {
+  const a = args ?? {};
+  const url = String(a.url ?? '').replace(/^https?:\/\//, '').slice(0, 55);
+  const path = String(a.path ?? '').replace(/.*\//, '').slice(0, 40);
+  const cmd  = String(a.command ?? '').slice(0, 45);
+  const q    = String(a.query ?? a.text ?? '').slice(0, 50);
+  switch (toolName) {
+    case 'web_search':          return `🔍 Searching: "${q}"`;
+    case 'web_fetch':           return `🌐 Fetching: ${url}`;
+    case 'crawl_url':           return `🕷️ Crawling: ${url}`;
+    case 'browser_navigate':    return `🌐 Navigating → ${url}`;
+    case 'browser_extract':     return `📄 Reading page content...`;
+    case 'browser_click':       return `👆 Clicking element on page...`;
+    case 'browser_type':        return `⌨️ Typing into field...`;
+    case 'browser_screenshot':  return `📸 Taking browser screenshot...`;
+    case 'browser_scroll':      return `📜 Scrolling page...`;
+    case 'browser_evaluate':    return `⚙️ Running JS on page...`;
+    case 'browser_wait_for':    return `⏳ Waiting for element to appear...`;
+    case 'browser_new_tab':     return `🔖 Opening new tab → ${url}`;
+    case 'browser_close_tab':   return `🔖 Closing tab...`;
+    case 'browser_get_info':    return `🌐 Checking active tab...`;
+    case 'browser_get_tabs':    return `🔖 Listing open tabs...`;
+    case 'browser_fill_form':   return `📝 Filling out form...`;
+    case 'browser_back':        return `⬅️ Going back...`;
+    case 'browser_forward':     return `➡️ Going forward...`;
+    case 'browser_reload':      return `🔄 Reloading page...`;
+    case 'take_screenshot':     return `📸 Taking screenshot...`;
+    case 'run_terminal_command':return `⚙️ Running: \`${cmd}\``;
+    case 'write_file':          return `💾 Writing: ${path}`;
+    case 'read_file':           return `📁 Reading: ${path}`;
+    case 'list_directory':      return `📁 Listing: ${String(a.path ?? '').slice(0, 40)}`;
+    case 'search_files':        return `🔍 Searching files...`;
+    case 'recall':              return `🧠 Recalling memories...`;
+    case 'remember':            return `💡 Saving to memory...`;
+    case 'get_system_info':     return `💻 Checking system info...`;
+    case 'understand_image':    return `👁️ Analyzing image...`;
+    case 'transcribe_audio':    return `🎙️ Transcribing audio...`;
+    case 'read_pdf':            return `📄 Reading PDF...`;
+    case 'introspect':          return `🔭 Introspecting state...`;
+    case 'check_updates':       return `🔄 Checking for updates...`;
+    default:                    return `⚙️ ${toolName.replace(/_/g, ' ')}...`;
+  }
+}
+
 /** Wrap a promise with a timeout. Rejects with a clear message if it takes too long. */
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -334,7 +379,7 @@ export class Orchestrator {
    * FIX 6: Serialize messages per chatId to prevent interleaving.
    * Each chatId gets its own promise chain — messages queue up and run one at a time.
    */
-  async handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void): Promise<string> {
+  async handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void, onStatus?: (status: string) => void): Promise<string> {
     let resolve!: () => void;
     const slot = new Promise<void>((r) => { resolve = r; });
 
@@ -344,7 +389,7 @@ export class Orchestrator {
     let result: string;
     try {
       await prev;
-      result = await this._handleMessage(chatId, text, onToken);
+      result = await this._handleMessage(chatId, text, onToken, onStatus);
     } finally {
       resolve();
       // Clean up map entry if queue is now idle
@@ -366,7 +411,7 @@ export class Orchestrator {
    *  6. Loop until no more tool_calls (max 10 iterations)
    *  7. Return final text content
    */
-  private async _handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void): Promise<string> {
+  private async _handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void, onStatus?: (status: string) => void): Promise<string> {
     const startTime = Date.now();
     log.info({ chatId, textLen: text.length }, 'Processing message');
 
@@ -622,6 +667,7 @@ export class Orchestrator {
 
         // If no tool calls, we're done — this is the final response
         if (!aiResponse.toolCalls || aiResponse.toolCalls.length === 0) {
+          if (toolCallCount > 0) onStatus?.('✍️ Writing response...');
           finalContent = aiResponse.content;
           break;
         }
@@ -714,6 +760,13 @@ export class Orchestrator {
 
           // Run parallel-safe tools concurrently
           if (parallelJobs.length > 0) {
+            // Emit combined status for parallel batch
+            if (parallelJobs.length === 1) {
+              onStatus?.(getToolStatus(parallelJobs[0].toolName, parallelJobs[0].toolArgs));
+            } else {
+              const names = parallelJobs.map(j => getToolStatus(j.toolName, j.toolArgs).split(' ').slice(0, 2).join(' ')).join(', ');
+              onStatus?.(`⚙️ Running in parallel: ${names}`);
+            }
             const parallelResults = await Promise.all(
               parallelJobs.map(async (job) => {
                 log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (parallel)');
@@ -743,6 +796,7 @@ export class Orchestrator {
               resultMap.set(job.toolCall.id, '[Loop detected: this exact action was already tried twice. Try a different approach.]');
               continue;
             }
+            onStatus?.(getToolStatus(job.toolName, job.toolArgs));
             log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (sequential)');
             let result = await withTimeout(this.toolExecutor.execute(job.toolName, job.toolArgs), TOOL_TIMEOUT_MS, job.toolName);
             result = repairToolResult(result);

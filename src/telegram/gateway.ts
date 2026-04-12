@@ -417,40 +417,64 @@ export class TelegramGateway {
         }
       }
 
-      // Default: route through orchestrator with streaming
+      // Default: route through orchestrator with live status updates
       if (this.orchestrator) {
         try {
-          // Send a placeholder message that we'll edit as tokens stream in
-          let streamMsgId: number | null = null;
-          let streamBuffer = '';
-          let lastEditTime = 0;
-          const EDIT_INTERVAL_MS = 800; // Don't edit faster than this (Telegram rate limits)
+          // ── Status message: shows what NEXUS is doing in real-time ──────────
+          let statusMsgId: number | null = null;
+          let lastStatusText = '';
+          let lastStatusEditTime = 0;
+          const STATUS_THROTTLE_MS = 1200; // Telegram rate-limit: don't edit faster than this
+
+          statusMsgId = await this.sendStreamingMessage(chatId, '⏳');
+
+          const onStatus = (status: string) => {
+            if (!statusMsgId || status === lastStatusText) return;
+            const now = Date.now();
+            if (now - lastStatusEditTime < STATUS_THROTTLE_MS) return;
+            lastStatusText = status;
+            lastStatusEditTime = now;
+            this.editMessage(chatId, statusMsgId!, status).catch(() => {});
+          };
+
+          // ── Response message: streams the final answer as it arrives ────────
+          let responseMsgId: number | null = null;
+          let responseBuffer = '';
+          let lastResponseEditTime = 0;
+          const RESPONSE_THROTTLE_MS = 900;
 
           const onToken = (chunk: string) => {
-            streamBuffer += chunk;
+            responseBuffer += chunk;
             const now = Date.now();
-            // Throttle edits to avoid Telegram rate limits
-            if (streamMsgId && now - lastEditTime >= EDIT_INTERVAL_MS) {
-              lastEditTime = now;
-              const preview = streamBuffer.slice(0, 4000) + ' ▍';
-              this.editMessage(chatId, streamMsgId, preview).catch(() => {});
+            if (now - lastResponseEditTime < RESPONSE_THROTTLE_MS) return;
+            lastResponseEditTime = now;
+
+            if (!responseMsgId) {
+              // Create the response message on first token
+              this.sendStreamingMessage(chatId, responseBuffer + ' ▍')
+                .then((id) => { responseMsgId = id; })
+                .catch(() => {});
+            } else {
+              this.editMessage(chatId, responseMsgId, responseBuffer.slice(0, 4000) + ' ▍').catch(() => {});
             }
           };
 
-          // Send initial "thinking" message
-          streamMsgId = await this.sendStreamingMessage(chatId, '⏳');
+          const response = await this.orchestrator.handleMessage(chatId, text, onToken, onStatus);
+          const formatted = markdownToHtml(sanitizePaths(response));
 
-          const response = await this.orchestrator.handleMessage(chatId, text, onToken);
-
-          // Finalize: edit the streaming message with the complete formatted response
-          if (streamMsgId && streamBuffer.length > 0) {
-            await this.finalizeStreamingMessage(chatId, streamMsgId, markdownToHtml(sanitizePaths(response)));
-          } else if (streamMsgId) {
-            // Non-streaming response (tool calls happened) — edit the placeholder
-            await this.finalizeStreamingMessage(chatId, streamMsgId, markdownToHtml(sanitizePaths(response)));
+          if (responseMsgId) {
+            // Finalize the response message that was already streaming
+            await this.finalizeStreamingMessage(chatId, responseMsgId, formatted);
+            // Update status to show done (keep it compact)
+            if (statusMsgId) await this.editMessage(chatId, statusMsgId, lastStatusText || '✅');
+          } else if (responseBuffer.length > 0) {
+            // Tokens arrived but message wasn't created yet — create it now
+            await this.sendMessage(chatId, formatted);
+            if (statusMsgId) await this.editMessage(chatId, statusMsgId, lastStatusText || '✅');
           } else {
-            // Fallback: couldn't create streaming message, send normally
-            await this.sendMessage(chatId, markdownToHtml(sanitizePaths(response)));
+            // No streaming at all (tool-only response, no LLM tokens) — send as new message
+            await this.sendMessage(chatId, formatted);
+            if (statusMsgId) await this.editMessage(chatId, statusMsgId, lastStatusText || '✅');
           }
         } catch (err) {
           log.error({ err, chatId }, 'Orchestrator message handling failed');
