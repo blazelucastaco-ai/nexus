@@ -98,6 +98,9 @@ export class Orchestrator {
   private readonly SUMMARY_EVERY_N_TURNS = 5;
   private readonly DREAM_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
+  // Session-level token usage tracking
+  private sessionTokens = { input: 0, output: 0, requests: 0 };
+
   // FIX 5: Runtime skill injection
   private cachedSkillsPrompt = '';
 
@@ -480,6 +483,13 @@ export class Orchestrator {
           tool_choice: 'auto',
           onToken,
         });
+
+        // Track token usage
+        if (aiResponse.tokensUsed) {
+          this.sessionTokens.input += aiResponse.tokensUsed.input;
+          this.sessionTokens.output += aiResponse.tokensUsed.output;
+          this.sessionTokens.requests += 1;
+        }
 
         // FIX 7: Empty response retry — Gemini occasionally returns blank content with no tool calls
         const isEmptyResponse =
@@ -1116,11 +1126,19 @@ ${insights.slice(0, 8).join('\n')}`);
       })),
       memoryStats,
       conversationLength: this.conversationHistory.length,
+      sessionTurns: this.sessionTurnCount,
+      sessionTokens: { ...this.sessionTokens },
       availableAgents: this.agents
         .getAvailableAgents()
         .map((a) => a.name),
       availableProviders: this.ai.getAvailableProviders(),
       eventQueueSize: this.eventLoop.queueSize,
+      learningStats: this.learning ? {
+        preferencesLearned: this.learning.preferences.getAllPreferences().length,
+        mistakesTracked: this.learning.mistakes.getMistakeStats().total,
+        recurringMistakes: this.learning.mistakes.getMistakeStats().recurring,
+      } : null,
+      opinionsHeld: this.personality ? this.personality.opinions.getAllOpinions().length : 0,
     };
   }
 
@@ -1208,6 +1226,24 @@ ${insights.slice(0, 8).join('\n')}`);
     });
 
     await storeSessionSummary(summary, this.memory, `session-${trigger}`, this.sessionTurnCount);
+
+    // Notify via Telegram — only for meaningful sessions (3+ turns)
+    if (summary && this.sessionTurnCount >= 3) {
+      const chatId = this.config.telegram.chatId;
+      if (chatId) {
+        try {
+          const triggerLabel = trigger === 'inactivity' ? 'went quiet' : trigger === 'shutdown' ? 'shutting down' : 'checkpoint';
+          const msg = [
+            `📋 <b>Session summary</b> <i>(${triggerLabel}, ${this.sessionTurnCount} turns)</i>`,
+            '',
+            summary,
+          ].join('\n');
+          await this.telegram.sendMessage(chatId, msg);
+        } catch (err) {
+          log.warn({ err }, 'Failed to send session summary to Telegram');
+        }
+      }
+    }
   }
 
   private resetInactivityTimer(): void {

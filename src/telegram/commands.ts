@@ -39,6 +39,11 @@ export const commands: BotCommand[] = [
   { command: 'settings', description: 'Show current configuration' },
   { command: 'workspace', description: 'List contents of the NEXUS workspace folder' },
   { command: 'think', description: 'Toggle think mode, or /think <topic> for one-shot inner monologue' },
+  { command: 'preferences', description: 'What I\'ve learned about your preferences' },
+  { command: 'patterns', description: 'Behavioral patterns I\'ve detected' },
+  { command: 'opinions', description: 'My current opinions and stances' },
+  { command: 'journal', description: 'Recent tool activity log' },
+  { command: 'mistakes', description: 'Mistakes I\'ve tracked and learned from' },
   { command: 'quiet', description: 'Disable proactive system alerts' },
   { command: 'loud', description: 'Enable proactive system alerts' },
   { command: 'stop', description: 'Graceful shutdown' },
@@ -121,8 +126,6 @@ export async function handleScreenshot(ctx: Context): Promise<void> {
 export async function handleTasks(ctx: Context, orchestrator: Orchestrator): Promise<void> {
   try {
     const status = orchestrator.getStatus();
-    // The orchestrator doesn't expose tasks directly, but we can get them from status
-    // For now, show what we have
     const activeTasks = (status.activeTasks as number) ?? 0;
 
     if (activeTasks === 0) {
@@ -212,7 +215,6 @@ export async function handleSettings(ctx: Context): Promise<void> {
       memory: config.memory,
       ai: {
         ...config.ai,
-        // Don't redact provider/model — just sensitive keys if any
       },
       telegram: {
         botToken: '***REDACTED***',
@@ -243,7 +245,6 @@ export async function handleThink(ctx: Context, orchestrator: Orchestrator): Pro
     const text = ctx.message?.text ?? '';
     const topic = text.replace(/^\/think\s*/, '').trim();
 
-    // No topic = toggle think mode on/off
     if (!topic) {
       if (!orchestrator.innerMonologue) {
         await ctx.reply('Inner monologue module not initialized.', { parse_mode: 'HTML' });
@@ -259,7 +260,6 @@ export async function handleThink(ctx: Context, orchestrator: Orchestrator): Pro
       return;
     }
 
-    // Topic provided = one-shot inner monologue on that topic
     await ctx.replyWithChatAction('typing');
 
     if (!orchestrator.ai) {
@@ -298,6 +298,254 @@ export async function handleThink(ctx: Context, orchestrator: Orchestrator): Pro
   }
 }
 
+// ─── /preferences ────────────────────────────────────────────────────
+
+export async function handlePreferences(ctx: Context, orchestrator: Orchestrator): Promise<void> {
+  try {
+    if (!orchestrator.learning) {
+      await ctx.reply('Learning system not connected.', { parse_mode: 'HTML' });
+      return;
+    }
+
+    const prefs = orchestrator.learning.preferences.getAllPreferences();
+
+    const lines: string[] = ['<b>What I\'ve learned about you</b>\n'];
+
+    if (prefs.length === 0) {
+      lines.push('<i>Not enough data yet — keep chatting and I\'ll pick up on your preferences.</i>');
+    } else {
+      for (const p of prefs) {
+        const bar = confidenceBar(p.confidence);
+        lines.push(`${bar} <b>${escapeHtml(p.category)}</b>`);
+        lines.push(`   → ${escapeHtml(p.value)}`);
+        lines.push(`   <i>${Math.round(p.confidence * 100)}% confident</i>`);
+        lines.push('');
+      }
+    }
+
+    // Also pull stored preference facts from semantic memory
+    try {
+      const storedFacts = orchestrator.memory.semantic.getPreferences().slice(0, 5);
+      if (storedFacts.length > 0 && prefs.length === 0) {
+        lines.push('<b>Stored facts:</b>');
+        for (const f of storedFacts) {
+          lines.push(`• <code>${escapeHtml(f.key)}</code>: ${escapeHtml(f.value)}`);
+        }
+      }
+    } catch {
+      // semantic memory may not be accessible
+    }
+
+    await ctx.reply(truncateMessage(lines.join('\n')), { parse_mode: 'HTML' });
+    log.info({ chatId: ctx.chat?.id, prefCount: prefs.length }, '/preferences command');
+  } catch (err) {
+    log.error({ err }, 'Error in /preferences');
+    await ctx.reply('Failed to retrieve preferences.');
+  }
+}
+
+// ─── /patterns ───────────────────────────────────────────────────────
+
+export async function handlePatterns(ctx: Context, orchestrator: Orchestrator): Promise<void> {
+  try {
+    if (!orchestrator.learning) {
+      await ctx.reply('Learning system not connected.', { parse_mode: 'HTML' });
+      return;
+    }
+
+    const temporal = orchestrator.learning.patterns.detectTemporalPatterns();
+    const sequences = orchestrator.learning.patterns.detectSequencePatterns();
+    const prefPatterns = orchestrator.learning.patterns.detectPreferencePatterns();
+
+    const lines: string[] = ['<b>Patterns I\'ve detected</b>\n'];
+
+    if (temporal.length === 0 && sequences.length === 0 && prefPatterns.length === 0) {
+      lines.push('<i>Not enough activity yet to detect patterns. Keep using NEXUS and I\'ll start recognizing your habits.</i>');
+    } else {
+      if (temporal.length > 0) {
+        lines.push('⏰ <b>Timing patterns:</b>');
+        for (const t of temporal.slice(0, 5)) {
+          const pct = Math.round(t.confidence * 100);
+          lines.push(`  • ${escapeHtml(t.pattern)} <i>(${pct}%)</i>`);
+        }
+        lines.push('');
+      }
+
+      if (sequences.length > 0) {
+        lines.push('🔗 <b>Sequences:</b>');
+        for (const s of sequences.slice(0, 5)) {
+          const pct = Math.round(s.confidence * 100);
+          const seq = s.sequence.map((x) => escapeHtml(x)).join(' → ');
+          lines.push(`  • ${seq} <i>(${pct}%)</i>`);
+        }
+        lines.push('');
+      }
+
+      if (prefPatterns.length > 0) {
+        lines.push('💡 <b>Preference patterns:</b>');
+        for (const p of prefPatterns.slice(0, 5)) {
+          const pct = Math.round(p.confidence * 100);
+          lines.push(`  • <b>${escapeHtml(p.category)}</b>: prefers <code>${escapeHtml(p.preference)}</code> <i>(${pct}%)</i>`);
+        }
+      }
+    }
+
+    await ctx.reply(truncateMessage(lines.join('\n')), { parse_mode: 'HTML' });
+    log.info({ chatId: ctx.chat?.id }, '/patterns command');
+  } catch (err) {
+    log.error({ err }, 'Error in /patterns');
+    await ctx.reply('Failed to retrieve patterns.');
+  }
+}
+
+// ─── /opinions ───────────────────────────────────────────────────────
+
+export async function handleOpinions(ctx: Context, orchestrator: Orchestrator): Promise<void> {
+  try {
+    if (!orchestrator.personality) {
+      await ctx.reply('Personality system not connected.', { parse_mode: 'HTML' });
+      return;
+    }
+
+    const allOpinions = orchestrator.personality.opinions.getAllOpinions();
+
+    const lines: string[] = ['<b>My current opinions</b>\n'];
+
+    if (allOpinions.length === 0) {
+      lines.push('<i>No opinions formed yet. Start debating with me and I\'ll develop stances.</i>');
+    } else {
+      const sorted = [...allOpinions].sort((a, b) => b.confidence - a.confidence);
+
+      for (const op of sorted.slice(0, 10)) {
+        const stanceLabel = op.stance > 0.3 ? '👍 for' : op.stance < -0.3 ? '👎 against' : '🤷 neutral on';
+        const strengthLabel = op.confidence >= 0.7 ? 'strongly' : op.confidence >= 0.4 ? 'moderately' : 'mildly';
+        const evidenceCount = op.evidence.length;
+
+        lines.push(`<b>${escapeHtml(op.topic)}</b>`);
+        lines.push(`   ${stanceLabel} — ${strengthLabel} (${Math.round(op.confidence * 100)}% confident)`);
+        lines.push(`   <i>${evidenceCount} piece${evidenceCount !== 1 ? 's' : ''} of evidence</i>`);
+        lines.push('');
+      }
+
+      if (allOpinions.length > 10) {
+        lines.push(`<i>…and ${allOpinions.length - 10} more opinions</i>`);
+      }
+    }
+
+    await ctx.reply(truncateMessage(lines.join('\n')), { parse_mode: 'HTML' });
+    log.info({ chatId: ctx.chat?.id, opinionCount: allOpinions.length }, '/opinions command');
+  } catch (err) {
+    log.error({ err }, 'Error in /opinions');
+    await ctx.reply('Failed to retrieve opinions.');
+  }
+}
+
+// ─── /journal ────────────────────────────────────────────────────────
+
+export async function handleJournal(ctx: Context): Promise<void> {
+  try {
+    const { readFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { homedir } = await import('node:os');
+
+    const journalPath = join(homedir(), '.nexus', 'task-journal.jsonl');
+
+    let raw: string;
+    try {
+      raw = await readFile(journalPath, 'utf-8');
+    } catch {
+      await ctx.reply('<b>Task Journal</b>\n\n<i>No entries yet — run some commands and I\'ll log them here.</i>', { parse_mode: 'HTML' });
+      return;
+    }
+
+    const lines = raw.trim().split('\n').filter(Boolean);
+    const recent = lines.slice(-15);
+
+    const output: string[] = ['<b>Task Journal</b> — last 15 entries\n'];
+
+    for (const line of recent) {
+      try {
+        const entry = JSON.parse(line) as {
+          timestamp: string;
+          toolName: string;
+          params: Record<string, unknown>;
+          result: string;
+          success: boolean;
+        };
+
+        const ts = new Date(entry.timestamp).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' });
+        const icon = entry.success ? '✓' : '✗';
+        const shortResult = (entry.result ?? '').replace(/\n/g, ' ').slice(0, 60);
+
+        output.push(`<code>${ts}</code> [${icon}] <b>${escapeHtml(entry.toolName)}</b>`);
+        if (shortResult) {
+          output.push(`  <i>${escapeHtml(shortResult)}${entry.result.length > 60 ? '…' : ''}</i>`);
+        }
+      } catch {
+        // skip malformed lines
+      }
+    }
+
+    output.push('');
+    output.push(`<i>${lines.length} total entries</i>`);
+
+    await ctx.reply(truncateMessage(output.join('\n')), { parse_mode: 'HTML' });
+    log.info({ chatId: ctx.chat?.id, entryCount: recent.length }, '/journal command');
+  } catch (err) {
+    log.error({ err }, 'Error in /journal');
+    await ctx.reply('Failed to read task journal.');
+  }
+}
+
+// ─── /mistakes ───────────────────────────────────────────────────────
+
+export async function handleMistakes(ctx: Context, orchestrator: Orchestrator): Promise<void> {
+  try {
+    if (!orchestrator.learning) {
+      await ctx.reply('Learning system not connected.', { parse_mode: 'HTML' });
+      return;
+    }
+
+    const stats = orchestrator.learning.mistakes.getMistakeStats();
+    const recurring = orchestrator.learning.mistakes.getRecurringMistakes();
+
+    const lines: string[] = ['<b>Mistake Tracker</b>\n'];
+
+    lines.push(`📊 <b>Stats:</b>`);
+    lines.push(`  Total recorded: <b>${stats.total}</b>`);
+    lines.push(`  Resolved: <b>${stats.resolved}</b>`);
+    lines.push(`  Recurring (not yet fixed): <b>${stats.recurring}</b>`);
+
+    if (Object.keys(stats.byCategory).length > 0) {
+      lines.push('');
+      lines.push('  <b>By category:</b>');
+      for (const [cat, count] of Object.entries(stats.byCategory)) {
+        lines.push(`    • ${escapeHtml(cat)}: ${count}`);
+      }
+    }
+
+    if (recurring.length > 0) {
+      lines.push('');
+      lines.push('⚠️ <b>Recurring mistakes:</b>');
+      for (const m of recurring.slice(0, 5)) {
+        lines.push(`  <b>${escapeHtml(m.description)}</b> (×${m.recurrenceCount + 1})`);
+        lines.push(`  <i>Prevention: ${escapeHtml(m.preventionStrategy)}</i>`);
+        lines.push('');
+      }
+    } else if (stats.total === 0) {
+      lines.push('\n<i>No mistakes recorded yet.</i>');
+    } else {
+      lines.push('\n<i>No recurring mistakes — clean record so far.</i>');
+    }
+
+    await ctx.reply(truncateMessage(lines.join('\n')), { parse_mode: 'HTML' });
+    log.info({ chatId: ctx.chat?.id, total: stats.total }, '/mistakes command');
+  } catch (err) {
+    log.error({ err }, 'Error in /mistakes');
+    await ctx.reply('Failed to retrieve mistake data.');
+  }
+}
+
 // ─── /stop ───────────────────────────────────────────────────────────
 
 export async function handleStop(ctx: Context): Promise<void> {
@@ -309,7 +557,6 @@ export async function handleStop(ctx: Context): Promise<void> {
 
     log.info({ chatId: ctx.chat?.id }, '/stop command — initiating shutdown');
 
-    // Give the message time to send before shutting down
     setTimeout(() => {
       process.emit('SIGTERM', 'SIGTERM');
     }, 1000);
@@ -330,7 +577,6 @@ export async function handleWorkspace(ctx: Context): Promise<void> {
 
     const workspacePath = join(homedir(), 'nexus-workspace');
 
-    // Create if missing
     if (!existsSync(workspacePath)) {
       await mkdir(workspacePath, { recursive: true });
     }
@@ -405,4 +651,11 @@ export async function handleHelp(ctx: Context): Promise<void> {
         commands.map((c) => `/${c.command} — ${c.description}`).join('\n'),
     );
   }
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────
+
+function confidenceBar(confidence: number): string {
+  const filled = Math.round(confidence * 5);
+  return '█'.repeat(filled) + '░'.repeat(5 - filled);
 }

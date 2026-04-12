@@ -17,6 +17,11 @@ import {
   handleSettings,
   handleWorkspace,
   handleThink,
+  handlePreferences,
+  handlePatterns,
+  handleOpinions,
+  handleJournal,
+  handleMistakes,
   handleQuiet,
   handleLoud,
   handleStop,
@@ -324,6 +329,28 @@ export class TelegramGateway {
     this.bot.command('think', (ctx) => {
       if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
       return handleThink(ctx, this.orchestrator);
+    });
+
+    this.bot.command('preferences', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      return handlePreferences(ctx, this.orchestrator);
+    });
+
+    this.bot.command('patterns', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      return handlePatterns(ctx, this.orchestrator);
+    });
+
+    this.bot.command('opinions', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      return handleOpinions(ctx, this.orchestrator);
+    });
+
+    this.bot.command('journal', (ctx) => handleJournal(ctx));
+
+    this.bot.command('mistakes', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      return handleMistakes(ctx, this.orchestrator);
     });
 
     this.bot.command('quiet', (ctx) => {

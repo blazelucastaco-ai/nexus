@@ -54,50 +54,71 @@ export function sanitizePaths(text: string): string {
  * Format a system status object into a rich Telegram HTML message.
  */
 export function formatStatus(status: Record<string, unknown>): string {
-  const uptime = status.uptime as number | undefined;
+  const uptime = status.uptimeFormatted as string | undefined;
   const mood = status.mood as string | undefined;
+  const emotion = status.emotion as string | undefined;
   const activeTasks = status.activeTasks as number | undefined;
   const availableProviders = status.availableProviders as string[] | undefined;
   const availableAgents = status.availableAgents as string[] | undefined;
-  const eventQueueSize = status.eventQueueSize as number | undefined;
+  const sessionTurns = status.sessionTurns as number | undefined;
+  const sessionTokens = status.sessionTokens as { input: number; output: number; requests: number } | undefined;
+  const learningStats = status.learningStats as { preferencesLearned: number; mistakesTracked: number; recurringMistakes: number } | null | undefined;
+  const opinionsHeld = status.opinionsHeld as number | undefined;
 
   const lines: string[] = [
-    '<b>NEXUS System Status</b>',
+    '<b>NEXUS Status</b>',
     '',
   ];
 
-  if (uptime !== undefined) {
-    const hours = Math.floor(uptime / 3600);
-    const mins = Math.floor((uptime % 3600) / 60);
-    const secs = uptime % 60;
-    lines.push(`<b>Uptime:</b> ${hours}h ${mins}m ${secs}s`);
-  }
-
+  // Identity
+  if (uptime) lines.push(`⏱ <b>Uptime:</b> ${escapeHtml(uptime)}`);
   if (mood) {
     const emoji = getMoodEmoji(mood as EmotionLabel);
-    lines.push(`<b>Mood:</b> ${emoji} ${escapeHtml(mood)}`);
+    const emotionStr = emotion ? ` · ${escapeHtml(emotion)}` : '';
+    lines.push(`${emoji} <b>Mood:</b> ${escapeHtml(mood)}${emotionStr}`);
   }
 
+  // Session
+  if (sessionTurns !== undefined || sessionTokens) {
+    lines.push('');
+    lines.push('<b>This session:</b>');
+    if (sessionTurns !== undefined) lines.push(`  Turns: ${sessionTurns}`);
+    if (sessionTokens && sessionTokens.requests > 0) {
+      const totalTokens = sessionTokens.input + sessionTokens.output;
+      lines.push(`  Tokens: ${totalTokens.toLocaleString()} (${sessionTokens.input.toLocaleString()} in / ${sessionTokens.output.toLocaleString()} out)`);
+      lines.push(`  LLM calls: ${sessionTokens.requests}`);
+    }
+  }
+
+  // Tasks
   if (activeTasks !== undefined) {
-    lines.push(`<b>Active Tasks:</b> ${activeTasks}`);
+    lines.push('');
+    lines.push(`📋 <b>Tasks:</b> ${activeTasks} active`);
   }
 
-  if (availableProviders && availableProviders.length > 0) {
-    lines.push(`<b>AI Providers:</b> ${availableProviders.map(escapeHtml).join(', ')}`);
-  }
-
+  // Agents & providers
   if (availableAgents && availableAgents.length > 0) {
-    lines.push(`<b>Available Agents:</b> ${availableAgents.length}`);
+    lines.push(`🤖 <b>Agents:</b> ${availableAgents.length} available`);
+  }
+  if (availableProviders && availableProviders.length > 0) {
+    lines.push(`🧠 <b>AI:</b> ${availableProviders.map(escapeHtml).join(', ')}`);
   }
 
-  if (eventQueueSize !== undefined) {
-    lines.push(`<b>Event Queue:</b> ${eventQueueSize}`);
+  // Learning & opinions
+  if (learningStats || opinionsHeld !== undefined) {
+    lines.push('');
+    lines.push('<b>What I know:</b>');
+    if (learningStats) {
+      lines.push(`  Preferences learned: ${learningStats.preferencesLearned}`);
+      lines.push(`  Mistakes tracked: ${learningStats.mistakesTracked} (${learningStats.recurringMistakes} recurring)`);
+    }
+    if (opinionsHeld !== undefined) lines.push(`  Opinions held: ${opinionsHeld}`);
   }
 
   // System resources
   const mem = process.memoryUsage();
   lines.push('');
-  lines.push('<b>System Resources:</b>');
+  lines.push('<b>Resources:</b>');
   lines.push(`  RSS: ${(mem.rss / 1024 / 1024).toFixed(1)} MB`);
   lines.push(`  Heap: ${(mem.heapUsed / 1024 / 1024).toFixed(1)} / ${(mem.heapTotal / 1024 / 1024).toFixed(1)} MB`);
 
@@ -331,17 +352,23 @@ export function formatWelcome(): string {
  */
 export function formatHelp(): string {
   const commands = [
-    { cmd: '/start', desc: 'Start NEXUS and see welcome message' },
-    { cmd: '/status', desc: 'System status and health check' },
-    { cmd: '/screenshot', desc: 'Capture and send a screenshot' },
-    { cmd: '/tasks', desc: 'List active and recent tasks' },
+    { cmd: '/status', desc: 'Full system status — uptime, tokens, learning stats' },
+    { cmd: '/mood', desc: 'My current emotional state' },
+    { cmd: '/preferences', desc: 'What I\'ve learned about your preferences' },
+    { cmd: '/patterns', desc: 'Behavioral patterns I\'ve detected' },
+    { cmd: '/opinions', desc: 'My current opinions and stances' },
+    { cmd: '/journal', desc: 'Recent tool activity log' },
+    { cmd: '/mistakes', desc: 'Mistakes I\'ve tracked and learned from' },
     { cmd: '/memory', desc: 'Memory layer statistics' },
-    { cmd: '/mood', desc: 'Current emotional state' },
-    { cmd: '/agents', desc: 'List available agents and status' },
-    { cmd: '/settings', desc: 'Show current configuration' },
-    { cmd: '/think', desc: 'Inner monologue on a topic — /think &lt;topic&gt;' },
+    { cmd: '/agents', desc: 'Available agents' },
+    { cmd: '/tasks', desc: 'Active tasks' },
+    { cmd: '/workspace', desc: 'Files in my workspace folder' },
+    { cmd: '/screenshot', desc: 'Capture a screenshot' },
+    { cmd: '/think', desc: 'Inner monologue — /think &lt;topic&gt;' },
+    { cmd: '/quiet', desc: 'Disable proactive alerts' },
+    { cmd: '/loud', desc: 'Enable proactive alerts' },
+    { cmd: '/settings', desc: 'Current configuration' },
     { cmd: '/stop', desc: 'Graceful shutdown' },
-    { cmd: '/help', desc: 'Show this help message' },
   ];
 
   const lines: string[] = [
