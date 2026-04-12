@@ -109,7 +109,7 @@ function showLogo(compact = false) {
 function showPhrase() {
   const phrase = randomPhrase().replace(/^🧠\s*/, '');
   console.log('');
-  console.log(chalk.dim(`${PAD}${phrase}`));
+  console.log(`${PAD}🧠 ${chalk.dim(`"${phrase}"`)}`);
   console.log('');
 }
 
