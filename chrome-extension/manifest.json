@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "NEXUS Bridge",
+  "version": "1.0.0",
+  "description": "Connects Chrome to your local NEXUS AI — letting it navigate, click, type, extract, and screenshot on your behalf.",
+
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "scripting",
+    "storage",
+    "webNavigation",
+    "alarms"
+  ],
+
+  "host_permissions": [
+    "<all_urls>"
+  ],
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "NEXUS Bridge"
+  },
+
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

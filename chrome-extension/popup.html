@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NEXUS Bridge</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      width: 260px;
+      background: #0d0d12;
+      color: #e2e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+      font-size: 13px;
+      padding: 16px;
+      user-select: none;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .logo {
+      font-size: 15px;
+      font-weight: 700;
+      color: #8B5CF6;
+      letter-spacing: 0.02em;
+    }
+
+    .logo-sub {
+      font-size: 11px;
+      color: #4B5563;
+      font-weight: 400;
+      margin-left: 2px;
+    }
+
+    /* ── Status pill ── */
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: #161622;
+      border: 1px solid #1f1f2e;
+      margin-bottom: 12px;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+
+    .dot.connected {
+      background: #34D399;
+      box-shadow: 0 0 6px #34D39966;
+    }
+
+    .dot.disconnected {
+      background: #F87171;
+    }
+
+    .dot.connecting {
+      background: #FBBF24;
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .status-text {
+      font-size: 12px;
+      font-weight: 500;
+      color: #9CA3AF;
+    }
+
+    .status-text strong {
+      font-weight: 600;
+      color: #e2e8f0;
+    }
+
+    /* ── Info rows ── */
+    .info-block {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 14px;
+    }
+
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    .info-label {
+      color: #4B5563;
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+    }
+
+    .info-value {
+      color: #9CA3AF;
+      font-size: 11px;
+      text-align: right;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 140px;
+    }
+
+    /* ── Divider ── */
+    .divider {
+      height: 1px;
+      background: #1f1f2e;
+      margin: 10px 0;
+    }
+
+    /* ── Install hint ── */
+    .hint {
+      font-size: 11px;
+      color: #374151;
+      line-height: 1.5;
+      padding: 8px 10px;
+      background: #0f0f1a;
+      border-radius: 6px;
+      border: 1px solid #1f1f2e;
+    }
+
+    .hint code {
+      font-family: 'SF Mono', Menlo, monospace;
+      color: #6B7280;
+      font-size: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span class="logo">◆ NEXUS</span>
+    <span class="logo-sub">Bridge</span>
+  </div>
+
+  <div class="status-row">
+    <div class="dot connecting" id="dot"></div>
+    <div class="status-text" id="status-text">Connecting<span id="ellipsis">…</span></div>
+  </div>
+
+  <div class="info-block" id="info-block" style="display:none">
+    <div class="info-row">
+      <span class="info-label">Port</span>
+      <span class="info-value">127.0.0.1:9338</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Since</span>
+      <span class="info-value" id="since-val">—</span>
+    </div>
+  </div>
+
+  <div class="hint" id="hint" style="display:none">
+    NEXUS is not running.<br>
+    Start it with <code>nexus start</code> then reload this extension.
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

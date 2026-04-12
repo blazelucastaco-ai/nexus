@@ -11,6 +11,7 @@ import { TelegramGateway } from './telegram/index.js';
 import { MacOSController } from './macos/index.js';
 import { LearningSystem } from './learning/index.js';
 import { checkPermissions, warnMissingPermissions } from './macos/permissions.js';
+import { browserBridge } from './browser/bridge.js';
 
 const log = createLogger('Main');
 
@@ -47,6 +48,10 @@ async function main() {
     chatId: config.telegram.chatId,
   });
 
+  // Start browser bridge (Chrome extension WebSocket server)
+  log.info('Starting browser bridge...');
+  browserBridge.start();
+
   // Create and wire up orchestrator
   const orchestrator = new Orchestrator();
   orchestrator.init({ memory, personality, agents, ai, telegram, macos, learning });
@@ -57,6 +62,7 @@ async function main() {
   // Handle graceful shutdown
   const shutdown = async () => {
     log.info('Received shutdown signal');
+    browserBridge.stop();
     await orchestrator.stop();
     process.exit(0);
   };
