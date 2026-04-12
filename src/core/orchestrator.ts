@@ -30,6 +30,7 @@ import { InnerMonologue } from '../brain/inner-monologue.js';
 import { appendTurn, loadSession } from './session-store.js';
 import { DreamingEngine } from '../brain/dreaming.js';
 import { ProactiveEngine } from '../brain/proactive.js';
+import { BriefingEngine } from '../brain/briefing.js';
 import { loadSkills, buildSkillsPrompt } from '../brain/skills.js';
 import { contextCache } from './context-cache.js';
 import { checkContextUsage, aggressiveCompact } from './context-guard.js';
@@ -100,6 +101,8 @@ export class Orchestrator {
 
   // Session-level token usage tracking
   private sessionTokens = { input: 0, output: 0, requests: 0 };
+
+  private briefingEngine?: BriefingEngine;
 
   // FIX 5: Runtime skill injection
   private cachedSkillsPrompt = '';
@@ -214,13 +217,26 @@ export class Orchestrator {
     // Schedule dream cycle every 6 hours
     this.scheduleDreamCycle();
 
-    // Start proactive monitoring (alerts to the primary Telegram user)
-    const primaryChatId = this.config.telegram.allowedUsers[0] ?? '';
+    // Start proactive monitoring + idle ideas + port monitoring
+    const primaryChatId = this.config.telegram.allowedUsers[0] ?? this.config.telegram.chatId ?? '';
     if (primaryChatId) {
-      this.proactive = new ProactiveEngine(async (msg) => {
-        await this.telegram.sendMessage(primaryChatId, msg);
-      });
+      this.proactive = new ProactiveEngine(
+        async (msg) => { await this.telegram.sendMessage(primaryChatId, msg); },
+        {
+          aiManager: this.ai,
+          memoryManager: this.memory,
+          getLastMessageTime: () => this.lastMessageTime,
+        },
+      );
       this.proactive.start();
+
+      // Start daily briefing engine
+      this.briefingEngine = new BriefingEngine(
+        async (msg) => { await this.telegram.sendMessage(primaryChatId, msg); },
+        this.ai,
+        8, // 8am
+      );
+      this.briefingEngine.start();
     }
 
     this.eventLoop.emit('system:started', { timestamp: nowISO() }, 'high', 'orchestrator');
@@ -251,6 +267,8 @@ export class Orchestrator {
       clearInterval(this.dreamInterval);
       this.dreamInterval = null;
     }
+
+    this.briefingEngine?.stop();
 
     this.proactive?.stop();
 
@@ -422,6 +440,14 @@ export class Orchestrator {
                     { importance: 0.8, tags: ['task', result.success ? 'success' : 'failure'], source: chatId },
                   );
                 } catch { /* non-fatal */ }
+
+                // Self-improvement: reflect on partial failures and store as procedural memory
+                const hadFailures = result.completedSteps < result.totalSteps;
+                if (hadFailures && this.ai) {
+                  this.runSelfImprovement(plan.title, text, result).catch((err) =>
+                    log.debug({ err }, 'Self-improvement reflection failed'),
+                  );
+                }
               }).catch((err) => {
                 log.error({ err, chatId }, 'Task runner failed');
                 this.telegram.sendMessage(chatId, 'Task failed unexpectedly. Check the logs.').catch(() => {});
@@ -1091,6 +1117,26 @@ ${insights.slice(0, 8).join('\n')}`);
 
   // ── Status & Introspection ────────────────────────────────────────
 
+  getPrimaryChatId(): string {
+    return this.config.telegram.allowedUsers[0] ?? this.config.telegram.chatId ?? '';
+  }
+
+  async sendBriefingNow(): Promise<void> {
+    if (this.briefingEngine) {
+      await this.briefingEngine.sendBriefingNow();
+    } else {
+      const chatId = this.getPrimaryChatId();
+      if (chatId) {
+        const engine = new BriefingEngine(
+          async (msg) => { await this.telegram.sendMessage(chatId, msg); },
+          this.ai,
+          8,
+        );
+        await engine.sendBriefingNow();
+      }
+    }
+  }
+
   getStatus(): Record<string, unknown> {
     const personalityState = this.personality.getPersonalityState();
     const memoryStats = this.memory.getStats();
@@ -1379,6 +1425,50 @@ ${insights.slice(0, 8).join('\n')}`);
     );
 
     return pruned;
+  }
+
+  private async runSelfImprovement(
+    taskTitle: string,
+    originalRequest: string,
+    result: { success: boolean; completedSteps: number; totalSteps: number; summary: string },
+  ): Promise<void> {
+    try {
+      const response = await this.ai.complete({
+        messages: [
+          {
+            role: 'user',
+            content:
+              `You are NEXUS. You just ran a task that partially failed.\n\n` +
+              `Task: "${taskTitle}"\n` +
+              `Request: "${originalRequest.slice(0, 300)}"\n` +
+              `Completed: ${result.completedSteps}/${result.totalSteps} steps\n` +
+              `Summary: ${result.summary.slice(0, 400)}\n\n` +
+              `In 1-2 sentences: what went wrong and what would you do differently next time? ` +
+              `Be specific and actionable. Output only the lesson, no preamble.`,
+          },
+        ],
+        maxTokens: 200,
+        temperature: 0.4,
+      });
+
+      const lesson = response.content.trim();
+      if (!lesson || lesson.length < 10) return;
+
+      await this.memory.store(
+        'procedural',
+        'procedure',
+        `[Self-improvement] Task: "${taskTitle}"\nLesson: ${lesson}`,
+        {
+          importance: 0.7,
+          tags: ['self-improvement', 'task-lesson', 'procedural'],
+          source: 'self-reflection',
+        },
+      );
+
+      log.info({ taskTitle, lesson: lesson.slice(0, 80) }, 'Self-improvement lesson stored');
+    } catch (err) {
+      log.debug({ err }, 'Self-improvement reflection skipped');
+    }
   }
 
   private scheduleDreamCycle(): void {

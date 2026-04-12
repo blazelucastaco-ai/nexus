@@ -22,6 +22,10 @@ import {
   handleOpinions,
   handleJournal,
   handleMistakes,
+  handleSearch,
+  handleForget,
+  handlePin,
+  handleBriefing,
   handleQuiet,
   handleLoud,
   handleStop,
@@ -351,6 +355,26 @@ export class TelegramGateway {
     this.bot.command('mistakes', (ctx) => {
       if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
       return handleMistakes(ctx, this.orchestrator);
+    });
+
+    this.bot.command('search', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      return handleSearch(ctx, this.orchestrator);
+    });
+
+    this.bot.command('forget', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      return handleForget(ctx, this.orchestrator);
+    });
+
+    this.bot.command('pin', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      return handlePin(ctx, this.orchestrator);
+    });
+
+    this.bot.command('briefing', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      return handleBriefing(ctx, this.orchestrator);
     });
 
     this.bot.command('quiet', (ctx) => {

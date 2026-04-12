@@ -44,6 +44,10 @@ export const commands: BotCommand[] = [
   { command: 'opinions', description: 'My current opinions and stances' },
   { command: 'journal', description: 'Recent tool activity log' },
   { command: 'mistakes', description: 'Mistakes I\'ve tracked and learned from' },
+  { command: 'search', description: 'Search memories — /search <query>' },
+  { command: 'forget', description: 'Delete memories about a topic — /forget <topic>' },
+  { command: 'pin', description: 'Pin a memory so it never decays — /pin <topic>' },
+  { command: 'briefing', description: 'Send today\'s morning briefing now' },
   { command: 'quiet', description: 'Disable proactive system alerts' },
   { command: 'loud', description: 'Enable proactive system alerts' },
   { command: 'stop', description: 'Graceful shutdown' },
@@ -650,6 +654,186 @@ export async function handleHelp(ctx: Context): Promise<void> {
       'Available commands:\n' +
         commands.map((c) => `/${c.command} — ${c.description}`).join('\n'),
     );
+  }
+}
+
+// ─── /search ─────────────────────────────────────────────────────────
+
+export async function handleSearch(ctx: Context, orchestrator: Orchestrator): Promise<void> {
+  try {
+    const text = ctx.message?.text ?? '';
+    const query = text.replace(/^\/search\s*/i, '').trim();
+
+    if (!query) {
+      await ctx.reply('<b>Search memories</b>\n\nUsage: <code>/search &lt;query&gt;</code>\nExample: <code>/search python project</code>', { parse_mode: 'HTML' });
+      return;
+    }
+
+    if (!orchestrator.memory) {
+      await ctx.reply('Memory system not connected.', { parse_mode: 'HTML' });
+      return;
+    }
+
+    await ctx.replyWithChatAction('typing');
+
+    const results = orchestrator.memory.recall(query, {
+      layers: ['episodic', 'semantic', 'procedural'],
+      limit: 8,
+      minImportance: 0.2,
+    });
+
+    const lines: string[] = [`<b>Memory search: "${escapeHtml(query)}"</b>\n`];
+
+    if (results.length === 0) {
+      lines.push('<i>No memories found matching that query.</i>');
+    } else {
+      for (const mem of results) {
+        const layerIcon = mem.layer === 'semantic' ? '🧠' : mem.layer === 'procedural' ? '⚙️' : '📖';
+        const date = new Date(mem.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
+        const preview = mem.content.replace(/\n/g, ' ').slice(0, 150);
+        const importance = Math.round((mem.importance ?? 0) * 100);
+
+        lines.push(`${layerIcon} <i>${escapeHtml(date)} · ${mem.layer} · ${importance}%</i>`);
+        lines.push(escapeHtml(preview) + (mem.content.length > 150 ? '…' : ''));
+        lines.push('');
+      }
+      lines.push(`<i>${results.length} result${results.length !== 1 ? 's' : ''}</i>`);
+    }
+
+    await ctx.reply(truncateMessage(lines.join('\n')), { parse_mode: 'HTML' });
+    log.info({ chatId: ctx.chat?.id, query, resultCount: results.length }, '/search command');
+  } catch (err) {
+    log.error({ err }, 'Error in /search');
+    await ctx.reply('Search failed.');
+  }
+}
+
+// ─── /forget ─────────────────────────────────────────────────────────
+
+export async function handleForget(ctx: Context, orchestrator: Orchestrator): Promise<void> {
+  try {
+    const text = ctx.message?.text ?? '';
+    const topic = text.replace(/^\/forget\s*/i, '').trim();
+
+    if (!topic) {
+      await ctx.reply('<b>Forget memories</b>\n\nUsage: <code>/forget &lt;topic&gt;</code>\nExample: <code>/forget my old API key</code>', { parse_mode: 'HTML' });
+      return;
+    }
+
+    if (!orchestrator.memory) {
+      await ctx.reply('Memory system not connected.', { parse_mode: 'HTML' });
+      return;
+    }
+
+    // Find matching memories
+    const matches = orchestrator.memory.recall(topic, {
+      layers: ['episodic', 'semantic'],
+      limit: 10,
+      minImportance: 0.0,
+    });
+
+    if (matches.length === 0) {
+      await ctx.reply(`<b>Forget</b>\n\nNo memories found matching "<code>${escapeHtml(topic)}</code>".`, { parse_mode: 'HTML' });
+      return;
+    }
+
+    // Delete from DB directly
+    const { getDatabase } = await import('../memory/database.js');
+    const db = getDatabase();
+    let deleted = 0;
+    for (const mem of matches) {
+      try {
+        const result = db.prepare('DELETE FROM memories WHERE id = ?').run(mem.id);
+        deleted += result.changes ?? 0;
+      } catch { /* skip */ }
+    }
+
+    const lines = [
+      `🗑️ <b>Forgotten</b>`,
+      '',
+      `Deleted <b>${deleted}</b> memor${deleted !== 1 ? 'ies' : 'y'} matching "<code>${escapeHtml(topic)}</code>":`,
+      '',
+      ...matches.slice(0, 5).map((m) => `• <i>${escapeHtml(m.content.slice(0, 80))}…</i>`),
+    ];
+
+    if (matches.length > 5) lines.push(`<i>…and ${matches.length - 5} more</i>`);
+
+    await ctx.reply(truncateMessage(lines.join('\n')), { parse_mode: 'HTML' });
+    log.info({ chatId: ctx.chat?.id, topic, deleted }, '/forget command');
+  } catch (err) {
+    log.error({ err }, 'Error in /forget');
+    await ctx.reply('Forget failed.');
+  }
+}
+
+// ─── /pin ────────────────────────────────────────────────────────────
+
+export async function handlePin(ctx: Context, orchestrator: Orchestrator): Promise<void> {
+  try {
+    const text = ctx.message?.text ?? '';
+    const topic = text.replace(/^\/pin\s*/i, '').trim();
+
+    if (!topic) {
+      await ctx.reply('<b>Pin a memory</b>\n\nUsage: <code>/pin &lt;topic&gt;</code>\nPinned memories get max importance and never decay.\nExample: <code>/pin my API keys setup</code>', { parse_mode: 'HTML' });
+      return;
+    }
+
+    if (!orchestrator.memory) {
+      await ctx.reply('Memory system not connected.', { parse_mode: 'HTML' });
+      return;
+    }
+
+    const matches = orchestrator.memory.recall(topic, {
+      layers: ['episodic', 'semantic', 'procedural'],
+      limit: 5,
+      minImportance: 0.0,
+    });
+
+    if (matches.length === 0) {
+      await ctx.reply(`<b>Pin</b>\n\nNo memories found matching "<code>${escapeHtml(topic)}</code>".`, { parse_mode: 'HTML' });
+      return;
+    }
+
+    const { getDatabase } = await import('../memory/database.js');
+    const db = getDatabase();
+    let pinned = 0;
+    for (const mem of matches) {
+      try {
+        const result = db.prepare('UPDATE memories SET importance = 1.0 WHERE id = ?').run(mem.id);
+        pinned += result.changes ?? 0;
+      } catch { /* skip */ }
+    }
+
+    const lines = [
+      `📌 <b>Pinned</b>`,
+      '',
+      `Set <b>${pinned}</b> memor${pinned !== 1 ? 'ies' : 'y'} to max importance — they won't decay:`,
+      '',
+      ...matches.slice(0, 5).map((m) => `• <i>${escapeHtml(m.content.slice(0, 80))}…</i>`),
+    ];
+
+    await ctx.reply(truncateMessage(lines.join('\n')), { parse_mode: 'HTML' });
+    log.info({ chatId: ctx.chat?.id, topic, pinned }, '/pin command');
+  } catch (err) {
+    log.error({ err }, 'Error in /pin');
+    await ctx.reply('Pin failed.');
+  }
+}
+
+// ─── /briefing ───────────────────────────────────────────────────────
+
+export async function handleBriefing(ctx: Context, orchestrator: Orchestrator): Promise<void> {
+  try {
+    await ctx.replyWithChatAction('typing');
+    await orchestrator.sendBriefingNow();
+    // briefing sends to the primary chat — if this was a different chat, acknowledge
+    const primaryChatId = orchestrator.getPrimaryChatId();
+    if (primaryChatId && String(ctx.chat?.id) !== primaryChatId) {
+      await ctx.reply('<i>Briefing sent to primary chat.</i>', { parse_mode: 'HTML' });
+    }
+  } catch (err) {
+    log.error({ err }, 'Error in /briefing');
+    await ctx.reply('Failed to send briefing.');
   }
 }
 
