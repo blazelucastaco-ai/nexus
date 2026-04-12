@@ -104,6 +104,16 @@ export class Orchestrator {
   // FIX 6: Per-chatId command queue for serialization
   private commandQueues = new Map<string, Promise<void>>();
 
+  // Task engine: track in-flight background tasks so callers can await them
+  private pendingTaskPromises: Promise<unknown>[] = [];
+
+  /** Wait for all currently-running background tasks to complete. */
+  async waitForPendingTasks(): Promise<void> {
+    if (this.pendingTaskPromises.length === 0) return;
+    await Promise.allSettled(this.pendingTaskPromises);
+    this.pendingTaskPromises = [];
+  }
+
   // Subsystems — set via init()
   public memory!: MemoryManager;
   public personality!: PersonalityEngine;
@@ -388,30 +398,34 @@ export class Orchestrator {
 
         if (plan) {
           // Run the task async — sends its own Telegram progress messages
-          setImmediate(() => {
-            runTask({
-              plan,
-              originalRequest: text,
-              chatId,
-              ai: this.ai,
-              toolExecutor: this.toolExecutor,
-              telegram: this.telegram,
-              model: this.config.ai.model,
-              maxTokens: this.config.ai.maxTokens,
-            }).then((result) => {
-              log.info({ chatId, success: result.success, steps: result.completedSteps }, 'Task completed');
-              // Store in memory
-              this.memory.store(
-                'episodic',
-                'task',
-                `Task: ${plan.title}\nRequest: ${text}\nResult: ${result.success ? 'success' : 'partial'}\nFiles: ${result.filesProduced.join(', ')}`,
-                { importance: 0.8, tags: ['task', result.success ? 'success' : 'failure'], source: chatId },
-              ).catch(() => {});
-            }).catch((err) => {
-              log.error({ err, chatId }, 'Task runner failed');
-              this.telegram.sendMessage(chatId, 'Task failed unexpectedly. Check the logs.').catch(() => {});
+          const taskPromise = new Promise<void>((resolve) => {
+            setImmediate(() => {
+              runTask({
+                plan,
+                originalRequest: text,
+                chatId,
+                ai: this.ai,
+                toolExecutor: this.toolExecutor,
+                telegram: this.telegram,
+                model: this.config.ai.model,
+                maxTokens: this.config.ai.maxTokens,
+              }).then(async (result) => {
+                log.info({ chatId, success: result.success, steps: result.completedSteps }, 'Task completed');
+                try {
+                  await this.memory.store(
+                    'episodic',
+                    'task',
+                    `Task: ${plan.title}\nRequest: ${text}\nResult: ${result.success ? 'success' : 'partial'}\nFiles: ${result.filesProduced.join(', ')}`,
+                    { importance: 0.8, tags: ['task', result.success ? 'success' : 'failure'], source: chatId },
+                  );
+                } catch { /* non-fatal */ }
+              }).catch((err) => {
+                log.error({ err, chatId }, 'Task runner failed');
+                this.telegram.sendMessage(chatId, 'Task failed unexpectedly. Check the logs.').catch(() => {});
+              }).finally(resolve);
             });
           });
+          this.pendingTaskPromises.push(taskPromise);
 
           // Return immediately — progress updates come from TaskRunner
           return 'On it. Planning your task now...';

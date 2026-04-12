@@ -91,14 +91,56 @@ async function initNexus() {
   process.once('SIGINT', () => process.exit(0));
   process.once('SIGTERM', () => process.exit(0));
 
-  // Stub telegram — orchestrator's handleMessage never calls telegram directly.
-  // We only need the type to satisfy TypeScript; no methods will be invoked.
+  // Dev telegram stub — prints all Telegram messages to the console
+  // so we can see task runner progress updates in the terminal.
+  let fakeMessageId = 1000;
+  const fakeMessages = new Map<number, string>();
+
   const telegramStub = {
     start: async () => {},
     stop: () => {},
-    sendMessage: async () => {},
     setOrchestrator: () => {},
     onMessage: () => {},
+
+    sendMessage: async (_chatId: string, text: string) => {
+      const plain = text.replace(/<[^>]+>/g, '').trim();
+      console.log('');
+      console.log(chalk.bold.cyan('  [telegram:send] '));
+      for (const line of plain.split('\n')) {
+        console.log('    ' + chalk.white(line));
+      }
+    },
+
+    sendStreamingMessage: async (_chatId: string, text: string) => {
+      const id = fakeMessageId++;
+      fakeMessages.set(id, text);
+      const plain = text.replace(/<[^>]+>/g, '').trim();
+      if (plain && plain !== '⏳') {
+        console.log(chalk.dim(`\n  [telegram:stream#${id}] `) + chalk.white(plain));
+      }
+      return id;
+    },
+
+    editMessage: async (_chatId: string, messageId: number, text: string) => {
+      fakeMessages.set(messageId, text);
+      // Don't spam console for every edit — only show meaningful changes
+    },
+
+    finalizeStreamingMessage: async (_chatId: string, messageId: number, text: string) => {
+      fakeMessages.set(messageId, text);
+      const plain = text.replace(/<[^>]+>/g, '').trim();
+      if (plain) {
+        console.log('');
+        console.log(chalk.dim(`  [telegram:msg#${messageId}]`));
+        for (const line of plain.split('\n')) {
+          console.log('    ' + chalk.cyan(line));
+        }
+      }
+    },
+
+    sendTypingAction: async () => {},
+    sendPhoto: async () => {},
+    sendDocument: async () => {},
   } as unknown as TelegramGateway;
 
   const orchestrator = new Orchestrator();
@@ -151,6 +193,8 @@ async function main() {
     try {
       const response = await orchestrator.processMessage(singleMessage, 'dev-cli');
       printResponse(response, [...agentLog]);
+      // Wait for any background task (task engine) to finish before exiting
+      await orchestrator.waitForPendingTasks();
     } catch (err) {
       console.log(chalk.red('  Error: ') + String(err));
     }
@@ -190,6 +234,7 @@ async function main() {
     try {
       const response = await orchestrator.processMessage(text, 'dev-cli');
       printResponse(response, [...agentLog]);
+      await orchestrator.waitForPendingTasks();
     } catch (err) {
       console.log('');
       console.log(chalk.red('  Error: ') + String(err));
