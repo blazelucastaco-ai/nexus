@@ -12,6 +12,9 @@ import { assembleContext, buildSystemPrompt } from './context.js';
 import { EventLoop } from './event-loop.js';
 import { toOpenAITools } from '../tools/definitions.js';
 import { ToolExecutor } from '../tools/executor.js';
+import { classifyMessage } from './task-classifier.js';
+import { planTask } from './task-planner.js';
+import { runTask } from './task-runner.js';
 import {
   sanitizeInput,
   detectInjection,
@@ -82,7 +85,7 @@ export class Orchestrator {
   private activeTasks: AgentTask[] = [];
   private startTime = Date.now();
   private initialized = false;
-  private toolExecutor!: ToolExecutor;
+  public toolExecutor!: ToolExecutor;
   private selfAwareness!: SelfAwareness;
   public innerMonologue!: InnerMonologue;
 
@@ -373,7 +376,52 @@ export class Orchestrator {
       // ── 7. Explicit "remember" intent detection ───────────────
       await this.detectAndStoreRememberIntent(text);
 
-      // ── 7b. Inner monologue (think mode) ──────────────────────
+      // ── 7b. Task engine routing ───────────────────────────────
+      // If the message looks like a build/fix/diagnose task, hand off to
+      // the TaskRunner which executes it step-by-step with live progress.
+      const messageType = classifyMessage(text);
+      if (messageType === 'task') {
+        log.info({ chatId }, 'Message classified as task — routing to TaskEngine');
+
+        // Generate plan (fast LLM call)
+        const plan = await planTask(text, this.ai, this.config.ai.model);
+
+        if (plan) {
+          // Run the task async — sends its own Telegram progress messages
+          setImmediate(() => {
+            runTask({
+              plan,
+              originalRequest: text,
+              chatId,
+              ai: this.ai,
+              toolExecutor: this.toolExecutor,
+              telegram: this.telegram,
+              model: this.config.ai.model,
+              maxTokens: this.config.ai.maxTokens,
+            }).then((result) => {
+              log.info({ chatId, success: result.success, steps: result.completedSteps }, 'Task completed');
+              // Store in memory
+              this.memory.store(
+                'episodic',
+                'task',
+                `Task: ${plan.title}\nRequest: ${text}\nResult: ${result.success ? 'success' : 'partial'}\nFiles: ${result.filesProduced.join(', ')}`,
+                { importance: 0.8, tags: ['task', result.success ? 'success' : 'failure'], source: chatId },
+              ).catch(() => {});
+            }).catch((err) => {
+              log.error({ err, chatId }, 'Task runner failed');
+              this.telegram.sendMessage(chatId, 'Task failed unexpectedly. Check the logs.').catch(() => {});
+            });
+          });
+
+          // Return immediately — progress updates come from TaskRunner
+          return 'On it. Planning your task now...';
+        }
+
+        // Plan failed — fall through to standard chat mode
+        log.warn({ chatId }, 'Task planning failed — falling back to chat mode');
+      }
+
+      // ── 7c. Inner monologue (think mode) ──────────────────────
       let innerThought = '';
       if (this.innerMonologue.isEnabled()) {
         const pState = this.personality.getPersonalityState();
