@@ -26,6 +26,7 @@ import { AgentManager } from '../src/agents/index.js';
 import { AIManager } from '../src/ai/index.js';
 import { MacOSController } from '../src/macos/index.js';
 import { LearningSystem } from '../src/learning/index.js';
+import { browserBridge } from '../src/browser/bridge.js';
 import type { TelegramGateway } from '../src/telegram/index.js';
 
 // ─── Display Helpers ──────────────────────────────────────────────────────
@@ -87,7 +88,7 @@ async function initNexus() {
 
   // Ensure SQLite WAL is checkpointed and memories are flushed on exit.
   // closeDatabase() calls db.close() which performs a full WAL checkpoint.
-  process.once('exit', () => { try { closeDatabase(); } catch {} });
+  process.once('exit', () => { try { closeDatabase(); } catch {} try { browserBridge.stop(); } catch {} });
   process.once('SIGINT', () => process.exit(0));
   process.once('SIGTERM', () => process.exit(0));
 
@@ -153,6 +154,27 @@ async function initNexus() {
     macos,
     learning,
   });
+  // Start browser bridge so browser_* tools work in dev-chat.
+  // (Requires NEXUS service to be stopped first so port 9338 is free.)
+  try {
+    browserBridge.start();
+    console.log(chalk.dim('  Browser bridge listening on :9338'));
+    // Give the Chrome extension a moment to reconnect
+    await new Promise<void>((resolve) => {
+      if (browserBridge.isConnected) { resolve(); return; }
+      const t = setTimeout(resolve, 8000); // don't block startup if ext isn't open
+      browserBridge.onConnect(() => { clearTimeout(t); resolve(); });
+    });
+    if (browserBridge.isConnected) {
+      console.log(chalk.green('  ✓ Chrome extension connected — browser tools ready'));
+    } else {
+      console.log(chalk.dim('  ⚠ Chrome extension not connected — browser tools will fail until it connects'));
+    }
+  } catch (e) {
+    console.log(chalk.dim(`  ⚠ Browser bridge failed to start: ${e instanceof Error ? e.message : String(e)}`));
+    console.log(chalk.dim('  (Is NEXUS still running? Stop it first with: launchctl stop com.nexus.ai)'));
+  }
+
   // Note: we intentionally do NOT call orchestrator.start() — that would
   // attempt to connect to Telegram. processMessage() works without it.
 
