@@ -13,7 +13,7 @@ const HOME = homedir();
 const NEXUS_DIR = join(HOME, '.nexus');
 const CONFIG_PATH = join(NEXUS_DIR, 'config.yaml');
 const LOG_PATH = join(NEXUS_DIR, 'logs', 'nexus.log');
-const DB_PATH = join(NEXUS_DIR, 'nexus.db');
+const DB_PATH = join(NEXUS_DIR, 'memory.db');
 const PLIST_LABEL = 'local.nexus';
 const PLIST_PATH = join(HOME, 'Library', 'LaunchAgents', `${PLIST_LABEL}.plist`);
 const PROJECT_DIR = join(__dirname, '..');
@@ -596,25 +596,25 @@ program
     info('Size', `${sizeMb} MB`);
 
     try {
-      const tables = ['episodic_memory', 'semantic_memory', 'procedural_memory', 'user_facts', 'mistakes'];
-      const labels: Record<string, string> = {
-        episodic_memory: 'Episodic memories',
-        semantic_memory: 'Semantic memories',
-        procedural_memory: 'Procedural memories',
-        user_facts: 'User facts',
-        mistakes: 'Tracked mistakes',
-      };
+      const queries: Array<{ label: string; sql: string }> = [
+        { label: 'Episodic memories',   sql: `SELECT COUNT(*) FROM memories WHERE layer='episodic'` },
+        { label: 'Semantic memories',   sql: `SELECT COUNT(*) FROM memories WHERE layer='semantic'` },
+        { label: 'Procedural memories', sql: `SELECT COUNT(*) FROM memories WHERE layer='procedural'` },
+        { label: 'Buffer memories',     sql: `SELECT COUNT(*) FROM memories WHERE layer='buffer'` },
+        { label: 'User facts',          sql: `SELECT COUNT(*) FROM user_facts` },
+        { label: 'Tracked mistakes',    sql: `SELECT COUNT(*) FROM mistakes` },
+      ];
 
       console.log('');
-      for (const table of tables) {
+      for (const { label, sql } of queries) {
         try {
           const count = execSync(
-            `sqlite3 "${DB_PATH}" "SELECT COUNT(*) FROM ${table};" 2>/dev/null`,
+            `sqlite3 "${DB_PATH}" "${sql};" 2>/dev/null`,
             { stdio: 'pipe', shell: true },
           )
             .toString()
             .trim();
-          info(labels[table], count);
+          info(label, count);
         } catch {
           // table may not exist yet
         }
@@ -885,20 +885,7 @@ program
     // Run as a one-shot subprocess so we get a clean DB connection
     const dreamer = spawn(
       'node',
-      [
-        '--input-type=module',
-        '--eval',
-        [
-          `import { DreamingEngine } from '${join(PROJECT_DIR, 'dist', 'brain', 'dreaming.js')}';`,
-          `import { getDatabase } from '${join(PROJECT_DIR, 'dist', 'memory', 'database.js')}';`,
-          `getDatabase();`, // ensures migrations run
-          `const e = new DreamingEngine();`,
-          `e.runDreamCycle().then(r => {`,
-          `  console.log(JSON.stringify(r));`,
-          `  process.exit(0);`,
-          `}).catch(err => { console.error(err.message); process.exit(1); });`,
-        ].join('\n'),
-      ],
+      [join(PROJECT_DIR, 'dist', 'runners', 'dream.js')],
       { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env } },
     );
 
