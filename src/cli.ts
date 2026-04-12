@@ -922,6 +922,8 @@ program
           garbageCollected: number;
           durationMs: number;
           insights: string[];
+          reflections: string[];
+          ideas: string[];
         };
 
         console.log(chalk.green('  ✓  Dream cycle complete') + chalk.dim(` (${report.durationMs}ms)`));
@@ -932,9 +934,25 @@ program
 
         if (report.insights.length > 0) {
           console.log('');
-          console.log(chalk.dim('  Insights generated:'));
+          console.log(chalk.dim('  Insights:'));
           for (const insight of report.insights) {
             console.log(`  ${chalk.cyan('◈')} ${chalk.white(insight)}`);
+          }
+        }
+
+        if (report.reflections.length > 0) {
+          console.log('');
+          console.log(chalk.dim('  Reflections:'));
+          for (const r of report.reflections) {
+            console.log(`  ${chalk.magenta('💭')} ${chalk.white(r)}`);
+          }
+        }
+
+        if (report.ideas.length > 0) {
+          console.log('');
+          console.log(chalk.dim('  Ideas:'));
+          for (const idea of report.ideas) {
+            console.log(`  ${chalk.yellow('💡')} ${chalk.white(idea)}`);
           }
         }
       } catch {

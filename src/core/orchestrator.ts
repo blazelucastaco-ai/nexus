@@ -1346,7 +1346,13 @@ ${insights.slice(0, 8).join('\n')}`);
   }
 
   private scheduleDreamCycle(): void {
-    const dreamer = new DreamingEngine(this.ai);
+    const config = this.config.telegram;
+    const chatId = config.chatId;
+    const sendFn = chatId
+      ? (msg: string) => this.telegram.sendMessage(chatId, msg)
+      : undefined;
+
+    const dreamer = new DreamingEngine(this.ai, sendFn);
 
     const runDream = async () => {
       try {
