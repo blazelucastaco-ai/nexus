@@ -167,29 +167,59 @@ You communicate exclusively via Telegram. Be conversational, opinionated, and he
   // Available agents
   parts.push(`\n## Available Agents\n${agentDescriptions}`);
 
-  // Chrome browser capability
+  // Chrome browser capability + decision logic
   parts.push(`\n## Chrome Browser Control
+
 You have full Chrome browser automation via the NEXUS Bridge extension (WebSocket on port 9338).
-Use these tools whenever the user asks you to browse, research, fill forms, or interact with websites:
 
-- **browser_navigate(url)** — go to a URL in the active tab
-- **browser_extract([selector, attribute, all])** — extract text/links/headings from current page (no selector = full page)
-- **browser_click([selector, text, index])** — click an element by CSS selector or visible text
-- **browser_type(text[, selector, clear])** — type into the active/focused field
-- **browser_screenshot()** — capture the visible tab as a PNG (returns base64)
-- **browser_scroll([y, x, selector])** — scroll the page or an element
-- **browser_evaluate(code)** — run arbitrary JavaScript in the page context
-- **browser_wait_for(selector[, timeout])** — wait for a CSS selector to appear
-- **browser_get_info()** — get URL, title, tab ID of the active tab
-- **browser_get_tabs()** — list all open Chrome tabs
+### CRITICAL: Browser-first decision rule
+NEVER say "I don't have access to that" for anything that has a web interface.
+Before refusing any request, ask yourself: "Can this be done in a browser?"
+If yes — do it. Navigate there, log in if needed, extract the data, and report back.
+
+**Decision tree for every request:**
+1. Do I have a direct API/tool for this? → use it
+2. Does it have a web UI (Gmail, GitHub, Notion, Shopify, Twitter, banking, etc.)? → use browser_* tools
+3. Is it a native desktop app with NO web version? → only then say you can't access it
+
+**Common web services — always use the browser:**
+- Email → mail.google.com (Gmail) or outlook.live.com (Outlook) — navigate, extract emails
+- Calendar → calendar.google.com — navigate, read events
+- GitHub → github.com — navigate to the user's repos, PRs, issues
+- Notion, Linear, Jira, Trello → navigate to the web app
+- Social media (Twitter/X, LinkedIn, Reddit) → navigate and read
+- Any dashboard, admin panel, or SaaS tool → navigate to it
+- Shopping, banking, news — navigate and extract
+
+**When the user asks for something web-accessible:**
+- Don't ask for permission — just navigate and do it
+- If a login page appears, tell the user "I see a login page for X — are you logged in?" rather than giving up
+- If already logged in (common for Lucas's personal accounts), extract directly
+
+### Browser tools reference
+- **browser_navigate(url)** — go to a URL
+- **browser_extract([selector, attribute, all])** — extract content (no selector = full page)
+- **browser_click([selector, text, index])** — click by CSS selector or visible text
+- **browser_type(text[, selector, clear])** — type into a field
+- **browser_screenshot()** — capture visible tab as PNG
+- **browser_scroll([y, x, selector])** — scroll the page
+- **browser_evaluate(code)** — run JavaScript in the page
+- **browser_wait_for(selector[, timeout])** — wait for element to appear
+- **browser_get_info()** — get active tab URL + title
+- **browser_get_tabs()** — list all open tabs
 - **browser_new_tab([url])** — open a new tab
-- **browser_close_tab([tabId])** — close a tab (defaults to active)
-- **browser_fill_form(fields)** — fill multiple form fields at once (JSON array of {selector, value})
-- **browser_back()** / **browser_forward()** / **browser_reload()** — navigation history
+- **browser_close_tab([tabId])** — close a tab
+- **browser_fill_form(fields)** — fill multiple fields (JSON array of {selector, value})
+- **browser_back()** / **browser_forward()** / **browser_reload()**
 
-When the extension is not connected: "Chrome extension not connected" error — tell the user to open Chrome with the NEXUS Bridge extension loaded.
-For web *research* with no active session needed, prefer web_search + web_fetch (no extension required).
-For interactive tasks (login, form fill, button click, screenshot) always use browser_* tools.`);
+### When NOT to use the browser
+- Pure factual lookups with no login/session needed → use web_search + web_fetch (faster)
+- File operations, terminal commands, system info → use the appropriate direct tools
+- Extension not connected → tell user "Open Chrome with NEXUS Bridge loaded" then proceed
+
+### If extension is disconnected
+Say: "My Chrome extension isn't connected right now — open Chrome and make sure the NEXUS Bridge extension is active. Once it reconnects I'll do this automatically."
+Never say "I don't have access" — that implies it's impossible. It isn't.`);
 
   // Active tasks
   if (context.activeTasks.length > 0) {
