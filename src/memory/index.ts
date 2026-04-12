@@ -343,6 +343,35 @@ export class MemoryManager {
     return this.semantic.searchFacts(query, limit);
   }
 
+  // ─── Memory Feedback Loop ─────────────────────────────────────────
+
+  /**
+   * Bump access_count and slightly increase importance for a list of
+   * memory IDs that were actively used in generating a response.
+   * This is the self-organizing importance mechanism — memories that get
+   * used repeatedly rise to the surface naturally over time.
+   */
+  bumpMemoryAccess(ids: string[]): void {
+    if (ids.length === 0) return;
+    try {
+      const db = getDatabase();
+      const stmt = db.prepare(
+        `UPDATE memories
+         SET access_count  = access_count + 1,
+             last_accessed = datetime('now'),
+             importance    = MIN(1.0, importance + 0.02)
+         WHERE id = ?`,
+      );
+      const bumpAll = db.transaction((idList: string[]) => {
+        for (const id of idList) stmt.run(id);
+      });
+      bumpAll(ids);
+      log.debug({ count: ids.length }, 'Memory access bumped');
+    } catch (err) {
+      log.debug({ err }, 'Memory bump skipped');
+    }
+  }
+
   // ─── Consolidation ────────────────────────────────────────────────
 
   /**

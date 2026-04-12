@@ -34,10 +34,12 @@ export function loadConfig(): NexusConfig {
   if (process.env.TELEGRAM_BOT_TOKEN) {
     parsed.telegram = { ...parsed.telegram, botToken: process.env.TELEGRAM_BOT_TOKEN };
   }
-  if (process.env.TELEGRAM_CHAT_ID) {
+  const chatIdFromEnv = process.env.NEXUS_CHAT_ID ?? process.env.TELEGRAM_CHAT_ID ?? '';
+  if (chatIdFromEnv) {
     parsed.telegram = {
       ...parsed.telegram,
-      allowedUsers: [process.env.TELEGRAM_CHAT_ID],
+      chatId: chatIdFromEnv,
+      allowedUsers: [chatIdFromEnv],
     };
   }
   if (process.env.NEXUS_AI_PROVIDER) {

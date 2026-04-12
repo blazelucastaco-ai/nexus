@@ -44,7 +44,7 @@ async function main() {
   log.info('Initializing Telegram bot...');
   const telegram = new TelegramGateway({
     botToken: config.telegram.botToken,
-    chatId: config.telegram.botToken ? (process.env.NEXUS_CHAT_ID ?? '') : '',
+    chatId: config.telegram.chatId,
   });
 
   // Create and wire up orchestrator
@@ -72,7 +72,7 @@ async function main() {
   log.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
   // Check macOS permissions and warn via Telegram if anything is missing
-  const chatId = process.env.NEXUS_CHAT_ID ?? process.env.TELEGRAM_CHAT_ID ?? '';
+  const chatId = config.telegram.chatId;
   if (chatId) {
     try {
       const permStatus = await checkPermissions();

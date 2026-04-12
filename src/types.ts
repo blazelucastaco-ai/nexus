@@ -50,7 +50,9 @@ export type MemoryType =
   | 'preference'
   | 'workflow'
   | 'contact'
-  | 'opinion';
+  | 'opinion'
+  | 'mistake'
+  | 'procedure';
 
 export interface Memory {
   id: string;
@@ -245,6 +247,7 @@ export const NexusConfigSchema = z.object({
   telegram: z
     .object({
       botToken: z.string().default(''),
+      chatId: z.string().default(''),
       allowedUsers: z.array(z.string()).default([]),
     })
     .default({}),
