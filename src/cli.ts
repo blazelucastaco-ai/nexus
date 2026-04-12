@@ -74,44 +74,62 @@ function randomPhrase(): string {
   return PHRASES[Math.floor(Math.random() * PHRASES.length)];
 }
 
+// ─── Design tokens ────────────────────────────────────────────────────────────
+
+const VIOLET  = chalk.hex('#8B5CF6');
+const EMERALD = chalk.hex('#34D399');
+const AMBER   = chalk.hex('#FBBF24');
+const ROSE    = chalk.hex('#F87171');
+const PAD     = '  ';
+
 // ─── Display Helpers ──────────────────────────────────────────────────────────
 
 function showLogo(compact = false) {
   if (compact) {
     console.log('');
-    console.log(chalk.bold.cyan('  ◈ NEXUS') + chalk.dim(` v${VERSION}`));
+    console.log(`${PAD}${VIOLET.bold('◆ NEXUS')}  ${chalk.dim(`v${VERSION}`)}`);
     console.log('');
     return;
   }
   console.log('');
-  console.log(chalk.bold.cyan('  ███╗   ██╗███████╗██╗  ██╗██╗   ██╗███████╗'));
-  console.log(chalk.bold.cyan('  ████╗  ██║██╔════╝╚██╗██╔╝██║   ██║██╔════╝'));
-  console.log(chalk.bold.blue('  ██╔██╗ ██║█████╗   ╚███╔╝ ██║   ██║███████╗'));
-  console.log(chalk.bold.blue('  ██║╚██╗██║██╔══╝   ██╔██╗ ██║   ██║╚════██║'));
-  console.log(chalk.bold.magenta('  ██║ ╚████║███████╗██╔╝ ██╗╚██████╔╝███████║'));
-  console.log(chalk.bold.magenta('  ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝'));
+  console.log(chalk.hex('#A78BFA').bold(`${PAD}███╗   ██╗███████╗██╗  ██╗██╗   ██╗███████╗`));
+  console.log(chalk.hex('#A78BFA').bold(`${PAD}████╗  ██║██╔════╝╚██╗██╔╝██║   ██║██╔════╝`));
+  console.log(chalk.hex('#8B5CF6').bold(`${PAD}██╔██╗ ██║█████╗   ╚███╔╝ ██║   ██║███████╗`));
+  console.log(chalk.hex('#7C3AED').bold(`${PAD}██║╚██╗██║██╔══╝   ██╔██╗ ██║   ██║╚════██║`));
+  console.log(chalk.hex('#6D28D9').bold(`${PAD}██║ ╚████║███████╗██╔╝ ██╗╚██████╔╝███████║`));
+  console.log(chalk.hex('#5B21B6').bold(`${PAD}╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝`));
   console.log('');
   console.log(
-    chalk.dim(`  v${VERSION}`) +
-      chalk.dim('  ·  ') +
-      chalk.hex('#9B59B6')('Personal AI That Lives On Your Mac'),
+    `${PAD}${chalk.dim(`v${VERSION}`)}  ${chalk.dim('·')}  ${VIOLET('Personal AI that lives on your Mac')}`,
   );
-  console.log(chalk.dim('  ─────────────────────────────────────────────'));
+  console.log(chalk.dim(`${PAD}${'─'.repeat(46)}`));
   console.log('');
 }
 
 function showPhrase() {
+  const phrase = randomPhrase().replace(/^🧠\s*/, '');
   console.log('');
-  console.log(chalk.dim('  ' + randomPhrase()));
+  console.log(chalk.dim(`${PAD}${phrase}`));
   console.log('');
+}
+
+// Aligned key-value row — label padded to 16 chars
+function row(label: string, value: string, color: (s: string) => string = chalk.white) {
+  console.log(`${PAD}${chalk.dim(label.padEnd(16))}${color(value)}`);
+}
+
+// Section header with thin divider
+function section(title: string) {
+  console.log(`${PAD}${chalk.bold(title)}`);
+  console.log(chalk.dim(`${PAD}${'─'.repeat(32)}`));
 }
 
 function ok(label: string, value: string) {
-  console.log(`  ${chalk.green('✓')} ${chalk.bold(label)}: ${chalk.green(value)}`);
+  console.log(`${PAD}${EMERALD('✓')}  ${chalk.dim(label.padEnd(14))}${chalk.white(value)}`);
 }
 
 function fail(label: string, value: string) {
-  console.log(`  ${chalk.red('✗')} ${chalk.bold(label)}: ${chalk.red(value)}`);
+  console.log(`${PAD}${ROSE('✗')}  ${chalk.dim(label.padEnd(14))}${ROSE(value)}`);
 }
 
 function check(label: string, value: string, passed: boolean) {
@@ -120,7 +138,7 @@ function check(label: string, value: string, passed: boolean) {
 }
 
 function info(label: string, value: string) {
-  console.log(`  ${chalk.cyan('◈')} ${chalk.bold(label)}: ${chalk.white(value)}`);
+  row(label, value);
 }
 
 // ─── System Helpers ───────────────────────────────────────────────────────────
@@ -210,26 +228,21 @@ program
   .description('Start the NEXUS service')
   .action(() => {
     showLogo(true);
-    console.log(chalk.bold('  Starting NEXUS...'));
-    console.log('');
 
     if (isRunning()) {
-      console.log(chalk.yellow('  ⚠  NEXUS is already running.'));
-      console.log(chalk.dim('     Use `nexus restart` to restart it.'));
+      console.log(`${PAD}${AMBER('◆')} Already running  ${chalk.dim('· nexus restart to reload')}`);
       showPhrase();
       return;
     }
 
     try {
       const result = startDaemon();
-      console.log(chalk.green('  ✓  NEXUS started') + chalk.dim(` (via ${result.via})`));
+      console.log(`${PAD}${EMERALD('●')} ${chalk.bold('NEXUS started')}  ${chalk.dim(`· via ${result.via}`)}`);
       if (result.via === 'direct') {
-        console.log(chalk.dim(`     PID: ${result.pid}`));
-        console.log(chalk.dim('     Run `nexus setup` to configure launchd for auto-start on login.'));
+        console.log(chalk.dim(`${PAD}  PID ${result.pid}  ·  run nexus setup to enable auto-start`));
       }
     } catch {
-      console.log(chalk.red('  ✗  Failed to start NEXUS.'));
-      console.log(chalk.dim('     Ensure the project is built: nexus update'));
+      console.log(`${PAD}${ROSE('✗')} Failed to start  ${chalk.dim('· run nexus update to rebuild')}`);
     }
 
     showPhrase();
@@ -242,20 +255,18 @@ program
   .description('Stop the NEXUS service')
   .action(() => {
     showLogo(true);
-    console.log(chalk.bold('  Stopping NEXUS...'));
-    console.log('');
 
     if (!isRunning()) {
-      console.log(chalk.yellow('  ⚠  NEXUS is not running.'));
+      console.log(`${PAD}${chalk.dim('◆')} Not running`);
       showPhrase();
       return;
     }
 
     try {
       stopDaemon();
-      console.log(chalk.green('  ✓  NEXUS stopped.'));
+      console.log(`${PAD}${chalk.dim('●')} ${chalk.bold('NEXUS stopped')}`);
     } catch {
-      console.log(chalk.red('  ✗  Failed to stop NEXUS.'));
+      console.log(`${PAD}${ROSE('✗')} Failed to stop`);
     }
 
     showPhrase();
@@ -268,21 +279,19 @@ program
   .description('Restart the NEXUS service')
   .action(async () => {
     showLogo(true);
-    console.log(chalk.bold('  Restarting NEXUS...'));
-    console.log('');
 
     try {
       stopDaemon();
-      console.log(chalk.green('  ✓  Stopped.'));
+      console.log(`${PAD}${chalk.dim('●')} Stopped`);
     } catch {}
 
     await new Promise((r) => setTimeout(r, 1200));
 
     try {
       const result = startDaemon();
-      console.log(chalk.green('  ✓  Started') + chalk.dim(` (via ${result.via})`));
+      console.log(`${PAD}${EMERALD('●')} ${chalk.bold('Started')}  ${chalk.dim(`· via ${result.via}`)}`);
     } catch {
-      console.log(chalk.red('  ✗  Failed to start. Run `nexus update` to rebuild.'));
+      console.log(`${PAD}${ROSE('✗')} Failed to start  ${chalk.dim('· nexus update to rebuild')}`);
     }
 
     showPhrase();
@@ -295,32 +304,28 @@ program
   .description('Show NEXUS status, uptime, and memory usage')
   .action(() => {
     showLogo(true);
-    console.log(chalk.bold('  NEXUS Status'));
-    console.log(chalk.dim('  ─────────────────────────'));
-    console.log('');
 
     const running = isRunning();
     const pid = getPid();
 
+    section('Service');
+    console.log('');
     if (running && pid) {
-      console.log(`  ${chalk.green('●')} ${chalk.green.bold('Running')}  ${chalk.dim(`PID: ${pid}`)}`);
-      console.log(`  ${chalk.dim('Uptime:')}   ${getUptime(pid)}`);
-      console.log(`  ${chalk.dim('Memory:')}   ${getMemUsage(pid)}`);
+      console.log(`${PAD}  ${EMERALD('●')} ${chalk.bold('Running')}`);
+      console.log('');
+      row('  PID', pid);
+      row('  Uptime', getUptime(pid));
+      row('  Memory', getMemUsage(pid));
     } else {
-      console.log(`  ${chalk.red('●')} ${chalk.red.bold('Stopped')}`);
-      console.log(chalk.dim('  Run `nexus start` to start NEXUS.'));
+      console.log(`${PAD}  ${ROSE('●')} ${chalk.dim('Stopped')}  ${chalk.dim('· nexus start to run')}`);
     }
 
     console.log('');
-    console.log(
-      `  ${chalk.dim('Config:')}   ${existsSync(CONFIG_PATH) ? chalk.green('✓ found') : chalk.red('✗ missing')}`,
-    );
-    console.log(
-      `  ${chalk.dim('Logs:')}     ${existsSync(LOG_PATH) ? chalk.green('✓ found') : chalk.dim('not yet created')}`,
-    );
-    console.log(
-      `  ${chalk.dim('launchd:')} ${existsSync(PLIST_PATH) ? chalk.green('✓ installed') : chalk.yellow('not installed')}`,
-    );
+    section('System');
+    console.log('');
+    row('  Config',  existsSync(CONFIG_PATH) ? 'found'         : 'missing',  existsSync(CONFIG_PATH)  ? EMERALD : ROSE);
+    row('  Logs',    existsSync(LOG_PATH)    ? 'found'         : 'not yet',  existsSync(LOG_PATH)     ? EMERALD : chalk.dim);
+    row('  launchd', existsSync(PLIST_PATH)  ? 'installed'     : 'not set',  existsSync(PLIST_PATH)   ? EMERALD : AMBER);
 
     showPhrase();
   });
@@ -350,8 +355,7 @@ program
   .description('Verify NEXUS installation and connectivity')
   .action(() => {
     showLogo(true);
-    console.log(chalk.bold('  Verifying NEXUS Installation'));
-    console.log(chalk.dim('  ─────────────────────────────────'));
+    section('Verify Installation');
     console.log('');
 
     // Node.js
@@ -414,9 +418,9 @@ program
         existsSync(CONFIG_PATH) ? readFileSync(CONFIG_PATH, 'utf-8') : '',
       );
     if (allCritical) {
-      console.log(chalk.green('  ✓ NEXUS is ready to run!'));
+      console.log(`${PAD}${EMERALD('◆')} ${chalk.bold('NEXUS is ready')}`);
     } else {
-      console.log(chalk.yellow('  ⚠  Some checks failed. Run `nexus setup` to fix them.'));
+      console.log(`${PAD}${AMBER('◆')} Some checks failed  ${chalk.dim('· nexus setup to fix')}`);
     }
 
     showPhrase();
@@ -432,15 +436,13 @@ program
     showLogo(true);
 
     if (!existsSync(LOG_PATH)) {
-      console.log(chalk.yellow('  ⚠  No log file found yet.'));
-      console.log(chalk.dim(`  Expected at: ${LOG_PATH}`));
-      console.log(chalk.dim('  Start NEXUS first with: nexus start'));
+      console.log(`${PAD}${AMBER('◆')} No log file yet  ${chalk.dim('· start NEXUS first')}`);
       showPhrase();
       return;
     }
 
-    console.log(chalk.bold(`  Tailing: ${chalk.cyan(LOG_PATH)}`));
-    console.log(chalk.dim('  Press Ctrl+C to stop.\n'));
+    console.log(chalk.dim(`${PAD}${LOG_PATH}`));
+    console.log(chalk.dim(`${PAD}Ctrl+C to stop\n`));
 
     const tailProc = spawn('tail', ['-f', '-n', opts.lines, LOG_PATH], {
       stdio: 'inherit',
@@ -461,13 +463,11 @@ program
   .description('Show current NEXUS configuration (secrets redacted)')
   .action(() => {
     showLogo(true);
-    console.log(chalk.bold('  NEXUS Configuration'));
-    console.log(chalk.dim('  ─────────────────────────'));
+    section('Configuration');
     console.log('');
 
     if (!existsSync(CONFIG_PATH)) {
-      console.log(chalk.red('  ✗ Config not found: ') + chalk.dim(CONFIG_PATH));
-      console.log(chalk.dim('  Run `nexus setup` to create it.'));
+      console.log(`${PAD}${ROSE('✗')} Config not found  ${chalk.dim('· nexus setup to create')}`);
       showPhrase();
       return;
     }
@@ -481,12 +481,18 @@ program
         (_m, key, val) => `${key}: ${'*'.repeat(val.length - 4)}${val.slice(-4)}`,
       );
 
-      console.log(chalk.dim(`  ${CONFIG_PATH}\n`));
+      console.log(chalk.dim(`${PAD}${CONFIG_PATH}\n`));
       for (const line of raw.split('\n')) {
-        console.log('  ' + chalk.white(line));
+        if (!line.trim()) { console.log(''); continue; }
+        const [k, ...rest] = line.split(':');
+        if (rest.length) {
+          console.log(`${PAD}  ${chalk.dim(k + ':')}${VIOLET(rest.join(':'))}`);
+        } else {
+          console.log(`${PAD}  ${chalk.dim(line)}`);
+        }
       }
     } catch {
-      console.log(chalk.red('  ✗ Could not read config file.'));
+      console.log(`${PAD}${ROSE('✗')} Could not read config`);
     }
 
     showPhrase();
@@ -499,7 +505,7 @@ program
   .description('Pull latest from GitHub and rebuild')
   .action(() => {
     showLogo(true);
-    console.log(chalk.bold('  Updating NEXUS...'));
+    section('Update NEXUS');
     console.log('');
 
     const steps: Array<{ label: string; cmd: string }> = [
@@ -509,20 +515,21 @@ program
     ];
 
     for (const step of steps) {
-      console.log(chalk.dim(`  → ${step.label}`));
+      process.stdout.write(`${PAD}${chalk.dim('→')} ${step.label} `);
       try {
-        execSync(step.cmd, { cwd: PROJECT_DIR, stdio: 'inherit' });
-        console.log('');
+        execSync(step.cmd, { cwd: PROJECT_DIR, stdio: 'pipe' });
+        console.log(EMERALD('✓'));
       } catch {
+        console.log(ROSE('✗'));
         console.log('');
-        console.log(chalk.red(`  ✗ Failed at: ${step.label}`));
+        console.log(`${PAD}${ROSE('✗')} Failed at: ${step.label}`);
         showPhrase();
         return;
       }
     }
 
-    console.log(chalk.green('  ✓ NEXUS updated successfully.'));
-    console.log(chalk.dim('  Run `nexus restart` to apply the update.'));
+    console.log('');
+    console.log(`${PAD}${EMERALD('◆')} ${chalk.bold('Updated')}  ${chalk.dim('· nexus restart to apply')}`);
 
     showPhrase();
   });
@@ -534,21 +541,20 @@ program
   .description('List all agents and their status')
   .action(() => {
     showLogo(true);
-    console.log(chalk.bold('  NEXUS Agents'));
-    console.log(chalk.dim('  ─────────────────────────'));
+    section('Agents');
     console.log('');
 
     const ALL_AGENTS = [
-      { name: 'vision', label: 'Vision', icon: '👁 ', desc: 'Screen capture, OCR, and visual analysis' },
-      { name: 'file', label: 'File', icon: '📁', desc: 'File system operations — read, write, search, organize' },
-      { name: 'browser', label: 'Browser', icon: '🌐', desc: 'Web browsing, scraping, and research' },
-      { name: 'terminal', label: 'Terminal', icon: '💻', desc: 'Shell command execution and process management' },
-      { name: 'code', label: 'Code', icon: '⚡', desc: 'Code generation, review, refactoring, and debugging' },
-      { name: 'research', label: 'Research', icon: '🔍', desc: 'Deep web research with source synthesis' },
-      { name: 'system', label: 'System', icon: '⚙️ ', desc: 'macOS control — apps, settings, notifications' },
-      { name: 'creative', label: 'Creative', icon: '✨', desc: 'Writing, brainstorming, and content generation' },
-      { name: 'comms', label: 'Comms', icon: '💬', desc: 'Message drafting, email composition' },
-      { name: 'scheduler', label: 'Scheduler', icon: '📅', desc: 'Task scheduling, reminders, and time management' },
+      { name: 'vision',    icon: '👁 ', label: 'Vision',    desc: 'Screen capture, OCR, visual analysis' },
+      { name: 'file',      icon: '📁', label: 'File',      desc: 'Read, write, search, organize files' },
+      { name: 'browser',   icon: '🌐', label: 'Browser',   desc: 'Web browsing, scraping, research' },
+      { name: 'terminal',  icon: '💻', label: 'Terminal',  desc: 'Shell commands, process management' },
+      { name: 'code',      icon: '⚡', label: 'Code',      desc: 'Generate, review, debug, refactor' },
+      { name: 'research',  icon: '🔍', label: 'Research',  desc: 'Deep web research with synthesis' },
+      { name: 'system',    icon: '⚙️ ', label: 'System',    desc: 'macOS control — apps, settings' },
+      { name: 'creative',  icon: '✨', label: 'Creative',  desc: 'Writing, brainstorming, content' },
+      { name: 'comms',     icon: '💬', label: 'Comms',     desc: 'Messages, email composition' },
+      { name: 'scheduler', icon: '📅', label: 'Scheduler', desc: 'Tasks, reminders, time management' },
     ];
 
     let enabledAgents: string[] = [];
@@ -556,18 +562,15 @@ program
       try {
         const raw = readFileSync(CONFIG_PATH, 'utf-8');
         const match = raw.match(/agents:\s*\n((?:\s+-\s+\w+\n?)+)/);
-        if (match) {
-          enabledAgents = match[1].match(/\w+/g) ?? [];
-        }
+        if (match) enabledAgents = match[1].match(/\w+/g) ?? [];
       } catch {}
     }
 
     for (const agent of ALL_AGENTS) {
       const enabled = enabledAgents.length === 0 || enabledAgents.includes(agent.name);
-      const status = enabled ? chalk.green('enabled') : chalk.dim('disabled');
-      console.log(
-        `  ${agent.icon}  ${chalk.bold(agent.label.padEnd(11))} ${status}  ${chalk.dim(agent.desc)}`,
-      );
+      const dot    = enabled ? EMERALD('●') : chalk.dim('○');
+      const name   = enabled ? chalk.bold(agent.label.padEnd(11)) : chalk.dim(agent.label.padEnd(11));
+      console.log(`${PAD}${agent.icon}  ${dot} ${name} ${chalk.dim(agent.desc)}`);
     }
 
     showPhrase();
@@ -580,47 +583,45 @@ program
   .description('Show memory system statistics')
   .action(() => {
     showLogo(true);
-    console.log(chalk.bold('  NEXUS Memory Stats'));
-    console.log(chalk.dim('  ─────────────────────────'));
+    section('Memory');
     console.log('');
 
     if (!existsSync(DB_PATH)) {
-      console.log(chalk.yellow('  ⚠  No memory database found yet.'));
-      console.log(chalk.dim('  Start NEXUS and interact with it to build memory.'));
+      console.log(`${PAD}${AMBER('◆')} No database yet  ${chalk.dim('· interact with NEXUS to build memory')}`);
       showPhrase();
       return;
     }
 
     const sizeMb = (statSync(DB_PATH).size / 1024 / 1024).toFixed(2);
-    info('Database', DB_PATH);
-    info('Size', `${sizeMb} MB`);
+    row('Database', DB_PATH);
+    row('Size', `${sizeMb} MB`);
 
     try {
       const queries: Array<{ label: string; sql: string }> = [
-        { label: 'Episodic memories',   sql: `SELECT COUNT(*) FROM memories WHERE layer='episodic'` },
-        { label: 'Semantic memories',   sql: `SELECT COUNT(*) FROM memories WHERE layer='semantic'` },
-        { label: 'Procedural memories', sql: `SELECT COUNT(*) FROM memories WHERE layer='procedural'` },
-        { label: 'Buffer memories',     sql: `SELECT COUNT(*) FROM memories WHERE layer='buffer'` },
-        { label: 'User facts',          sql: `SELECT COUNT(*) FROM user_facts` },
-        { label: 'Tracked mistakes',    sql: `SELECT COUNT(*) FROM mistakes` },
+        { label: 'Episodic',    sql: `SELECT COUNT(*) FROM memories WHERE layer='episodic'` },
+        { label: 'Semantic',    sql: `SELECT COUNT(*) FROM memories WHERE layer='semantic'` },
+        { label: 'Procedural',  sql: `SELECT COUNT(*) FROM memories WHERE layer='procedural'` },
+        { label: 'Buffer',      sql: `SELECT COUNT(*) FROM memories WHERE layer='buffer'` },
+        { label: 'User facts',  sql: `SELECT COUNT(*) FROM user_facts` },
+        { label: 'Mistakes',    sql: `SELECT COUNT(*) FROM mistakes` },
       ];
 
       console.log('');
       for (const { label, sql } of queries) {
         try {
-          const count = execSync(
+          const countStr = execSync(
             `sqlite3 "${DB_PATH}" "${sql};" 2>/dev/null`,
             { stdio: 'pipe', shell: true },
-          )
-            .toString()
-            .trim();
-          info(label, count);
+          ).toString().trim();
+          const count = parseInt(countStr, 10);
+          const bar = count > 0 ? VIOLET('▪'.repeat(Math.min(Math.ceil(count / 20), 30))) : chalk.dim('▪');
+          console.log(`${PAD}${chalk.dim(label.padEnd(14))}${chalk.white(countStr.padStart(5))}  ${bar}`);
         } catch {
           // table may not exist yet
         }
       }
     } catch {
-      console.log(chalk.dim('  (Install sqlite3 CLI for detailed stats)'));
+      console.log(chalk.dim(`${PAD}(Install sqlite3 CLI for detailed stats)`));
     }
 
     showPhrase();
@@ -633,19 +634,16 @@ program
   .description('Take a screenshot and save to Desktop')
   .action(() => {
     showLogo(true);
-    console.log(chalk.bold('  Taking screenshot...'));
-    console.log('');
 
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const outPath = join(HOME, 'Desktop', `nexus-${ts}.png`);
 
     try {
       execSync(`screencapture -x "${outPath}"`, { stdio: 'pipe' });
-      console.log(chalk.green('  ✓ Screenshot saved:'));
-      console.log(chalk.cyan(`    ${outPath}`));
+      console.log(`${PAD}${EMERALD('◆')} Saved`);
+      console.log(chalk.dim(`${PAD}  ${outPath}`));
     } catch {
-      console.log(chalk.red('  ✗ Screenshot failed.'));
-      console.log(chalk.dim('  Ensure Screen Recording permission is granted in System Settings.'));
+      console.log(`${PAD}${ROSE('✗')} Failed  ${chalk.dim('· grant Screen Recording in System Settings')}`);
     }
 
     showPhrase();
@@ -658,30 +656,31 @@ program
   .description('Full system health check')
   .action(() => {
     showLogo(true);
-    console.log(chalk.bold('  NEXUS Health Check'));
-    console.log(chalk.dim('  ─────────────────────────────────'));
+    section('Health Check');
     console.log('');
 
     // Service
     const running = isRunning();
     const pid = getPid();
-    console.log(chalk.dim('  Service'));
+    console.log(`${PAD}${chalk.bold('Service')}`);
+    console.log('');
     if (running && pid) {
       console.log(
-        `    ${chalk.green('●')} Running  PID: ${pid}  Uptime: ${getUptime(pid)}  Mem: ${getMemUsage(pid)}`,
+        `${PAD}  ${EMERALD('●')} ${chalk.bold('Running')}  ${chalk.dim(`PID ${pid}  ·  ${getUptime(pid)}  ·  ${getMemUsage(pid)}`)}`,
       );
     } else {
-      console.log(`    ${chalk.red('●')} Stopped`);
+      console.log(`${PAD}  ${ROSE('●')} ${chalk.dim('Stopped')}`);
     }
 
     // Installation
     console.log('');
-    console.log(chalk.dim('  Installation'));
+    console.log(`${PAD}${chalk.bold('Installation')}`);
+    console.log('');
     try {
       const nodeVer = execSync('node -v', { stdio: 'pipe' }).toString().trim();
-      check('  Node.js', nodeVer, parseInt(nodeVer.replace('v', ''), 10) >= 22);
+      check('Node.js', nodeVer, parseInt(nodeVer.replace('v', ''), 10) >= 22);
     } catch {
-      fail('  Node.js', 'not found');
+      fail('Node.js', 'not found');
     }
 
     const distOk = existsSync(join(PROJECT_DIR, 'dist', 'index.js'));
@@ -689,19 +688,20 @@ program
     const logsOk = existsSync(join(NEXUS_DIR, 'logs'));
     const plistOk = existsSync(PLIST_PATH);
 
-    check('  Build', distOk ? 'found' : 'missing', distOk);
-    check('  Config', configOk ? 'found' : 'missing', configOk);
-    check('  Logs dir', logsOk ? 'found' : 'missing', logsOk);
-    check('  launchd', plistOk ? 'installed' : 'not installed', plistOk);
+    check('Build', distOk ? 'found' : 'missing', distOk);
+    check('Config', configOk ? 'found' : 'missing', configOk);
+    check('Logs dir', logsOk ? 'found' : 'missing', logsOk);
+    check('launchd', plistOk ? 'installed' : 'not installed', plistOk);
 
     // Storage
     console.log('');
-    console.log(chalk.dim('  Storage'));
+    console.log(`${PAD}${chalk.bold('Storage')}`);
+    console.log('');
     if (existsSync(DB_PATH)) {
       const sizeMb = (statSync(DB_PATH).size / 1024 / 1024).toFixed(2);
-      ok('  Memory DB', `${sizeMb} MB`);
+      ok('Memory DB', `${sizeMb} MB`);
     } else {
-      console.log(chalk.dim('    No memory DB yet — start NEXUS to create it'));
+      console.log(chalk.dim(`${PAD}  No memory DB yet — start NEXUS to create it`));
     }
 
     showPhrase();
@@ -714,10 +714,10 @@ program
   .description('Show NEXUS version and environment info')
   .action(() => {
     showLogo(true);
-    info('Version', VERSION);
-    info('Node.js', process.version);
-    info('Platform', `${process.platform} (${process.arch})`);
-    info('Project', PROJECT_DIR);
+    row('Version',  VERSION);
+    row('Node.js',  process.version);
+    row('Platform', `${process.platform} (${process.arch})`);
+    row('Project',  PROJECT_DIR);
     showPhrase();
   });
 
@@ -729,12 +729,9 @@ program
   .option('-y, --yes', 'Skip confirmation prompt')
   .action(async (opts) => {
     showLogo(true);
-    console.log(chalk.red.bold('  ⚠  NEXUS Uninstall'));
+    section('Uninstall NEXUS');
     console.log('');
-    console.log(chalk.dim('  This will:'));
-    console.log(chalk.dim('  • Stop the NEXUS service'));
-    console.log(chalk.dim('  • Remove the launchd plist'));
-    console.log(chalk.dim(`  • Delete ${NEXUS_DIR} (config, logs, memory)`));
+    console.log(chalk.dim(`${PAD}This will stop the service, remove launchd, and delete ${NEXUS_DIR}`));
     console.log('');
 
     if (!opts.yes) {
@@ -747,7 +744,7 @@ program
 
       if (answer.trim().toLowerCase() !== 'yes') {
         console.log('');
-        console.log(chalk.dim('  Aborted. NEXUS lives on.'));
+        console.log(chalk.dim(`${PAD}Aborted. NEXUS lives on.`));
         showPhrase();
         return;
       }
@@ -761,22 +758,20 @@ program
 
     if (existsSync(PLIST_PATH)) {
       try {
-        execSync(`launchctl bootout gui/$(id -u)/${PLIST_LABEL} 2>/dev/null || true`, {
-          shell: true,
-        });
+        execSync(`launchctl bootout gui/$(id -u)/${PLIST_LABEL} 2>/dev/null || true`, { shell: true });
         execSync(`rm -f "${PLIST_PATH}"`, { shell: true });
-        console.log(chalk.green('  ✓  launchd plist removed'));
+        console.log(`${PAD}${EMERALD('✓')}  launchd plist removed`);
       } catch {}
     }
 
     if (existsSync(NEXUS_DIR)) {
       execSync(`rm -rf "${NEXUS_DIR}"`, { shell: true });
-      console.log(chalk.green(`  ✓  ${NEXUS_DIR} removed`));
+      console.log(`${PAD}${EMERALD('✓')}  ${NEXUS_DIR} removed`);
     }
 
     console.log('');
-    console.log(chalk.dim('  NEXUS has left the building.'));
-    console.log(chalk.dim('  To reinstall: git clone && ./install.sh'));
+    console.log(chalk.dim(`${PAD}NEXUS has left the building.`));
+    console.log(chalk.dim(`${PAD}To reinstall: git clone && ./install.sh`));
     console.log('');
   });
 
@@ -816,19 +811,19 @@ program
 
     const workspacePath = join(HOME, 'nexus-workspace');
 
-    console.log(chalk.bold('  NEXUS Workspace'));
-    console.log(chalk.dim('  ─────────────────────────'));
+    section('Workspace');
     console.log('');
-    console.log(`  ${chalk.dim('Path:')}   ${chalk.cyan(workspacePath)}`);
+    row('Path', workspacePath, chalk.dim);
+
     console.log('');
 
     // Create if missing
     if (!existsSync(workspacePath)) {
       try {
         mkdirSync(workspacePath, { recursive: true });
-        console.log(chalk.green('  ✓ Workspace directory created'));
+        console.log(`${PAD}${EMERALD('◆')} Directory created`);
       } catch {
-        console.log(chalk.yellow('  ⚠  Could not create workspace directory'));
+        console.log(`${PAD}${AMBER('◆')} Could not create directory`);
       }
     }
 
@@ -836,21 +831,21 @@ program
     try {
       const entries = readdirSync(workspacePath);
       if (entries.length === 0) {
-        console.log(chalk.dim('  (workspace is empty)'));
+        console.log(chalk.dim(`${PAD}(workspace is empty)`));
       } else {
-        console.log(chalk.dim(`  ${entries.length} item(s):\n`));
+        console.log(chalk.dim(`${PAD}${entries.length} item(s)\n`));
         for (const entry of entries.slice(0, 20)) {
           const fullPath = join(workspacePath, entry);
           const isDir = statSync(fullPath).isDirectory();
           const icon = isDir ? '📁' : '📄';
-          console.log(`  ${icon}  ${entry}`);
+          console.log(`${PAD}  ${icon}  ${entry}`);
         }
         if (entries.length > 20) {
-          console.log(chalk.dim(`  … and ${entries.length - 20} more`));
+          console.log(chalk.dim(`${PAD}  … and ${entries.length - 20} more`));
         }
       }
     } catch {
-      console.log(chalk.dim('  (could not read workspace)'));
+      console.log(chalk.dim(`${PAD}(could not read workspace)`));
     }
 
     console.log('');
@@ -858,9 +853,9 @@ program
     // Open in Finder
     try {
       execSync(`open "${workspacePath}"`, { stdio: 'pipe' });
-      console.log(chalk.green('  ✓ Opened in Finder'));
+      console.log(`${PAD}${EMERALD('◆')} Opened in Finder`);
     } catch {
-      console.log(chalk.dim(`  Run: open "${workspacePath}"`));
+      console.log(chalk.dim(`${PAD}run: open "${workspacePath}"`));
     }
 
     showPhrase();
@@ -877,7 +872,7 @@ program
     console.log('');
 
     if (!existsSync(DB_PATH)) {
-      console.log(chalk.yellow('  ⚠  No memory database found. Start NEXUS first.'));
+      console.log(`${PAD}${AMBER('◆')} No database found  ${chalk.dim('· start NEXUS first')}`);
       showPhrase();
       return;
     }
@@ -896,8 +891,11 @@ program
 
     dreamer.on('exit', (code) => {
       if (code !== 0) {
-        console.log(chalk.red('  ✗  Dream cycle failed.'));
-        if (err) console.log(chalk.dim(err.trim()));
+        console.log(`${PAD}${ROSE('✗')} Dream cycle failed`);
+        if (err) {
+          const errLine = err.trim().split('\n')[0];
+          console.log(chalk.dim(`${PAD}  ${errLine}`));
+        }
         showPhrase();
         return;
       }
@@ -913,37 +911,42 @@ program
           ideas: string[];
         };
 
-        console.log(chalk.green('  ✓  Dream cycle complete') + chalk.dim(` (${report.durationMs}ms)`));
+        console.log(`${PAD}${EMERALD('◆')} ${chalk.bold('Dream cycle complete')}  ${chalk.dim(`${report.durationMs}ms`)}`);
         console.log('');
-        info('Consolidated', `${report.consolidated} episodic → semantic`);
-        info('Decayed', `${report.decayed} stale memories`);
-        info('GC\'d', `${report.garbageCollected} old memories removed`);
+        row('Consolidated', `${report.consolidated} episodic → semantic`);
+        row('Decayed',      `${report.decayed} stale memories`);
+        row('GC\'d',        `${report.garbageCollected} old memories removed`);
 
         if (report.insights.length > 0) {
           console.log('');
-          console.log(chalk.dim('  Insights:'));
+          console.log(chalk.dim(`${PAD}Insights`));
+          console.log(chalk.dim(`${PAD}${'─'.repeat(32)}`));
           for (const insight of report.insights) {
-            console.log(`  ${chalk.cyan('◈')} ${chalk.white(insight)}`);
+            console.log(`${PAD}${VIOLET('◆')} ${chalk.white(insight)}`);
           }
         }
 
         if (report.reflections.length > 0) {
           console.log('');
-          console.log(chalk.dim('  Reflections:'));
+          console.log(chalk.dim(`${PAD}Reflections`));
+          console.log(chalk.dim(`${PAD}${'─'.repeat(32)}`));
           for (const r of report.reflections) {
-            console.log(`  ${chalk.magenta('💭')} ${chalk.white(r)}`);
+            console.log(`${PAD}${chalk.dim('·')} ${chalk.white(r)}`);
+            console.log('');
           }
         }
 
         if (report.ideas.length > 0) {
           console.log('');
-          console.log(chalk.dim('  Ideas:'));
+          console.log(chalk.dim(`${PAD}Ideas`));
+          console.log(chalk.dim(`${PAD}${'─'.repeat(32)}`));
           for (const idea of report.ideas) {
-            console.log(`  ${chalk.yellow('💡')} ${chalk.white(idea)}`);
+            console.log(`${PAD}${AMBER('◆')} ${chalk.white(idea)}`);
+            console.log('');
           }
         }
       } catch {
-        console.log(chalk.green('  ✓  Dream cycle complete'));
+        console.log(`${PAD}${EMERALD('◆')} ${chalk.bold('Dream cycle complete')}`);
         if (out.trim()) console.log(chalk.dim(out.trim()));
       }
 
@@ -986,29 +989,29 @@ program
   .description('List available AI provider presets (LiteLLM, OpenRouter, Groq, Mistral, xAI)')
   .action(async () => {
     showLogo(true);
-    console.log(chalk.bold('  AI Provider Presets\n'));
+    section('AI Providers');
+    console.log('');
 
-    const presets: Record<string, { name: string; baseURL: string; defaultModel?: string }> = {
-      groq:        { name: 'groq',        baseURL: 'https://api.groq.com/openai/v1',    defaultModel: 'llama-3.3-70b-versatile' },
-      mistral:     { name: 'mistral',     baseURL: 'https://api.mistral.ai/v1',         defaultModel: 'mistral-large-latest' },
-      openrouter:  { name: 'openrouter',  baseURL: 'https://openrouter.ai/api/v1',      defaultModel: 'anthropic/claude-3.5-sonnet' },
-      xai:         { name: 'xai',         baseURL: 'https://api.x.ai/v1',               defaultModel: 'grok-2-latest' },
-      litellm:     { name: 'litellm',     baseURL: 'http://localhost:4000',             defaultModel: 'gpt-4o' },
-      together:    { name: 'together',    baseURL: 'https://api.together.xyz/v1',        defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
+    const presets: Record<string, { baseURL: string; defaultModel?: string }> = {
+      groq:       { baseURL: 'https://api.groq.com/openai/v1',    defaultModel: 'llama-3.3-70b-versatile' },
+      mistral:    { baseURL: 'https://api.mistral.ai/v1',         defaultModel: 'mistral-large-latest' },
+      openrouter: { baseURL: 'https://openrouter.ai/api/v1',      defaultModel: 'anthropic/claude-3.5-sonnet' },
+      xai:        { baseURL: 'https://api.x.ai/v1',               defaultModel: 'grok-2-latest' },
+      litellm:    { baseURL: 'http://localhost:4000',              defaultModel: 'gpt-4o' },
+      together:   { baseURL: 'https://api.together.xyz/v1',       defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
     };
 
     for (const [key, p] of Object.entries(presets)) {
       const envKey = `${key.toUpperCase()}_API_KEY`;
       const hasKey = !!process.env[envKey];
-      const status = hasKey ? chalk.green('✓ key set') : chalk.dim('no key');
-      console.log(`  ${chalk.bold(key.padEnd(14))} ${status}`);
-      console.log(`    Model:   ${p.defaultModel ?? '(auto)'}`);
-      console.log(`    URL:     ${p.baseURL}`);
-      console.log(`    Env var: ${envKey}`);
-      console.log('');
+      const dot  = hasKey ? EMERALD('●') : chalk.dim('○');
+      const name = chalk.bold(key.padEnd(14));
+      console.log(`${PAD}${dot} ${name} ${chalk.dim(p.defaultModel ?? '(auto)')}`);
+      if (hasKey) console.log(chalk.dim(`${PAD}  ${envKey} ✓`));
     }
 
-    console.log(chalk.dim('  Set NEXUS_AI_PROVIDER_PRESET=<name> to auto-use a preset.'));
+    console.log('');
+    console.log(chalk.dim(`${PAD}Set NEXUS_AI_PROVIDER_PRESET=<name> to use a preset`));
     showPhrase();
   });
 
