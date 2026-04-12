@@ -729,6 +729,8 @@ export class Orchestrator {
                 }
                 if (untrustedTools.has(job.toolName)) result = wrapUntrustedContent(result, job.toolName);
                 this.eventLoop.emit('agent:completed', { tool: job.toolName, resultLen: result.length }, 'medium', 'orchestrator');
+                // Send screenshot images directly to Telegram
+                this.maybeSendScreenshot(job.toolName, result, chatId).catch(() => {});
                 return { id: job.toolCall.id, result };
               }),
             );
@@ -754,6 +756,8 @@ export class Orchestrator {
             }
             if (untrustedTools.has(job.toolName)) result = wrapUntrustedContent(result, job.toolName);
             this.eventLoop.emit('agent:completed', { tool: job.toolName, resultLen: result.length }, 'medium', 'orchestrator');
+            // Send screenshot images directly to Telegram
+            await this.maybeSendScreenshot(job.toolName, result, chatId);
             resultMap.set(job.toolCall.id, result);
           }
 
@@ -1581,6 +1585,32 @@ ${extras.memorySynthesis}`);
     }
   }
 
+  /**
+   * After a screenshot tool fires, send the image directly to Telegram.
+   * Called from the tool execution loop so the user gets the photo immediately.
+   */
+  private async maybeSendScreenshot(toolName: string, result: string, chatId: string): Promise<void> {
+    try {
+      if (toolName === 'take_screenshot') {
+        // Result is "Screenshot saved to: /path/to/file.png"
+        const match = result.match(/Screenshot saved to:\s*(.+)/);
+        if (match?.[1]) {
+          const path = match[1].trim();
+          await this.telegram.sendPhoto(chatId, path, '📸 Screenshot');
+        }
+      } else if (toolName === 'browser_screenshot') {
+        // Result is JSON: {"base64":"...","mimeType":"image/png"}
+        const data = JSON.parse(result) as { base64?: string; mimeType?: string };
+        if (data.base64) {
+          const buf = Buffer.from(data.base64, 'base64');
+          await this.telegram.sendPhoto(chatId, buf, '📸 Browser screenshot');
+        }
+      }
+    } catch (err) {
+      log.warn({ err, toolName }, 'Failed to send screenshot photo to Telegram');
+    }
+  }
+
   private async runSelfImprovement(
     taskTitle: string,
     originalRequest: string,
@@ -1644,8 +1674,25 @@ ${extras.memorySynthesis}`);
       }
     };
 
-    // Run once after a short delay (give the system time to settle), then every 6h
-    setTimeout(runDream, 60_000);
+    // Check when the last dream ran — only do the startup run if it's been > 4 hours
+    const startupDelay = async () => {
+      try {
+        const db = getDatabase();
+        const row = db
+          .prepare(`SELECT created_at FROM memories WHERE source = 'dream-cycle' ORDER BY created_at DESC LIMIT 1`)
+          .get() as { created_at: string } | undefined;
+        if (row) {
+          const lastDream = new Date(row.created_at).getTime();
+          const hoursSince = (Date.now() - lastDream) / (1000 * 60 * 60);
+          if (hoursSince < 4) {
+            log.info({ hoursSince: hoursSince.toFixed(1) }, 'Skipping startup dream — ran recently');
+            return;
+          }
+        }
+      } catch { /* DB not ready yet — skip */ }
+      runDream();
+    };
+    setTimeout(startupDelay, 60_000);
     this.dreamInterval = setInterval(runDream, this.DREAM_INTERVAL_MS);
   }
 
