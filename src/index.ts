@@ -104,10 +104,10 @@ async function main() {
       const warnings = await warnMissingPermissions(permStatus);
       if (warnings.length > 0) {
         const msg =
-          '⚠️ *NEXUS permission check*\n\n' +
+          '⚠️ <b>NEXUS permission check</b>\n\n' +
           warnings.join('\n\n') +
           '\n\nRestart NEXUS after granting permissions.';
-        await telegram.sendMessage(chatId, msg, { parseMode: 'Markdown' }).catch((err) => log.warn({ err }, 'Failed to send permission warning'));
+        await telegram.sendMessage(chatId, msg, { parseMode: 'HTML' }).catch((err) => log.warn({ err }, 'Failed to send permission warning'));
       }
     } catch (err) {
       log.warn({ err }, 'Permission check failed — skipping');
