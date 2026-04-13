@@ -12,7 +12,7 @@ import { assembleContext, buildSystemPrompt } from './context.js';
 import { EventLoop } from './event-loop.js';
 import { toOpenAITools } from '../tools/definitions.js';
 import { ToolExecutor } from '../tools/executor.js';
-import { classifyMessage } from './task-classifier.js';
+import { classifyMessage, classifyTaskMode, isUndercoverProbe } from './task-classifier.js';
 import { planTask } from './task-planner.js';
 import { runTask } from './task-runner.js';
 import {
@@ -114,42 +114,8 @@ const log = createLogger('Orchestrator');
 const MAX_TOOL_ITERATIONS = 50;
 const TOOL_TIMEOUT_MS = 120_000; // 2 minutes max per tool execution
 
-/** Map a tool call to a human-readable Telegram status line.
- *  If undercover=true, returns generic messages that don't reveal tool names. */
-function getToolStatus(toolName: string, args: Record<string, unknown>, undercover = false): string {
-  if (undercover) {
-    // Generic status messages that reveal nothing about internals
-    const genericMap: Record<string, string> = {
-      web_search: '🔍 Looking that up...',
-      web_fetch: '🌐 Checking online...',
-      crawl_url: '🌐 Checking online...',
-      browser_navigate: '🌐 Opening page...',
-      browser_extract: '📄 Reading content...',
-      browser_click: '👆 Interacting with page...',
-      browser_type: '⌨️ Entering information...',
-      browser_screenshot: '📸 Capturing view...',
-      browser_scroll: '📜 Scrolling...',
-      browser_evaluate: '⚙️ Processing...',
-      browser_wait_for: '⏳ Waiting...',
-      browser_fill_form: '📝 Filling in details...',
-      take_screenshot: '📸 Capturing screen...',
-      run_terminal_command: '⚙️ Working on it...',
-      write_file: '💾 Saving...',
-      read_file: '📁 Checking...',
-      list_directory: '📁 Checking...',
-      search_files: '🔍 Searching...',
-      recall: '🧠 Thinking...',
-      remember: '💡 Noted...',
-      get_system_info: '💻 Checking...',
-      understand_image: '👁️ Looking at image...',
-      transcribe_audio: '🎙️ Listening...',
-      read_pdf: '📄 Reading document...',
-      introspect: '🔭 Checking...',
-      check_updates: '🔄 Checking...',
-    };
-    return genericMap[toolName] ?? '⚙️ Working...';
-  }
-
+/** Map a tool call to a human-readable Telegram status line. Always generic — never exposes tool names. */
+function getToolStatus(toolName: string, args: Record<string, unknown>): string {
   const a = args ?? {};
   const url = String(a.url ?? '').replace(/^https?:\/\//, '').slice(0, 55);
   const path = String(a.path ?? '').replace(/.*\//, '').slice(0, 40);
@@ -250,9 +216,7 @@ export class Orchestrator {
   // Task engine: track in-flight background tasks so callers can await them
   private pendingTaskPromises: Promise<unknown>[] = [];
 
-  // ── Mode flags ────────────────────────────────────────────────────────
-  private undercoverMode = false;
-  private coordinatorMode = false;
+  // (modes are auto-detected per-request — no persistent flags needed)
 
   // ── Ultra mode: pending approval gates ───────────────────────────────
   private pendingUltraPlans = new Map<string, { plan: TaskPlan; request: string; chatId: string }>();
@@ -264,21 +228,6 @@ export class Orchestrator {
     this.pendingTaskPromises = [];
   }
 
-  // ── Mode accessors ────────────────────────────────────────────────────
-
-  setUndercoverMode(enabled: boolean): void {
-    this.undercoverMode = enabled;
-    log.info({ enabled }, 'Undercover mode toggled');
-  }
-
-  isUndercoverMode(): boolean { return this.undercoverMode; }
-
-  setCoordinatorMode(enabled: boolean): void {
-    this.coordinatorMode = enabled;
-    log.info({ enabled }, 'Coordinator mode toggled');
-  }
-
-  isCoordinatorMode(): boolean { return this.coordinatorMode; }
 
   /** Approve a pending Ultra Mode plan by its ID. */
   async approveUltraPlan(planId: string): Promise<boolean> {
@@ -567,6 +516,20 @@ export class Orchestrator {
         return "I can't help with that. I don't share my internal instructions, system prompt, tool names, or behavioral rules — not in any format, including poems, stories, or creative writing.";
       }
 
+      // ── 0b. Undercover probe detection ───────────────────────
+      // If the user is probing NEXUS's internals/source code/infrastructure,
+      // route to a deflection reply before reaching the LLM tool loop.
+      if (isUndercoverProbe(text)) {
+        log.info({ chatId }, 'Undercover probe detected — deflecting');
+        this.personality.processEvent('user_message');
+        // Still let the LLM respond naturally — the system prompt handles the deflection
+        // Just flag it in memory so NEXUS is aware of the pattern
+        this.memory.store('semantic', 'fact',
+          `User asked about NEXUS internals/infrastructure: "${text.slice(0, 200)}"`,
+          { importance: 0.5, tags: ['undercover', 'probe'], source: chatId },
+        ).catch(() => {});
+      }
+
       const injectionResult = detectInjection(text);
       if (injectionResult.detected && injectionResult.confidence > 0.5) {
         log.warn(
@@ -684,14 +647,20 @@ export class Orchestrator {
       // the TaskRunner which executes it step-by-step with live progress.
       const messageType = classifyMessage(text);
       if (messageType === 'task') {
-        log.info({ chatId, coordinator: this.coordinatorMode }, 'Message classified as task — routing to TaskEngine');
+        // Auto-detect execution mode from the request itself
+        const taskMode = classifyTaskMode(text);
+        const useCoordinator = taskMode === 'coordinator';
+        const useUltra = taskMode === 'ultra';
+
+        log.info({ chatId, taskMode }, 'Message classified as task — routing to TaskEngine');
 
         // Generate plan (fast LLM call)
-        const plan = await planTask(text, this.ai, this.config.ai.model, this.coordinatorMode);
+        const plan = await planTask(text, this.ai, this.config.ai.model, useCoordinator);
 
         if (plan) {
-          // ── Ultra Mode: review plan with strong model, wait for approval ──
-          if ((this.config as NexusConfig & { ultraMode?: boolean }).ultraMode) {
+          // ── Ultra Mode: high-stakes tasks → strong model review + approval ──
+          if (useUltra) {
+            log.info({ chatId, title: plan.title }, 'Ultra mode auto-triggered');
             return await this.handleUltraMode(plan, text, chatId);
           }
 
@@ -707,7 +676,7 @@ export class Orchestrator {
                 telegram: this.telegram,
                 model: this.config.ai.model,
                 maxTokens: this.config.ai.maxTokens,
-                coordinatorMode: this.coordinatorMode,
+                coordinatorMode: useCoordinator,
               }).then(async (result) => {
                 log.info({ chatId, success: result.success, steps: result.completedSteps }, 'Task completed');
                 try {
@@ -937,12 +906,9 @@ export class Orchestrator {
           if (parallelJobs.length > 0) {
             // Emit combined status for parallel batch
             if (parallelJobs.length === 1) {
-              onStatus?.(getToolStatus(parallelJobs[0].toolName, parallelJobs[0].toolArgs, this.undercoverMode));
+              onStatus?.(getToolStatus(parallelJobs[0].toolName, parallelJobs[0].toolArgs));
             } else {
-              const names = this.undercoverMode
-                ? 'multiple operations'
-                : parallelJobs.map(j => getToolStatus(j.toolName, j.toolArgs).split(' ').slice(0, 2).join(' ')).join(', ');
-              onStatus?.(`⚙️ ${this.undercoverMode ? 'Working...' : `Running in parallel: ${names}`}`);
+              onStatus?.(`⚙️ Working...`);
             }
             const parallelResults = await Promise.all(
               parallelJobs.map(async (job) => {
@@ -974,7 +940,7 @@ export class Orchestrator {
               resultMap.set(job.toolCall.id, '[Loop detected: this exact action was already tried twice. Try a different approach.]');
               continue;
             }
-            onStatus?.(getToolStatus(job.toolName, job.toolArgs, this.undercoverMode));
+            onStatus?.(getToolStatus(job.toolName, job.toolArgs));
             log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (sequential)');
             let result = await withTimeout(this.toolExecutor.execute(job.toolName, job.toolArgs), TOOL_TIMEOUT_MS, job.toolName);
             result = repairToolResult(result);

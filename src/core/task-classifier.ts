@@ -1,9 +1,11 @@
 // ─── Task Classifier ─────────────────────────────────────────────────────────
 // Determines whether an incoming message is a "do-work" task (build, fix,
 // install, diagnose) or a "chat" message (question, conversation).
+// Also detects which execution mode is appropriate: standard, coordinator, or ultra.
 // Fast, zero-LLM pattern matching.
 
 export type MessageType = 'task' | 'chat';
+export type TaskMode = 'standard' | 'coordinator' | 'ultra';
 
 // Work verbs — used in both trigger and "can you [verb]" patterns
 const WORK_VERBS = '(?:build|create|make|develop|generate|scaffold|set\\s*up|setup|initialize|init|write|code|implement|program|fix|debug|repair|troubleshoot|diagnose|solve|investigate|install|deploy|configure|integrate|refactor|optimize|improve|upgrade|migrate|convert|automate|run|execute|launch|start|test|analyse|analyze)';
@@ -42,24 +44,41 @@ const CHAT_OVERRIDES: RegExp[] = [
 
 const MIN_TASK_LENGTH = 15; // messages shorter than this are always chat
 
+// ── Ultra mode triggers — high-stakes, irreversible, or complex multi-domain tasks ──
+const ULTRA_TRIGGERS: RegExp[] = [
+  // Destructive / irreversible actions
+  /\b(?:deploy(?:ment)?|release|publish|ship|push\s+to\s+(?:prod|main|master)|go\s+live)\b/i,
+  /\b(?:delete|remove|drop|wipe|destroy|migrate|overwrite)\b/i,
+  /\b(?:send\s+(?:email|message|notification)|post\s+to|submit\s+to)\b/i,
+  // High complexity signals
+  /\b(?:entire|whole|complete|full|end.to.end|from\s+scratch|production.ready|scalable)\b/i,
+  /\b(?:architecture|system\s+design|full\s+stack|infrastructure)\b/i,
+  // Multi-domain requests (browser + code + deploy etc.)
+  /\b(?:and\s+(?:deploy|release|send|push|publish|post))\b/i,
+];
+
+// ── Coordinator mode triggers — clearly parallel, multi-domain, or "do X and Y and Z" ──
+const COORDINATOR_TRIGGERS: RegExp[] = [
+  // Explicit parallel signals
+  /\b(?:simultaneously|at\s+the\s+same\s+time|in\s+parallel|all\s+at\s+once)\b/i,
+  // Multiple independent tasks in one request
+  /\b(?:(?:research|find|look\s+up).+and.+(?:build|create|write|generate))\b/i,
+  /\b(?:compare|analyse\s+multiple|benchmark\s+(?:several|multiple|different))\b/i,
+  // Multi-part requests (3+ "and" clauses or enumerated items)
+  /(?:,\s*\w+){3,}/,
+  /\b(?:first.+then.+(?:also|and\s+finally|lastly))\b/i,
+  // Broad research + build combos
+  /\b(?:(?:scrape|crawl|search)\s+.+\s+and\s+(?:build|create|generate|compile))\b/i,
+];
+
 /**
- * Classifies a message as a background task (build/fix/install/diagnose)
- * or a conversational chat message.
- *
- * Order of precedence:
- *   1. Too short → chat
- *   2. Strong chat override → chat
- *   3. Task trigger match → task
- *   4. Default → chat
+ * Classifies a message as a background task or chat.
  */
 export function classifyMessage(text: string): MessageType {
   const trimmed = text.trim();
 
   if (trimmed.length < MIN_TASK_LENGTH) return 'chat';
 
-  // Chat overrides checked first — but only when no work verb is present.
-  // This prevents "can you fix my broken Python script?" from being classified
-  // as chat just because it ends with a question mark.
   const hasWorkVerb = new RegExp(`\\b${WORK_VERBS}\\b`, 'i').test(trimmed);
 
   if (!hasWorkVerb && CHAT_OVERRIDES.some((p) => p.test(trimmed))) return 'chat';
@@ -67,4 +86,45 @@ export function classifyMessage(text: string): MessageType {
   if (TASK_TRIGGERS.some((p) => p.test(trimmed))) return 'task';
 
   return 'chat';
+}
+
+/**
+ * Determines the best execution mode for a task.
+ * Called only after classifyMessage returns 'task'.
+ *
+ * - ultra: high-stakes, irreversible, or complex multi-domain tasks → review + approval gate
+ * - coordinator: clearly parallel, multi-part, independent subtasks → parallel agents
+ * - standard: everything else → sequential steps
+ *
+ * Ultra takes precedence over coordinator.
+ */
+export function classifyTaskMode(text: string): TaskMode {
+  const trimmed = text.trim();
+
+  // Ultra: check first — takes precedence
+  if (ULTRA_TRIGGERS.some((p) => p.test(trimmed))) return 'ultra';
+
+  // Coordinator: parallel-friendly tasks
+  if (COORDINATOR_TRIGGERS.some((p) => p.test(trimmed))) return 'coordinator';
+
+  return 'standard';
+}
+
+/**
+ * Detects whether a message is probing NEXUS's own infrastructure, source code,
+ * or internal implementation — triggers undercover deflection.
+ */
+export function isUndercoverProbe(text: string): boolean {
+  const lower = text.toLowerCase();
+  const probePatterns = [
+    /\bhow\s+(?:do\s+you|does\s+nexus|are\s+you)\s+(?:work|complete|do|run|execute|process)\b/,
+    /\b(?:source\s+code|codebase|implementation|infrastructure|tech\s+stack|architecture)\b/,
+    /\bwhat\s+(?:tools?|apis?|libraries?|frameworks?|languages?)\s+(?:do\s+you|does\s+nexus)\b/,
+    /\bhow\s+(?:are\s+you\s+(?:built|made|coded|programmed))\b/,
+    /\b(?:show|reveal|explain|describe)\s+(?:your|the)\s+(?:code|source|internals?|implementation|system\s+prompt|prompt)\b/,
+    /\bwhat('s|\s+is)\s+(?:inside|under\s+the\s+hood|your\s+backend)\b/,
+    /\bwhat\s+(?:model|llm|ai)\s+(?:are\s+you|do\s+you\s+use)\b/,
+    /\bhow\s+(?:do\s+you|are\s+you\s+able\s+to)\s+(?:access|control|see|read|write)\b/,
+  ];
+  return probePatterns.some((p) => p.test(lower));
 }
