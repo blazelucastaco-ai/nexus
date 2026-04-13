@@ -595,7 +595,10 @@ async function setupPermissions(): Promise<void> {
         "\n\n" +
         chalk.dim(
           "NEXUS needs these permissions to work properly.\n" +
-            "We'll test each one and open System Settings for any that are missing."
+            "We'll test each one and open System Settings for any that are missing.\n\n" +
+            "Required: Screen Recording, Accessibility, Automation\n" +
+            "Required: Contacts, Messages — for sending iMessages on your behalf\n" +
+            "Optional: Full Disk Access — for reading protected system files"
         ),
       {
         padding: 1,
@@ -680,6 +683,44 @@ async function setupPermissions(): Promise<void> {
           execFileSync("osascript", ["-e", 'tell application "Finder" to return name'], {
             timeout: 3000,
           });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    },
+    {
+      name: "Contacts",
+      key: "contacts",
+      prefsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts",
+      description: `Enable for: ${NODE_BIN} — needed to look up contacts for iMessage/email`,
+      test: async () => {
+        const { execFileSync } = await import("node:child_process");
+        try {
+          const out = execFileSync(
+            "osascript",
+            ["-e", "tell application \"Contacts\" to return count of every person"],
+            { timeout: 4000, encoding: "utf-8" }
+          );
+          return !isNaN(parseInt(out.trim(), 10));
+        } catch {
+          return false;
+        }
+      },
+    },
+    {
+      name: "Messages (Automation)",
+      key: "messages",
+      prefsUrl: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
+      description: `Enable Messages for: ${NODE_BIN} — needed to send iMessages on your behalf`,
+      test: async () => {
+        const { execFileSync } = await import("node:child_process");
+        try {
+          execFileSync(
+            "osascript",
+            ["-e", "tell application \"Messages\" to return name of first service"],
+            { timeout: 4000 }
+          );
           return true;
         } catch {
           return false;

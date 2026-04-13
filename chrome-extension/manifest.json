@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NEXUS Bridge",
-  "version": "1.0.0",
+  "version": "1.0.7",
   "description": "Connects Chrome to your local NEXUS AI — letting it navigate, click, type, extract, and screenshot on your behalf.",
 
   "permissions": [

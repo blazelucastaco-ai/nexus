@@ -162,7 +162,7 @@ async function initNexus() {
     // Give the Chrome extension a moment to reconnect
     await new Promise<void>((resolve) => {
       if (browserBridge.isConnected) { resolve(); return; }
-      const t = setTimeout(resolve, 8000); // don't block startup if ext isn't open
+      const t = setTimeout(resolve, 35000); // wait up to 35s (alarm fires every 24s)
       browserBridge.onConnect(() => { clearTimeout(t); resolve(); });
     });
     if (browserBridge.isConnected) {

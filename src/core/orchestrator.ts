@@ -225,6 +225,7 @@ export class Orchestrator {
     this.goalTracker = new GoalTracker();
     this.reasoningTrace = new ReasoningTrace(this.ai);
     this.selfEvaluator = new SelfEvaluator(this.ai);
+    this.selfEvaluator.setEnabled(false); // Disabled: post-hoc critic leaks capability warnings to users
 
     // FIX 4: Wire task journal as an after-hook
     this.toolExecutor.addAfterHook(makeJournalHook());
@@ -615,7 +616,7 @@ export class Orchestrator {
       const recentToolSequence: string[] = [];
       // Hard cap on screenshot-type tools per turn — these should be used sparingly
       const SCREENSHOT_TOOLS = new Set(['browser_screenshot', 'take_screenshot', 'understand_image']);
-      const MAX_SCREENSHOTS_PER_TURN = 2;
+      const MAX_SCREENSHOTS_PER_TURN = 1;
 
       for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
         // ── FIX 2: LLM-driven compaction ──────────────────────────
@@ -685,6 +686,7 @@ export class Orchestrator {
 
         // ── FIX 3: Check alternating pattern (A→B→A→B) ──────────
         let loopDetected = false;
+        let screenshotWasSent = false; // track at iteration scope for response message
         if (recentToolSequence.length >= 4) {
           const len = recentToolSequence.length;
           if (
@@ -805,6 +807,7 @@ export class Orchestrator {
           }
 
           // Run sequential tools one at a time (writes, commands, etc.)
+          let screenshotSent = false;
           for (const job of sequentialJobs) {
             if (job.loopBlocked) {
               resultMap.set(job.toolCall.id, '[Loop detected: this exact action was already tried twice. Try a different approach.]');
@@ -824,10 +827,13 @@ export class Orchestrator {
             }
             if (untrustedTools.has(job.toolName)) result = wrapUntrustedContent(result, job.toolName);
             this.eventLoop.emit('agent:completed', { tool: job.toolName, resultLen: result.length }, 'medium', 'orchestrator');
-            // Send screenshot images directly to Telegram
-            await this.maybeSendScreenshot(job.toolName, result, chatId);
+            // Send screenshot images directly to Telegram; stop looping once sent
+            const sent = await this.maybeSendScreenshot(job.toolName, result, chatId);
+            if (sent) screenshotSent = true;
             resultMap.set(job.toolCall.id, result);
+            if (screenshotSent) break; // screenshot is always the last action in a turn
           }
+          if (screenshotSent) { loopDetected = true; screenshotWasSent = true; } // reuse flag to break outer iteration loop
 
           // Add tool results to loopMessages in original order
           for (const job of jobs) {
@@ -841,7 +847,14 @@ export class Orchestrator {
 
         // Break out of outer loop if tool loop was detected during this iteration
         if (loopDetected) {
-          if (!finalContent) finalContent = 'I hit a repeated action and stopped to avoid a loop. Let me know how you\'d like me to proceed.';
+          if (!finalContent) {
+            if (screenshotWasSent) {
+              // Screenshot was successfully sent — use the LLM's content from this iteration as the response
+              finalContent = aiResponse.content?.trim() || 'Done — screenshot sent.';
+            } else {
+              finalContent = 'I hit a repeated action and stopped to avoid a loop. Let me know how you\'d like me to proceed.';
+            }
+          }
           break;
         }
 
@@ -1660,26 +1673,30 @@ ${extras.memorySynthesis}`);
    * After a screenshot tool fires, send the image directly to Telegram.
    * Called from the tool execution loop so the user gets the photo immediately.
    */
-  private async maybeSendScreenshot(toolName: string, result: string, chatId: string): Promise<void> {
+  /**
+   * Returns true if a screenshot was sent — callers should break the tool loop
+   * since screenshot is always the final action in a turn.
+   */
+  private async maybeSendScreenshot(toolName: string, result: string, chatId: string): Promise<boolean> {
     try {
       if (toolName === 'take_screenshot') {
-        // Result is "Screenshot saved to: /path/to/file.png"
         const match = result.match(/Screenshot saved to:\s*(.+)/);
         if (match?.[1]) {
-          const path = match[1].trim();
-          await this.telegram.sendPhoto(chatId, path, '📸 Screenshot');
+          await this.telegram.sendPhoto(chatId, match[1].trim(), '📸 Screenshot');
+          return true;
         }
       } else if (toolName === 'browser_screenshot') {
-        // Result is JSON: {"base64":"...","mimeType":"image/png"}
         const data = JSON.parse(result) as { base64?: string; mimeType?: string };
         if (data.base64) {
           const buf = Buffer.from(data.base64, 'base64');
           await this.telegram.sendPhoto(chatId, buf, '📸 Browser screenshot');
+          return true;
         }
       }
     } catch (err) {
       log.warn({ err, toolName }, 'Failed to send screenshot photo to Telegram');
     }
+    return false;
   }
 
   private async runSelfImprovement(

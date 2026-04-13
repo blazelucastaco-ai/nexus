@@ -526,13 +526,15 @@ export const toolDefinitions: ToolDefinition[] = [
     name: 'browser_navigate',
     description:
       'Navigate the active Chrome tab to a URL and wait for it to load. ' +
+      'Waits an extra 800ms after load for SPA frameworks to render. ' +
       'Returns the final URL and page title. ' +
       'Use when asked to visit a website, open a URL, or go to a page. ' +
       'Requires the NEXUS Bridge Chrome extension to be connected.',
     parameters: {
       type: 'object',
       properties: {
-        url: { type: 'string', description: 'The full URL to navigate to (https://...)' },
+        url:             { type: 'string', description: 'The full URL to navigate to (https://...)' },
+        waitForSelector: { type: 'string', description: 'Optional CSS selector to wait for after page loads (useful for SPAs that render content asynchronously)' },
       },
       required: ['url'],
     },
@@ -543,13 +545,15 @@ export const toolDefinitions: ToolDefinition[] = [
       'Extract content from the current Chrome tab. Without a selector, returns full page text, title, URL, links, and headings. ' +
       'With a CSS selector, returns the text of the matched element. ' +
       'With attribute param, returns the attribute value. ' +
+      'With mode="form", discovers all fillable form fields and returns their selectors, labels, and current values. ' +
       'Use when you need to read or scrape content from an open browser page.',
     parameters: {
       type: 'object',
       properties: {
-        selector: { type: 'string', description: 'CSS selector to target a specific element (optional — omit for full page)' },
+        selector:  { type: 'string', description: 'CSS selector to target a specific element (optional — omit for full page)' },
         attribute: { type: 'string', description: 'HTML attribute to read (e.g. "href", "value", "src") — optional' },
-        all: { type: 'string', description: 'Set to "true" to return all matches, not just the first', enum: ['true', 'false'] },
+        all:       { type: 'string', description: 'Set to "true" to return all matches, not just the first', enum: ['true', 'false'] },
+        mode:      { type: 'string', description: 'Set to "form" to discover all form fields with their selectors and labels', enum: ['form'] },
       },
       required: [],
     },
@@ -572,16 +576,18 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'browser_type',
     description:
-      'Type text into an input field in the current Chrome tab. ' +
-      'Use for filling in search boxes, forms, text areas, etc.',
+      'Type text into a specific input field in the current Chrome tab. ' +
+      'ALWAYS provide a selector — never call this without one. ' +
+      'Without a selector it types into whatever element happens to be focused, which is almost always wrong. ' +
+      'For multi-field forms (To/Subject/Body, login forms, etc.) use browser_fill_form instead.',
     parameters: {
       type: 'object',
       properties: {
         text:     { type: 'string', description: 'Text to type into the element' },
-        selector: { type: 'string', description: 'CSS selector of the input to type into (optional — defaults to active element)' },
+        selector: { type: 'string', description: 'CSS selector of the input to type into — REQUIRED. Extract the page first to find the correct selector.' },
         clear:    { type: 'string', description: 'Set to "true" to clear the field before typing', enum: ['true', 'false'] },
       },
-      required: ['text'],
+      required: ['text', 'selector'],
     },
   },
   {
@@ -624,17 +630,89 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
   {
+    name: 'browser_hover',
+    description:
+      'Hover over an element in the current Chrome tab. ' +
+      'Fires mouseenter/mouseover/mousemove events — essential for dropdown menus and tooltips. ' +
+      'Use before clicking items that only appear after hovering.',
+    parameters: {
+      type: 'object',
+      properties: {
+        selector: { type: 'string', description: 'CSS selector of the element to hover over' },
+      },
+      required: ['selector'],
+    },
+  },
+  {
+    name: 'browser_press_key',
+    description:
+      'Press a keyboard key on the focused element or a specific element. ' +
+      'Use for: Enter (submit forms), Tab (move focus), Escape (close modals/dropdowns), Arrow keys (navigate lists), etc. ' +
+      'Call after browser_type to submit a form, or to navigate autocomplete dropdowns.',
+    parameters: {
+      type: 'object',
+      properties: {
+        key:      { type: 'string', description: 'Key to press: Enter, Tab, Escape, Space, Backspace, Delete, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, F5, or any single character' },
+        selector: { type: 'string', description: 'CSS selector of element to press key on (optional — defaults to focused element)' },
+      },
+      required: ['key'],
+    },
+  },
+  {
     name: 'browser_wait_for',
     description:
-      'Wait for a CSS selector to appear in the current Chrome tab. ' +
-      'Use before interacting with elements that load asynchronously.',
+      'Wait for a condition on a CSS selector in the current Chrome tab. ' +
+      'Use before interacting with elements that load asynchronously or animate in.',
     parameters: {
       type: 'object',
       properties: {
         selector: { type: 'string', description: 'CSS selector to wait for' },
         timeout:  { type: 'number', description: 'Max milliseconds to wait (default 10000)' },
+        mode:     { type: 'string', description: 'Condition to wait for: "present" (default, in DOM), "visible" (visible + sized), "text" (contains expected text), "gone" (removed from DOM)', enum: ['present', 'visible', 'text', 'gone'] },
+        text:     { type: 'string', description: 'Expected text content (only used when mode is "text")' },
       },
       required: ['selector'],
+    },
+  },
+  {
+    name: 'browser_wait_for_url',
+    description:
+      'Wait for the active tab URL to contain a specific string. ' +
+      'Use after clicking links or buttons that trigger navigation or SPA route changes. ' +
+      'More reliable than browser_wait_for for detecting page transitions.',
+    parameters: {
+      type: 'object',
+      properties: {
+        pattern: { type: 'string', description: 'String that must appear somewhere in the new URL' },
+        timeout: { type: 'number', description: 'Max milliseconds to wait (default 10000)' },
+      },
+      required: ['pattern'],
+    },
+  },
+  {
+    name: 'browser_suppress_dialogs',
+    description:
+      'Suppress native browser dialogs (alert, confirm, prompt) that would block automation. ' +
+      'Call this BEFORE clicking buttons that trigger JavaScript alerts or confirmation dialogs. ' +
+      'confirm() is replaced with true (accepted), prompt() returns empty string, alert() is silenced. ' +
+      'Use on pages with "Click for JS Alert", "Delete" confirmations, "Are you sure?" popups, etc.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'browser_dismiss_cookies',
+    description:
+      'Dismiss cookie consent banners on the current page. ' +
+      'Tries common selectors (#onetrust, CookieBot, cc-banner, etc.) then falls back to button text matching. ' +
+      'Call this after navigating to a site that shows a cookie banner before you can interact with the page. ' +
+      'Returns dismissed: true if a banner was found and clicked, dismissed: false if none found.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
     },
   },
   {

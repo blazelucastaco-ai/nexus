@@ -13,6 +13,8 @@ export interface PermissionStatus {
   accessibility: boolean;
   fullDiskAccess: boolean;
   automation: boolean;
+  contacts: boolean;
+  messages: boolean;
 }
 
 const PERMISSION_NAMES: Record<keyof PermissionStatus, string> = {
@@ -20,6 +22,8 @@ const PERMISSION_NAMES: Record<keyof PermissionStatus, string> = {
   accessibility: 'Accessibility',
   fullDiskAccess: 'Full Disk Access',
   automation: 'Automation',
+  contacts: 'Contacts',
+  messages: 'Messages (Automation)',
 };
 
 // System Settings pane URLs for each permission
@@ -28,6 +32,8 @@ const PREF_URLS: Record<keyof PermissionStatus, string> = {
   accessibility: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
   fullDiskAccess: 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
   automation: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Automation',
+  contacts: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts',
+  messages: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Automation',
 };
 
 async function checkScreenRecording(): Promise<boolean> {
@@ -78,14 +84,45 @@ async function checkAutomation(): Promise<boolean> {
   }
 }
 
+async function checkContacts(): Promise<boolean> {
+  try {
+    // Use tccutil or check TCC db if we have Full Disk Access; otherwise attempt a quick
+    // read and treat a non-timeout result (even an error) as "permission granted or promptable"
+    const { stdout } = await execFileAsync(
+      'osascript',
+      ['-e', 'tell application "Contacts" to return count of every person'],
+      { timeout: 4000 },
+    );
+    return !isNaN(parseInt(stdout.trim(), 10));
+  } catch {
+    return false;
+  }
+}
+
+async function checkMessagesAutomation(): Promise<boolean> {
+  try {
+    await execFileAsync(
+      'osascript',
+      ['-e', 'tell application "Messages" to return name of first service'],
+      { timeout: 4000 },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function checkPermissions(): Promise<PermissionStatus> {
-  const [screenRecording, accessibility, fullDiskAccess, automation] = await Promise.all([
-    checkScreenRecording(),
-    checkAccessibility(),
-    checkFullDiskAccess(),
-    checkAutomation(),
-  ]);
-  const status = { screenRecording, accessibility, fullDiskAccess, automation };
+  const [screenRecording, accessibility, fullDiskAccess, automation, contacts, messages] =
+    await Promise.all([
+      checkScreenRecording(),
+      checkAccessibility(),
+      checkFullDiskAccess(),
+      checkAutomation(),
+      checkContacts(),
+      checkMessagesAutomation(),
+    ]);
+  const status = { screenRecording, accessibility, fullDiskAccess, automation, contacts, messages };
   logger.debug(status, 'Permission check complete');
   return status;
 }
