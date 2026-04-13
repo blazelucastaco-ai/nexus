@@ -42,6 +42,9 @@ const CHAT_OVERRIDES: RegExp[] = [
   /^.{1,40}\?$/,
 ];
 
+// Internal system prefixes that must never be routed to the task planner
+const SYSTEM_PREFIXES = ['[PHOTO]', '[DOCUMENT]', '[VOICE]', '[AUDIO]'];
+
 const MIN_TASK_LENGTH = 15; // messages shorter than this are always chat
 
 // ── Ultra mode triggers — high-stakes, irreversible, or complex multi-domain tasks ──
@@ -76,6 +79,9 @@ const COORDINATOR_TRIGGERS: RegExp[] = [
  */
 export function classifyMessage(text: string): MessageType {
   const trimmed = text.trim();
+
+  // System-prefixed internal messages always stay in chat mode
+  if (SYSTEM_PREFIXES.some((p) => trimmed.startsWith(p))) return 'chat';
 
   if (trimmed.length < MIN_TASK_LENGTH) return 'chat';
 
