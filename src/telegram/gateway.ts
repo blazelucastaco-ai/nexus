@@ -390,6 +390,65 @@ export class TelegramGateway {
     this.bot.command('stop', (ctx) => handleStop(ctx));
 
     this.bot.command('help', (ctx) => handleHelp(ctx));
+
+    // ── Mode toggles ───────────────────────────────────────────────
+    this.bot.command('undercover', async (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      const on = !this.orchestrator.isUndercoverMode();
+      this.orchestrator.setUndercoverMode(on);
+      return ctx.reply(on
+        ? '🕵️ Undercover mode <b>ON</b> — I\'ll hide operational details from status messages.'
+        : '🕵️ Undercover mode <b>OFF</b> — full status details restored.',
+        { parse_mode: 'HTML' },
+      );
+    });
+
+    this.bot.command('coordinator', async (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      const on = !this.orchestrator.isCoordinatorMode();
+      this.orchestrator.setCoordinatorMode(on);
+      return ctx.reply(on
+        ? '🔀 Coordinator mode <b>ON</b> — complex tasks will run agents in parallel.'
+        : '🔀 Coordinator mode <b>OFF</b> — back to sequential execution.',
+        { parse_mode: 'HTML' },
+      );
+    });
+
+    this.bot.command('ultra', async (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      const config = this.orchestrator['config'] as Record<string, unknown>;
+      const on = !(config.ultraMode as boolean);
+      config.ultraMode = on;
+      return ctx.reply(on
+        ? '⚡ Ultra mode <b>ON</b> — tasks will be reviewed by the strongest model and require your approval before running.'
+        : '⚡ Ultra mode <b>OFF</b> — back to standard task execution.',
+        { parse_mode: 'HTML' },
+      );
+    });
+
+    // ── Ultra mode approval ────────────────────────────────────────
+    this.bot.command('approve', async (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      const chatId = String(ctx.chat.id);
+      const args = ctx.message.text.split(' ');
+      const planId = args[1]?.trim();
+      if (!planId) return ctx.reply('Usage: /approve <plan_id>');
+      const ok = await this.orchestrator.approveUltraPlan(planId);
+      return ctx.reply(ok
+        ? `✅ Plan approved — executing now.`
+        : `❌ No pending plan with ID <code>${escapeHtml(planId)}</code>.`,
+        { parse_mode: 'HTML' },
+      );
+    });
+
+    this.bot.command('reject', async (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      const args = ctx.message.text.split(' ');
+      const planId = args[1]?.trim();
+      if (!planId) return ctx.reply('Usage: /reject <plan_id>');
+      const ok = this.orchestrator.rejectUltraPlan(planId);
+      return ctx.reply(ok ? '🗑️ Plan rejected and discarded.' : `❌ No pending plan with ID <code>${escapeHtml(planId)}</code>.`, { parse_mode: 'HTML' });
+    });
   }
 
   // ─── Message Handling ──────────────────────────────────────────

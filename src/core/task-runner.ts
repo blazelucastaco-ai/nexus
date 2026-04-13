@@ -374,8 +374,12 @@ export async function runTask(opts: {
   telegram: TelegramGateway;
   model: string;
   maxTokens: number;
+  coordinatorMode?: boolean;
 }): Promise<TaskRunResult> {
-  const { plan, originalRequest, chatId, ai, toolExecutor, telegram, model } = opts;
+  const { plan, originalRequest, chatId, ai, toolExecutor, telegram, model, coordinatorMode } = opts;
+  if (coordinatorMode) {
+    log.info({ title: plan.title, steps: plan.steps.length }, 'Coordinator mode — parallel step execution');
+  }
   // Task steps need more room than regular chat — large files can easily hit 16K tokens.
   // Use at least 32768 tokens per step so write_file content is never truncated.
   const maxTokens = Math.max(opts.maxTokens, 32768);
@@ -427,70 +431,118 @@ export async function runTask(opts: {
     }
   };
 
-  // ── Execute each step ─────────────────────────────────────────────────────
-  for (const step of plan.steps) {
-    const stepStart = Date.now();
-    log.info({ stepId: step.id, title: step.title }, 'Executing task step');
+  // ── Execute steps (parallel in coordinator mode, sequential otherwise) ───────
+  if (coordinatorMode && plan.steps.length > 1) {
+    // Coordinator: last step is always aggregation — run all others in parallel first
+    const parallelSteps = plan.steps.slice(0, -1);
+    const aggregateStep = plan.steps[plan.steps.length - 1]!;
 
-    await updateProgress(`Starting: ${step.title}`, step.id);
+    await updateProgress(`Running ${parallelSteps.length} agents in parallel...`, parallelSteps[0]!.id);
 
-    let stepSuccess = false;
-    let stepSummary = '';
+    const parallelResults = await Promise.allSettled(
+      parallelSteps.map((step) =>
+        executeStep(step, plan, originalRequest, [], ai, toolExecutor, model, maxTokens),
+      ),
+    );
 
-    // Retry loop for a failing step
-    for (let attempt = 0; attempt <= MAX_STEP_RETRIES; attempt++) {
-      try {
-        const result = await executeStep(
-          step,
-          plan,
-          originalRequest,
-          previousContext,
-          ai,
-          toolExecutor,
-          model,
-          maxTokens,
-          (detail) => {
-            // Fire-and-forget progress detail updates
-            const now = Date.now();
-            if (now - lastEditTime >= TELEGRAM_EDIT_THROTTLE_MS && progressMsgId) {
-              lastEditTime = now;
-              formatPlanMessage(plan, completedIds, step.id, stepTimings, detail);
-              telegram.finalizeStreamingMessage(
-                chatId,
-                progressMsgId,
-                formatPlanMessage(plan, completedIds, step.id, stepTimings, detail),
-              ).catch(() => {});
-            }
-          },
-        );
-
-        previousContext.push(result.context);
-        allFilesProduced.push(...result.context.filesWritten);
-        stepSummary = result.context.summary;
-        stepSuccess = result.success;
-        break;
-      } catch (err) {
-        log.warn({ err, stepId: step.id, attempt }, 'Step execution error');
-        if (attempt < MAX_STEP_RETRIES) {
-          await updateProgress(`Retrying step ${step.id} (attempt ${attempt + 2})...`, step.id);
-          await delay(2000);
-        } else {
-          stepSummary = `Step failed after ${MAX_STEP_RETRIES + 1} attempts: ${err instanceof Error ? err.message : String(err)}`;
-          stepSuccess = false;
-        }
+    // Collect parallel results
+    for (let i = 0; i < parallelSteps.length; i++) {
+      const step = parallelSteps[i]!;
+      const res = parallelResults[i]!;
+      const stepDuration = 0;
+      if (res.status === 'fulfilled') {
+        previousContext.push(res.value.context);
+        allFilesProduced.push(...res.value.context.filesWritten);
+        completedIds.add(step.id);
+        stepTimings.set(step.id, stepDuration);
+        stepResults.push({ step, success: res.value.success, summary: res.value.context.summary });
+      } else {
+        completedIds.add(step.id);
+        stepResults.push({ step, success: false, summary: String(res.reason) });
       }
     }
 
-    const stepDuration = Date.now() - stepStart;
-    completedIds.add(step.id);
-    stepTimings.set(step.id, stepDuration);
-    stepResults.push({ step, success: stepSuccess, summary: stepSummary });
+    await updateProgress('Combining results...', aggregateStep.id);
 
-    log.info({ stepId: step.id, durationMs: stepDuration, success: stepSuccess }, 'Step complete');
+    // Run the aggregate/combine step sequentially with all prior context
+    try {
+      const aggResult = await executeStep(
+        aggregateStep, plan, originalRequest, previousContext,
+        ai, toolExecutor, model, maxTokens,
+      );
+      previousContext.push(aggResult.context);
+      allFilesProduced.push(...aggResult.context.filesWritten);
+      completedIds.add(aggregateStep.id);
+      stepTimings.set(aggregateStep.id, 0);
+      stepResults.push({ step: aggregateStep, success: aggResult.success, summary: aggResult.context.summary });
+    } catch (err) {
+      stepResults.push({ step: aggregateStep, success: false, summary: String(err) });
+    }
 
-    // Determine next active step
-    const nextStep = plan.steps.find((s) => !completedIds.has(s.id));
-    await updateProgress(undefined, nextStep?.id ?? null);
+    await updateProgress(undefined, null);
+
+  } else {
+    // Standard: sequential execution
+    for (const step of plan.steps) {
+      const stepStart = Date.now();
+      log.info({ stepId: step.id, title: step.title }, 'Executing task step');
+
+      await updateProgress(`Starting: ${step.title}`, step.id);
+
+      let stepSuccess = false;
+      let stepSummary = '';
+
+      for (let attempt = 0; attempt <= MAX_STEP_RETRIES; attempt++) {
+        try {
+          const result = await executeStep(
+            step,
+            plan,
+            originalRequest,
+            previousContext,
+            ai,
+            toolExecutor,
+            model,
+            maxTokens,
+            (detail) => {
+              const now = Date.now();
+              if (now - lastEditTime >= TELEGRAM_EDIT_THROTTLE_MS && progressMsgId) {
+                lastEditTime = now;
+                telegram.finalizeStreamingMessage(
+                  chatId,
+                  progressMsgId,
+                  formatPlanMessage(plan, completedIds, step.id, stepTimings, detail),
+                ).catch(() => {});
+              }
+            },
+          );
+
+          previousContext.push(result.context);
+          allFilesProduced.push(...result.context.filesWritten);
+          stepSummary = result.context.summary;
+          stepSuccess = result.success;
+          break;
+        } catch (err) {
+          log.warn({ err, stepId: step.id, attempt }, 'Step execution error');
+          if (attempt < MAX_STEP_RETRIES) {
+            await updateProgress(`Retrying step ${step.id} (attempt ${attempt + 2})...`, step.id);
+            await delay(2000);
+          } else {
+            stepSummary = `Step failed after ${MAX_STEP_RETRIES + 1} attempts: ${err instanceof Error ? err.message : String(err)}`;
+            stepSuccess = false;
+          }
+        }
+      }
+
+      const stepDuration = Date.now() - stepStart;
+      completedIds.add(step.id);
+      stepTimings.set(step.id, stepDuration);
+      stepResults.push({ step, success: stepSuccess, summary: stepSummary });
+
+      log.info({ stepId: step.id, durationMs: stepDuration, success: stepSuccess }, 'Step complete');
+
+      const nextStep = plan.steps.find((s) => !completedIds.has(s.id));
+      await updateProgress(undefined, nextStep?.id ?? null);
+    }
   }
 
   // ── Final progress update ─────────────────────────────────────────────────

@@ -47,6 +47,7 @@ import {
   setTaskRunner,
 } from '../brain/scheduler.js';
 import { loadPlugins } from '../plugins/loader.js';
+import { escapeHtml } from '../telegram/messages.js';
 import type {
   AgentName,
   AgentResult,
@@ -56,6 +57,48 @@ import type {
   NexusConfig,
   NexusContext,
 } from '../types.js';
+
+// ── Frustration detection ──────────────────────────────────────────────────────
+
+const FRUSTRATION_CURSE_WORDS = [
+  'fuck', 'shit', 'damn', 'wtf', 'bullshit', 'crap', 'hell', 'ass', 'stupid',
+  'idiot', 'dumb', 'broken', 'useless', 'terrible', 'awful', 'hate',
+];
+
+const FRUSTRATION_PHRASES = [
+  "why isn't", "still broken", "still not", "not working", "doesn't work",
+  "keeps failing", "this is wrong", "you're wrong", "that's wrong",
+  "not what i", "not what I", "that's not", "thats not", "wrong again",
+  "still failing", "fix it", "not fixed",
+];
+
+/**
+ * Returns a frustration score: 0 = none, 1 = mild, 2 = strong.
+ * Checks for: curse words, frustration phrases, ALL CAPS segments, !!!
+ */
+function detectUserFrustration(text: string): number {
+  let score = 0;
+  const lower = text.toLowerCase();
+
+  // Check curse words
+  for (const word of FRUSTRATION_CURSE_WORDS) {
+    if (lower.includes(word)) { score++; break; }
+  }
+
+  // Check frustration phrases
+  for (const phrase of FRUSTRATION_PHRASES) {
+    if (lower.includes(phrase)) { score++; break; }
+  }
+
+  // All-caps words (3+ letters, at least 2 in the message) → strong frustration
+  const capsWords = text.match(/\b[A-Z]{3,}\b/g) ?? [];
+  if (capsWords.length >= 2) score++;
+
+  // Exclamation clusters
+  if (/!{2,}/.test(text)) score++;
+
+  return Math.min(score, 2);
+}
 
 // Subsystem types — imported as type-only to avoid circular deps at load time.
 import type { MemoryManager } from '../memory/index.js';
@@ -71,8 +114,42 @@ const log = createLogger('Orchestrator');
 const MAX_TOOL_ITERATIONS = 50;
 const TOOL_TIMEOUT_MS = 120_000; // 2 minutes max per tool execution
 
-/** Map a tool call to a human-readable Telegram status line. */
-function getToolStatus(toolName: string, args: Record<string, unknown>): string {
+/** Map a tool call to a human-readable Telegram status line.
+ *  If undercover=true, returns generic messages that don't reveal tool names. */
+function getToolStatus(toolName: string, args: Record<string, unknown>, undercover = false): string {
+  if (undercover) {
+    // Generic status messages that reveal nothing about internals
+    const genericMap: Record<string, string> = {
+      web_search: '🔍 Looking that up...',
+      web_fetch: '🌐 Checking online...',
+      crawl_url: '🌐 Checking online...',
+      browser_navigate: '🌐 Opening page...',
+      browser_extract: '📄 Reading content...',
+      browser_click: '👆 Interacting with page...',
+      browser_type: '⌨️ Entering information...',
+      browser_screenshot: '📸 Capturing view...',
+      browser_scroll: '📜 Scrolling...',
+      browser_evaluate: '⚙️ Processing...',
+      browser_wait_for: '⏳ Waiting...',
+      browser_fill_form: '📝 Filling in details...',
+      take_screenshot: '📸 Capturing screen...',
+      run_terminal_command: '⚙️ Working on it...',
+      write_file: '💾 Saving...',
+      read_file: '📁 Checking...',
+      list_directory: '📁 Checking...',
+      search_files: '🔍 Searching...',
+      recall: '🧠 Thinking...',
+      remember: '💡 Noted...',
+      get_system_info: '💻 Checking...',
+      understand_image: '👁️ Looking at image...',
+      transcribe_audio: '🎙️ Listening...',
+      read_pdf: '📄 Reading document...',
+      introspect: '🔭 Checking...',
+      check_updates: '🔄 Checking...',
+    };
+    return genericMap[toolName] ?? '⚙️ Working...';
+  }
+
   const a = args ?? {};
   const url = String(a.url ?? '').replace(/^https?:\/\//, '').slice(0, 55);
   const path = String(a.path ?? '').replace(/.*\//, '').slice(0, 40);
@@ -173,11 +250,74 @@ export class Orchestrator {
   // Task engine: track in-flight background tasks so callers can await them
   private pendingTaskPromises: Promise<unknown>[] = [];
 
+  // ── Mode flags ────────────────────────────────────────────────────────
+  private undercoverMode = false;
+  private coordinatorMode = false;
+
+  // ── Ultra mode: pending approval gates ───────────────────────────────
+  private pendingUltraPlans = new Map<string, { plan: TaskPlan; request: string; chatId: string }>();
+
   /** Wait for all currently-running background tasks to complete. */
   async waitForPendingTasks(): Promise<void> {
     if (this.pendingTaskPromises.length === 0) return;
     await Promise.allSettled(this.pendingTaskPromises);
     this.pendingTaskPromises = [];
+  }
+
+  // ── Mode accessors ────────────────────────────────────────────────────
+
+  setUndercoverMode(enabled: boolean): void {
+    this.undercoverMode = enabled;
+    log.info({ enabled }, 'Undercover mode toggled');
+  }
+
+  isUndercoverMode(): boolean { return this.undercoverMode; }
+
+  setCoordinatorMode(enabled: boolean): void {
+    this.coordinatorMode = enabled;
+    log.info({ enabled }, 'Coordinator mode toggled');
+  }
+
+  isCoordinatorMode(): boolean { return this.coordinatorMode; }
+
+  /** Approve a pending Ultra Mode plan by its ID. */
+  async approveUltraPlan(planId: string): Promise<boolean> {
+    const pending = this.pendingUltraPlans.get(planId);
+    if (!pending) return false;
+    this.pendingUltraPlans.delete(planId);
+
+    const { plan, request: originalRequest, chatId } = pending;
+    const taskPromise = new Promise<void>((resolve) => {
+      setImmediate(() => {
+        runTask({
+          plan,
+          originalRequest,
+          chatId,
+          ai: this.ai,
+          toolExecutor: this.toolExecutor,
+          telegram: this.telegram,
+          model: this.config.ai.model,
+          maxTokens: this.config.ai.maxTokens,
+        }).then(async (result) => {
+          try {
+            await this.memory.store('episodic', 'task',
+              `Ultra task: ${plan.title}\nRequest: ${originalRequest}\nResult: ${result.success ? 'success' : 'partial'}`,
+              { importance: 0.9, tags: ['ultra', 'task', result.success ? 'success' : 'failure'], source: chatId },
+            );
+          } catch { /* non-fatal */ }
+        }).catch((err) => {
+          log.error({ err, chatId }, 'Ultra task runner failed');
+          this.telegram.sendMessage(chatId, 'Ultra task failed unexpectedly.').catch(() => {});
+        }).finally(resolve);
+      });
+    });
+    this.pendingTaskPromises.push(taskPromise);
+    return true;
+  }
+
+  /** Reject a pending Ultra Mode plan. */
+  rejectUltraPlan(planId: string): boolean {
+    return this.pendingUltraPlans.delete(planId);
   }
 
   // Subsystems — set via init()
@@ -457,6 +597,19 @@ export class Orchestrator {
       this.personality.processEvent('user_message');
       this.memory.addToBuffer('user', text);
 
+      // ── 1b. Frustration detection ─────────────────────────────
+      const frustrationScore = detectUserFrustration(text);
+      if (frustrationScore > 0) {
+        this.personality.processEvent('userCorrection');
+        const severity = frustrationScore >= 2 ? 'high' : 'low';
+        log.info({ chatId, score: frustrationScore, severity }, 'User frustration detected');
+        // Store as a semantic memory so future tasks recall the user was unhappy here
+        this.memory.store('semantic', 'fact',
+          `User showed frustration (severity: ${severity}) while discussing: "${text.slice(0, 200)}"`,
+          { importance: 0.75, tags: ['frustration', 'user-emotion', severity], source: chatId },
+        ).catch(() => {});
+      }
+
       // ── 2. Recall relevant context (parallel) ─────────────────
       const [recentMemories, relevantFacts] = await Promise.all([
         this.memory.recall(text, { limit: 10 }),
@@ -531,13 +684,18 @@ export class Orchestrator {
       // the TaskRunner which executes it step-by-step with live progress.
       const messageType = classifyMessage(text);
       if (messageType === 'task') {
-        log.info({ chatId }, 'Message classified as task — routing to TaskEngine');
+        log.info({ chatId, coordinator: this.coordinatorMode }, 'Message classified as task — routing to TaskEngine');
 
         // Generate plan (fast LLM call)
-        const plan = await planTask(text, this.ai, this.config.ai.model);
+        const plan = await planTask(text, this.ai, this.config.ai.model, this.coordinatorMode);
 
         if (plan) {
-          // Run the task async — sends its own Telegram progress messages
+          // ── Ultra Mode: review plan with strong model, wait for approval ──
+          if ((this.config as NexusConfig & { ultraMode?: boolean }).ultraMode) {
+            return await this.handleUltraMode(plan, text, chatId);
+          }
+
+          // ── Standard / Coordinator Mode: run async ────────────────────────
           const taskPromise = new Promise<void>((resolve) => {
             setImmediate(() => {
               runTask({
@@ -549,6 +707,7 @@ export class Orchestrator {
                 telegram: this.telegram,
                 model: this.config.ai.model,
                 maxTokens: this.config.ai.maxTokens,
+                coordinatorMode: this.coordinatorMode,
               }).then(async (result) => {
                 log.info({ chatId, success: result.success, steps: result.completedSteps }, 'Task completed');
                 try {
@@ -778,10 +937,12 @@ export class Orchestrator {
           if (parallelJobs.length > 0) {
             // Emit combined status for parallel batch
             if (parallelJobs.length === 1) {
-              onStatus?.(getToolStatus(parallelJobs[0].toolName, parallelJobs[0].toolArgs));
+              onStatus?.(getToolStatus(parallelJobs[0].toolName, parallelJobs[0].toolArgs, this.undercoverMode));
             } else {
-              const names = parallelJobs.map(j => getToolStatus(j.toolName, j.toolArgs).split(' ').slice(0, 2).join(' ')).join(', ');
-              onStatus?.(`⚙️ Running in parallel: ${names}`);
+              const names = this.undercoverMode
+                ? 'multiple operations'
+                : parallelJobs.map(j => getToolStatus(j.toolName, j.toolArgs).split(' ').slice(0, 2).join(' ')).join(', ');
+              onStatus?.(`⚙️ ${this.undercoverMode ? 'Working...' : `Running in parallel: ${names}`}`);
             }
             const parallelResults = await Promise.all(
               parallelJobs.map(async (job) => {
@@ -813,7 +974,7 @@ export class Orchestrator {
               resultMap.set(job.toolCall.id, '[Loop detected: this exact action was already tried twice. Try a different approach.]');
               continue;
             }
-            onStatus?.(getToolStatus(job.toolName, job.toolArgs));
+            onStatus?.(getToolStatus(job.toolName, job.toolArgs, this.undercoverMode));
             log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (sequential)');
             let result = await withTimeout(this.toolExecutor.execute(job.toolName, job.toolArgs), TOOL_TIMEOUT_MS, job.toolName);
             result = repairToolResult(result);
@@ -1782,6 +1943,91 @@ ${extras.memorySynthesis}`);
     };
     setTimeout(startupDelay, 60_000);
     this.dreamInterval = setInterval(runDream, this.DREAM_INTERVAL_MS);
+  }
+
+  // ── Ultra Mode: strong-model review + approval gate ──────────────────
+
+  private async handleUltraMode(plan: TaskPlan, request: string, chatId: string): Promise<string> {
+    log.info({ chatId, title: plan.title }, 'Ultra mode — reviewing plan with strong model');
+
+    try {
+      // Review with the strongest available model
+      const reviewModel = 'claude-opus-4-6';
+      const reviewPrompt =
+        `You are NEXUS reviewing a task plan before execution. Evaluate the plan below for:\n` +
+        `- Correctness: will these steps actually complete the goal?\n` +
+        `- Efficiency: can any steps be combined or simplified?\n` +
+        `- Risks: are there any dangerous or irreversible steps that need caution?\n` +
+        `- Gaps: anything missing?\n\n` +
+        `ORIGINAL REQUEST: ${request}\n\n` +
+        `PLAN:\n${plan.steps.map((s) => `${s.id}. ${s.title}: ${s.description}`).join('\n')}\n\n` +
+        `Reply with ONLY a JSON object:\n` +
+        `{"approved": true/false, "adjustments": ["change 1", ...], "riskNotes": ["note 1", ...]}\n` +
+        `approved=true means the plan is ready to run as-is or with minor tweaks.\n` +
+        `Keep adjustments and riskNotes brief — 1 sentence each max.`;
+
+      const reviewResp = await this.ai.complete({
+        messages: [{ role: 'user', content: reviewPrompt }],
+        model: reviewModel,
+        maxTokens: 600,
+        temperature: 0.2,
+      });
+
+      let review: { approved: boolean; adjustments: string[]; riskNotes: string[] } = {
+        approved: true, adjustments: [], riskNotes: [],
+      };
+      try {
+        const match = reviewResp.content.match(/\{[\s\S]*\}/);
+        if (match) review = JSON.parse(match[0]);
+      } catch { /* use defaults */ }
+
+      // Apply adjustments to plan steps if needed
+      if (review.adjustments.length > 0) {
+        plan.steps.push({
+          id: plan.steps.length + 1,
+          title: 'Apply review adjustments',
+          description: review.adjustments.join('; '),
+        });
+      }
+
+      // Store plan as pending approval
+      const planId = generateId().slice(0, 8);
+      this.pendingUltraPlans.set(planId, { plan, request, chatId });
+
+      // Format plan for user review
+      const stepsText = plan.steps
+        .map((s) => `  ${s.id}. <b>${escapeHtml(s.title)}</b>\n     ${escapeHtml(s.description)}`)
+        .join('\n\n');
+
+      const risks = review.riskNotes.length > 0
+        ? `\n\n⚠️ <b>Risk notes:</b>\n${review.riskNotes.map((r) => `  • ${escapeHtml(r)}`).join('\n')}`
+        : '';
+
+      const msg =
+        `🧠 <b>Ultra Mode — Plan Ready</b>\n\n` +
+        `<b>${escapeHtml(plan.title)}</b>\n\n` +
+        `${stepsText}${risks}\n\n` +
+        `Reply <b>/approve</b> to execute or <b>/reject</b> to cancel.\n` +
+        `<i>Plan ID: ${planId}</i>`;
+
+      await this.telegram.sendMessage(chatId, msg);
+      return '';
+    } catch (err) {
+      log.error({ err }, 'Ultra mode review failed — running standard task');
+      // Fall back to standard task run
+      const taskPromise = new Promise<void>((resolve) => {
+        setImmediate(() => {
+          runTask({
+            plan, originalRequest: request, chatId,
+            ai: this.ai, toolExecutor: this.toolExecutor,
+            telegram: this.telegram,
+            model: this.config.ai.model, maxTokens: this.config.ai.maxTokens,
+          }).finally(resolve);
+        });
+      });
+      this.pendingTaskPromises.push(taskPromise);
+      return 'On it. Planning your task now...';
+    }
   }
 
   private setupEventHandlers(): void {

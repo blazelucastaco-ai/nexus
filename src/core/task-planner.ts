@@ -54,18 +54,39 @@ Rules:
  * Generates a structured execution plan for a user request.
  * Returns null if planning fails — caller should fall back to standard chat mode.
  */
+const COORDINATOR_PLANNER_PROMPT = `You are a task decomposer in Coordinator Mode. The steps you generate will run in PARALLEL across multiple agents simultaneously. Design the plan so independent work can happen concurrently.
+
+Respond ONLY with a JSON object:
+{
+  "title": "Short descriptive title (max 5 words)",
+  "projectDir": "~/nexus-workspace/project-name-in-kebab-case",
+  "parallel": true,
+  "steps": [
+    { "id": 1, "title": "Action-oriented step title", "description": "Specific instructions", "agent": "research|file|terminal|browser|code|vision" },
+    { "id": 2, "title": "...", "description": "...", "agent": "..." }
+  ]
+}
+
+Rules:
+- 3 to 8 steps. Each step runs simultaneously — design for parallel execution.
+- Assign each step to the most appropriate agent type.
+- Steps that depend on another step's output should note that dependency in their description.
+- Never assign conflicting writes to the same file across parallel steps.
+- Final step: always aggregate/combine results from all parallel steps.`;
+
 export async function planTask(
   request: string,
   ai: AIManager,
   model: string,
+  coordinatorMode = false,
 ): Promise<TaskPlan | null> {
   try {
     const response = await ai.complete({
       messages: [{ role: 'user', content: `Plan this task:\n\n${request}` }],
-      systemPrompt: PLANNER_SYSTEM_PROMPT,
+      systemPrompt: coordinatorMode ? COORDINATOR_PLANNER_PROMPT : PLANNER_SYSTEM_PROMPT,
       model,
-      maxTokens: 1500,
-      temperature: 0.1, // Low temperature for deterministic, structured output
+      maxTokens: coordinatorMode ? 2000 : 1500,
+      temperature: 0.1,
     });
 
     const raw = response.content?.trim();

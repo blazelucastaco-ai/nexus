@@ -25,6 +25,7 @@ export interface DreamReport {
   consolidated: number;      // episodic → semantic promotions
   decayed: number;           // importance-decayed memories
   garbageCollected: number;
+  contradictions: number;    // conflicting facts resolved
   reflections: string[];     // observations about recent activity patterns
   ideas: string[];           // actionable ideas generated from reflections
   insights: string[];        // LLM-generated semantic facts from consolidation
@@ -50,6 +51,7 @@ export class DreamingEngine {
     const consolidated = await this.consolidateEpisodic(insights);
     const decayed = this.decayStaleMemories();
     const garbageCollected = this.garbageCollect();
+    const contradictions = this.detectAndResolveContradictions();
 
     // Reflection + ideation — only if we have an AI manager
     const reflections: string[] = [];
@@ -85,6 +87,7 @@ export class DreamingEngine {
       reflections,
       ideas,
       insights,
+      contradictions,
       durationMs: Date.now() - start,
     };
 
@@ -305,20 +308,38 @@ export class DreamingEngine {
   private async reflect(context: string, reflections: string[]): Promise<void> {
     if (!this.aiManager) return;
 
+    // Pull frustration events to enrich reflection
+    const db = getDatabase();
+    const frustrationRows = db
+      .prepare(
+        `SELECT content FROM memories
+         WHERE layer = 'semantic'
+           AND tags LIKE '%frustration%'
+         ORDER BY created_at DESC
+         LIMIT 5`,
+      )
+      .all() as Array<{ content: string }>;
+
+    const frustrationContext = frustrationRows.length > 0
+      ? `\n\n=== Recent User Frustration Events ===\n${frustrationRows.map((r) => `• ${r.content}`).join('\n')}`
+      : '';
+
     const prompt =
       `You are NEXUS, an AI agent OS that lives on a Mac. You have just finished your ` +
       `background memory maintenance and are now reflecting on recent interactions.\n\n` +
-      `Based on the context below, generate 2-3 concise observations about patterns in ` +
-      `the user's recent activity, interests, or working style. Each observation should ` +
-      `be a single sentence. Be specific and insightful — not generic. Focus on what ` +
-      `you've genuinely noticed, not what you'd expect to see.\n\n` +
+      `Based on the context below, generate 2-4 concise observations. Cover:\n` +
+      `1. Patterns in the user's recent activity, interests, or working style\n` +
+      `2. Cross-session patterns — things you've seen repeatedly over time\n` +
+      `3. Any areas where the user showed frustration — what caused it and how to avoid it\n` +
+      `4. Skills or knowledge you should remember for next time\n\n` +
+      `Each observation must be a single specific sentence. Be direct, not generic.\n` +
       `Reply with ONLY the observations, one per line, no numbering or bullets.\n\n` +
-      `Context:\n${context}`;
+      `Context:\n${context}${frustrationContext}`;
 
     try {
       const response = await this.aiManager.complete({
         messages: [{ role: 'user', content: prompt }],
-        maxTokens: 300,
+        maxTokens: 400,
         temperature: 0.7,
       });
 
@@ -328,11 +349,52 @@ export class DreamingEngine {
         .map((l) => l.replace(/^[-•*\d.]+\s*/, '').trim())
         .filter((l) => l.length > 10);
 
-      reflections.push(...lines.slice(0, 3));
+      reflections.push(...lines.slice(0, 4));
       log.debug({ count: reflections.length }, 'Generated reflections');
     } catch (err) {
       log.warn({ err }, 'Reflection LLM call failed');
     }
+  }
+
+  // ── Contradiction detection ───────────────────────────────────────────────
+
+  private detectAndResolveContradictions(): number {
+    const db = getDatabase();
+
+    // Find semantic facts that share the same key/topic but have conflicting values
+    const facts = db
+      .prepare(
+        `SELECT id, content, created_at, importance
+         FROM memories
+         WHERE layer = 'semantic'
+           AND type = 'fact'
+           AND source != 'dream-cycle'
+         ORDER BY created_at DESC
+         LIMIT 100`,
+      )
+      .all() as Array<{ id: string; content: string; created_at: string; importance: number }>;
+
+    // Simple heuristic: find pairs where one says "X is Y" and another says "X is Z"
+    // Mark older one as lower importance (don't delete — may have historical value)
+    let resolved = 0;
+    const seen = new Map<string, { id: string; created_at: string }>();
+
+    for (const fact of facts) {
+      // Extract first 40 chars as a "topic fingerprint"
+      const topic = fact.content.slice(0, 40).toLowerCase().replace(/\W+/g, ' ').trim();
+      const existing = seen.get(topic);
+      if (existing) {
+        // Older fact loses importance
+        const olderDate = fact.created_at < existing.created_at ? fact.id : existing.id;
+        db.prepare(`UPDATE memories SET importance = MAX(0.1, importance - 0.2) WHERE id = ?`).run(olderDate);
+        resolved++;
+      } else {
+        seen.set(topic, { id: fact.id, created_at: fact.created_at });
+      }
+    }
+
+    if (resolved > 0) log.debug({ resolved }, 'Resolved memory contradictions');
+    return resolved;
   }
 
   // ── Phase 8: Ideate ───────────────────────────────────────────────────────
@@ -431,6 +493,7 @@ export class DreamingEngine {
     const memStats: string[] = [];
     if (report.decayed > 0) memStats.push(`${report.decayed} decayed`);
     if (report.garbageCollected > 0) memStats.push(`${report.garbageCollected} cleaned`);
+    if ((report.contradictions ?? 0) > 0) memStats.push(`${report.contradictions} contradictions resolved`);
     if (memStats.length > 0) {
       parts.push(`<i>${memStats.join(', ')}</i>`);
     }
