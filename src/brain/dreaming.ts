@@ -73,7 +73,7 @@ export class DreamingEngine {
       // Journal the dream as a semantic memory
       try {
         if (reflections.length > 0 || insights.length > 0) {
-          this.journalDream(reflections, ideas, insights, consolidated, decayed, garbageCollected);
+          this.journalDream(reflections, ideas, insights, consolidated, decayed, garbageCollected, contradictions);
         }
       } catch (err) {
         log.warn({ err }, 'Dream journal write failed — skipping');
@@ -442,6 +442,7 @@ export class DreamingEngine {
     consolidated: number,
     decayed: number,
     garbageCollected: number,
+    contradictions = 0,
   ): void {
     const db = getDatabase();
 
@@ -449,7 +450,7 @@ export class DreamingEngine {
     if (reflections.length > 0) parts.push(`Reflections: ${reflections.join(' | ')}`);
     if (ideas.length > 0) parts.push(`Ideas: ${ideas.join(' | ')}`);
     if (insights.length > 0) parts.push(`Insights: ${insights.join(' | ')}`);
-    parts.push(`Stats: consolidated=${consolidated}, decayed=${decayed}, gc=${garbageCollected}`);
+    parts.push(`Stats: consolidated=${consolidated}, decayed=${decayed}, gc=${garbageCollected}, contradictions=${contradictions}`);
 
     const content = parts.join('\n');
     const id = generateId();

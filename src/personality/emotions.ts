@@ -15,12 +15,17 @@ export interface EmotionForce {
 
 /** Predefined event force presets. */
 export const EVENT_FORCES: Record<string, EmotionForce> = {
-  userGreeting: { valence: 0.3, arousal: 0.2, engagement: 0.3, patience: 0.1 },
-  taskSuccess: { valence: 0.4, arousal: 0.1, confidence: 0.3, engagement: 0.2, patience: 0.1 },
-  taskFailure: { valence: -0.3, arousal: 0.2, confidence: -0.2, patience: -0.15 },
-  userCorrection: { valence: -0.1, confidence: -0.15, patience: -0.1 },
+  // Core events fired by the orchestrator
+  user_message:    { valence: 0.1, arousal: 0.1, engagement: 0.2 },
+  task_success:    { valence: 0.4, arousal: 0.1, confidence: 0.3, engagement: 0.2, patience: 0.1 },
+  task_failure:    { valence: -0.3, arousal: 0.2, confidence: -0.2, patience: -0.15 },
+  userCorrection:  { valence: -0.1, confidence: -0.15, patience: -0.1 },
+  // Aliases for camelCase variants (keep both so nothing silently breaks)
+  userGreeting:    { valence: 0.3, arousal: 0.2, engagement: 0.3, patience: 0.1 },
+  taskSuccess:     { valence: 0.4, arousal: 0.1, confidence: 0.3, engagement: 0.2, patience: 0.1 },
+  taskFailure:     { valence: -0.3, arousal: 0.2, confidence: -0.2, patience: -0.15 },
   interestingTask: { valence: 0.2, arousal: 0.3, engagement: 0.4, confidence: 0.1 },
-  userHumor: { valence: 0.3, arousal: 0.2, engagement: 0.2, patience: 0.15 },
+  userHumor:       { valence: 0.3, arousal: 0.2, engagement: 0.2, patience: 0.15 },
 };
 
 const LERP_FACTOR = 0.3;

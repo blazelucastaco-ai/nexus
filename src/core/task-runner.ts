@@ -52,6 +52,10 @@ function buildStepSystemPrompt(
     ? previousContext.map((c, i) => `Step ${i + 1}: ${c.summary}${c.filesWritten.length > 0 ? ` [Files: ${c.filesWritten.join(', ')}]` : ''}`).join('\n')
     : 'None — this is the first step.';
 
+  const agentHint = step.agent
+    ? `\nAGENT FOCUS: This step is best handled with ${step.agent} capabilities — prioritize those tools.`
+    : '';
+
   return `You are NEXUS, a CLI-grade AI agent executing a task on macOS.
 
 ORIGINAL REQUEST: ${originalRequest}
@@ -62,7 +66,7 @@ Total steps: ${plan.steps.length}
 
 CURRENT STEP: ${step.id} of ${plan.steps.length}
 STEP TITLE: ${step.title}
-STEP GOAL: ${step.description}
+STEP GOAL: ${step.description}${agentHint}
 
 PREVIOUS STEPS COMPLETED:
 ${prevSummary}

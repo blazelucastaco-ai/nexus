@@ -560,7 +560,7 @@ export class Orchestrator {
       this.personality.processEvent('user_message');
       this.memory.addToBuffer('user', text);
 
-      // ── 1b. Frustration detection ─────────────────────────────
+      // ── 1b. Frustration detection + feedback loop ────────────
       const frustrationScore = detectUserFrustration(text);
       if (frustrationScore > 0) {
         this.personality.processEvent('userCorrection');
@@ -571,7 +571,12 @@ export class Orchestrator {
           `User showed frustration (severity: ${severity}) while discussing: "${text.slice(0, 200)}"`,
           { importance: 0.75, tags: ['frustration', 'user-emotion', severity], source: chatId },
         ).catch(() => {});
+        // Feed into learning system so preferences update
+        this.learning.feedback.processExplicitFeedback(text, 'user expressed frustration or correction');
       }
+
+      // Feed every message through implicit feedback detection (learning system)
+      this.learning.feedback.processImplicitFeedback(text, 'incoming_message');
 
       // ── 2. Recall relevant context (parallel) ─────────────────
       const [recentMemories, relevantFacts] = await Promise.all([
@@ -688,6 +693,9 @@ export class Orchestrator {
                   );
                 } catch { /* non-fatal */ }
 
+                // Update personality based on task outcome
+                this.personality.processEvent(result.success ? 'task_success' : 'task_failure');
+
                 // Self-improvement: reflect on partial failures and store as procedural memory
                 const hadFailures = result.completedSteps < result.totalSteps;
                 if (hadFailures && this.ai) {
@@ -697,6 +705,7 @@ export class Orchestrator {
                 }
               }).catch((err) => {
                 log.error({ err, chatId }, 'Task runner failed');
+                this.personality.processEvent('task_failure');
                 this.telegram.sendMessage(chatId, 'Task failed unexpectedly. Check the logs.').catch(() => {});
               }).finally(resolve);
             });

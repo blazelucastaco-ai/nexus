@@ -13,6 +13,7 @@ export interface TaskStep {
   id: number;
   title: string;       // Short action label: "Write index.html"
   description: string; // What to do and how: "Create semantic HTML5 with..."
+  agent?: string;      // Coordinator mode: preferred agent type (research|file|terminal|browser|code|vision)
 }
 
 export interface TaskPlan {
