@@ -503,7 +503,7 @@ export class TelegramGateway {
             : 'Describe this image in detail.';
           const response = await this.orchestrator.handleMessage(
             chatId,
-            `Please analyze this image using the understand_image tool.\nImage path: ${result.filePath}\nQuestion: ${question}`,
+            `[PHOTO] Image saved to: ${result.filePath}\nCall understand_image with that path now and reply with your analysis directly. Do not create a task, do not save a report file — just call the tool and respond conversationally with what you see.${caption ? `\nUser asked: ${caption}` : ''}`,
           );
           await this.sendMessage(chatId, markdownToHtml(sanitizePaths(response)));
         } else {
