@@ -47,6 +47,7 @@ export const commands: BotCommand[] = [
   { command: 'search', description: 'Search memories — /search <query>' },
   { command: 'forget', description: 'Delete memories about a topic — /forget <topic>' },
   { command: 'pin', description: 'Pin a memory so it never decays — /pin <topic>' },
+  { command: 'grant', description: 'Trigger macOS permission dialog — /grant contacts|messages' },
   { command: 'briefing', description: 'Send today\'s morning briefing now' },
   { command: 'quiet', description: 'Disable proactive system alerts' },
   { command: 'loud', description: 'Enable proactive system alerts' },
@@ -834,6 +835,42 @@ export async function handleBriefing(ctx: Context, orchestrator: Orchestrator): 
   } catch (err) {
     log.error({ err }, 'Error in /briefing');
     await ctx.reply('Failed to send briefing.');
+  }
+}
+
+// ─── /grant ──────────────────────────────────────────────────────────
+
+export async function handleGrant(ctx: Context): Promise<void> {
+  try {
+    const text = ctx.message?.text ?? '';
+    const target = text.replace(/^\/grant\s*/i, '').trim().toLowerCase();
+
+    if (!target || !['contacts', 'messages'].includes(target)) {
+      await ctx.reply(
+        '<b>Grant macOS Permission</b>\n\n' +
+        'Usage:\n' +
+        '  <code>/grant contacts</code> — trigger Contacts access dialog\n' +
+        '  <code>/grant messages</code> — trigger Messages automation dialog\n\n' +
+        '<i>This opens Script Editor on your Mac with the right AppleScript.\n' +
+        'Just press ▶ Run — macOS will prompt you to allow access.</i>',
+        { parse_mode: 'HTML' },
+      );
+      return;
+    }
+
+    const { triggerPermissionPrompt } = await import('../macos/permissions.js');
+    await ctx.reply(
+      `🔑 Opening Script Editor for <b>${escapeHtml(target)}</b> permission...\n\n` +
+      `Press <b>▶ Run</b> in Script Editor — macOS will show the permission dialog.\n` +
+      `Then restart NEXUS.`,
+      { parse_mode: 'HTML' },
+    );
+
+    await triggerPermissionPrompt(target as 'contacts' | 'messages');
+    log.info({ chatId: ctx.chat?.id, target }, '/grant permission triggered');
+  } catch (err) {
+    log.error({ err }, 'Error in /grant');
+    await ctx.reply('Failed to open Script Editor.');
   }
 }
 

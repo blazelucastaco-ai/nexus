@@ -136,8 +136,67 @@ export async function openPermissionPane(permission: keyof PermissionStatus): Pr
 }
 
 /**
+ * Opens Script Editor with an AppleScript that triggers the TCC permission dialog.
+ * Use this for Contacts and Messages since background processes don't get auto-prompted.
+ */
+export async function triggerPermissionPrompt(permission: 'contacts' | 'messages'): Promise<void> {
+  const scripts: Record<string, string> = {
+    contacts: 'tell application "Contacts" to return count of every person',
+    messages: 'tell application "Messages" to return name of first service',
+  };
+  const script = scripts[permission];
+  if (!script) return;
+
+  try {
+    // Open Script Editor with the script — user just hits Cmd+R to trigger the TCC dialog
+    await execFileAsync('osascript', [
+      '-e',
+      `tell application "Script Editor"
+        activate
+        set doc to make new document
+        set contents of doc to "${script}"
+      end tell`,
+    ], { timeout: 5000 });
+    logger.info({ permission }, 'Opened Script Editor to trigger TCC permission prompt');
+  } catch (err) {
+    logger.warn({ err, permission }, 'Failed to open Script Editor for permission prompt');
+  }
+}
+
+// Detailed manual instructions for permissions that won't auto-prompt
+// (macOS TCC doesn't show dialogs for background Node.js subprocesses)
+const MANUAL_INSTRUCTIONS: Partial<Record<keyof PermissionStatus, string>> = {
+  contacts:
+    `<b>How to fix:</b>\n` +
+    `1. Open <b>System Settings → Privacy &amp; Security → Contacts</b>\n` +
+    `2. Find <b>Terminal</b> (or <code>node</code>) in the list and toggle it <b>ON</b>\n` +
+    `3. If it's not listed: open <b>Script Editor</b>, paste:\n` +
+    `   <code>tell application "Contacts" to return count of every person</code>\n` +
+    `   and run it — that triggers the macOS dialog\n` +
+    `4. Restart NEXUS after granting`,
+
+  messages:
+    `<b>How to fix:</b>\n` +
+    `1. Open <b>System Settings → Privacy &amp; Security → Automation</b>\n` +
+    `2. Find <b>Terminal</b> (or <code>node</code>) and expand it\n` +
+    `3. Enable the <b>Messages</b> checkbox underneath it\n` +
+    `4. If Terminal isn't listed: open <b>Script Editor</b>, paste:\n` +
+    `   <code>tell application "Messages" to return name of first service</code>\n` +
+    `   and run it — that triggers the macOS dialog\n` +
+    `5. Restart NEXUS after granting`,
+};
+
+// ─── Why macOS won't auto-prompt ─────────────────────────────────────────────
+// NEXUS runs as a background Node.js process. When it spawns osascript to check
+// Contacts or Messages, macOS TCC attributes the request to the `osascript`
+// binary (a system tool), not to Terminal or NEXUS. Background processes with
+// no UI bundle often get silently denied without showing a dialog at all.
+// The only reliable trigger is running the AppleScript from an interactive app
+// like Script Editor, which gets the proper TCC prompt.
+
+/**
  * Logs warnings for any missing permissions and opens the relevant System Settings panes.
- * Returns an array of human-readable warning strings (suitable for Telegram).
+ * Returns an array of human-readable warning strings (suitable for Telegram HTML mode).
  */
 export async function warnMissingPermissions(status: PermissionStatus): Promise<string[]> {
   const warnings: string[] = [];
@@ -155,12 +214,24 @@ export async function warnMissingPermissions(status: PermissionStatus): Promise<
       `Missing permission: ${name}. ` +
       `Grant it in System Settings > Privacy & Security > ${name}`,
     );
-    warnings.push(
-      `⚠️ *Missing permission: ${name}*\n` +
-      `Go to System Settings → Privacy & Security → ${name}\n` +
-      `and enable access for the node binary or your terminal.`,
-    );
-    await openPermissionPane(key);
+
+    const manualSteps = MANUAL_INSTRUCTIONS[key];
+
+    if (manualSteps) {
+      // These won't auto-prompt — give explicit manual instructions
+      warnings.push(
+        `⚠️ <b>Missing permission: ${name}</b>\n\n` +
+        `macOS won't auto-prompt for this when NEXUS runs in the background.\n\n` +
+        manualSteps,
+      );
+    } else {
+      warnings.push(
+        `⚠️ <b>Missing permission: ${name}</b>\n` +
+        `Go to System Settings → Privacy &amp; Security → ${name}\n` +
+        `and enable access for Terminal or node, then restart NEXUS.`,
+      );
+      await openPermissionPane(key);
+    }
   }
 
   return warnings;

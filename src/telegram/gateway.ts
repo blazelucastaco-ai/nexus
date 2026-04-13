@@ -26,6 +26,7 @@ import {
   handleForget,
   handlePin,
   handleBriefing,
+  handleGrant,
   handleQuiet,
   handleLoud,
   handleStop,
@@ -371,6 +372,8 @@ export class TelegramGateway {
       if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
       return handlePin(ctx, this.orchestrator);
     });
+
+    this.bot.command('grant', (ctx) => handleGrant(ctx));
 
     this.bot.command('briefing', (ctx) => {
       if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
