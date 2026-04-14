@@ -198,14 +198,14 @@ export class BriefingEngine {
       const db = getDatabase();
       const rows = db
         .prepare(
-          `SELECT name, schedule FROM scheduled_tasks
+          `SELECT name, cron_expression FROM scheduled_tasks
            WHERE enabled = 1
            ORDER BY next_run ASC
            LIMIT 5`,
         )
-        .all() as Array<{ name: string; schedule: string }>;
+        .all() as Array<{ name: string; cron_expression: string }>;
 
-      return rows.map((r) => `${r.name} <i>(${r.schedule})</i>`);
+      return rows.map((r) => `${r.name} <i>(${r.cron_expression})</i>`);
     } catch {
       return [];
     }

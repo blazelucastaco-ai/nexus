@@ -36,21 +36,9 @@ export function setTaskRunner(fn: (command: string) => Promise<string>): void {
 
 // ── Schema ────────────────────────────────────────────────────────────────────
 
+/** No-op — scheduled_tasks table is now created by database migration v8. */
 export function ensureSchedulerSchema(): void {
-  const db = getDatabase();
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS scheduled_tasks (
-      id               TEXT PRIMARY KEY,
-      name             TEXT NOT NULL UNIQUE,
-      cron_expression  TEXT NOT NULL,
-      command          TEXT NOT NULL,
-      enabled          INTEGER NOT NULL DEFAULT 1,
-      last_run         TEXT,
-      next_run         TEXT,
-      created_at       TEXT NOT NULL
-    );
-  `);
-  log.info('Scheduler schema ready');
+  log.debug('scheduled_tasks schema managed by database migrations');
 }
 
 // ── Cron Parsing ──────────────────────────────────────────────────────────────

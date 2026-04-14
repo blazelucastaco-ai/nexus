@@ -49,7 +49,11 @@ export function closeDatabase(): void {
 
 // ─── Migrations ───────────────────────────────────────────────────
 
-const MIGRATIONS: { version: number; description: string; sql: string }[] = [
+type Migration =
+  | { version: number; description: string; sql: string; run?: never }
+  | { version: number; description: string; run: (db: Database.Database) => void; sql?: never };
+
+const MIGRATIONS: Migration[] = [
   {
     version: 1,
     description: 'Create memories table',
@@ -193,12 +197,46 @@ const MIGRATIONS: { version: number; description: string; sql: string }[] = [
   },
   {
     version: 8,
-    description: 'Add execution stats columns to scheduled_tasks',
-    sql: `
-      ALTER TABLE scheduled_tasks ADD COLUMN last_exit_code INTEGER;
-      ALTER TABLE scheduled_tasks ADD COLUMN last_duration_ms INTEGER;
-      ALTER TABLE scheduled_tasks ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0;
-    `,
+    description: 'Create scheduled_tasks table with full schema',
+    run(db) {
+      // Create table with full schema (covers fresh installs)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS scheduled_tasks (
+          id                    TEXT PRIMARY KEY,
+          name                  TEXT NOT NULL UNIQUE,
+          cron_expression       TEXT NOT NULL,
+          command               TEXT NOT NULL,
+          enabled               INTEGER NOT NULL DEFAULT 1,
+          last_run              TEXT,
+          next_run              TEXT,
+          created_at            TEXT NOT NULL,
+          last_exit_code        INTEGER,
+          last_duration_ms      INTEGER,
+          consecutive_failures  INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_enabled  ON scheduled_tasks(enabled);
+        CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run);
+      `);
+
+      // Safely add extra columns if the table was created by the old ensureSchedulerSchema()
+      // (which only had the base 8 columns). SQLite has no ADD COLUMN IF NOT EXISTS, so we
+      // inspect the existing columns and skip any that are already present.
+      const existing = new Set(
+        (db.pragma('table_info(scheduled_tasks)') as Array<{ name: string }>).map((r) => r.name),
+      );
+      if (!existing.has('last_exit_code')) {
+        db.exec('ALTER TABLE scheduled_tasks ADD COLUMN last_exit_code INTEGER');
+      }
+      if (!existing.has('last_duration_ms')) {
+        db.exec('ALTER TABLE scheduled_tasks ADD COLUMN last_duration_ms INTEGER');
+      }
+      if (!existing.has('consecutive_failures')) {
+        db.exec(
+          'ALTER TABLE scheduled_tasks ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+    },
   },
 ];
 
@@ -226,9 +264,13 @@ function runMigrations(database: Database.Database): void {
     return;
   }
 
-  const applyMigration = database.transaction((migration: (typeof MIGRATIONS)[number]) => {
+  const applyMigration = database.transaction((migration: Migration) => {
     log.info({ version: migration.version, description: migration.description }, 'Applying migration');
-    database.exec(migration.sql);
+    if (migration.run) {
+      migration.run(database);
+    } else {
+      database.exec(migration.sql);
+    }
     database
       .prepare('INSERT INTO schema_migrations (version, description) VALUES (?, ?)')
       .run(migration.version, migration.description);
