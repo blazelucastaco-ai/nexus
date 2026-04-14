@@ -358,6 +358,44 @@
       letter-spacing: 0.06em;
     }
 
+    /* ─── Powered-by strip ───────────────────────────────────────── */
+    .powered-strip {
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(90deg, transparent, var(--accent-dim) 30%, var(--accent-dim) 70%, transparent);
+      padding: 18px 0;
+      overflow: hidden;
+    }
+    .powered-inner {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 40px;
+      flex-wrap: wrap;
+    }
+    .powered-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-2);
+      white-space: nowrap;
+    }
+    .powered-item .pi-icon {
+      width: 28px; height: 28px;
+      border-radius: 8px;
+      background: var(--accent-dim);
+      border: 1px solid rgba(232,135,74,0.2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px;
+    }
+    .powered-item strong { color: var(--text-1); font-weight: 600; }
+    .powered-divider {
+      width: 1px; height: 20px;
+      background: var(--border-hi);
+    }
+
     /* ─── Section anatomy ────────────────────────────────────────── */
     .section-label {
       display: inline-flex; align-items: center; gap: 8px;
@@ -1021,7 +1059,7 @@
   <div class="wrap">
     <div class="hero-badge">
       <span class="dot"></span>
-      v2.0 — Now with Claude Sonnet 4.6
+      Powered by Anthropic's Claude Sonnet 4.6
     </div>
 
     <h1 class="hero-title">
@@ -1030,8 +1068,9 @@
     </h1>
 
     <p class="hero-sub">
-      NEXUS is an autonomous AI agent OS — persistent memory, real emotions,
-      direct system control, and a Telegram interface that works anywhere in the world.
+      NEXUS is an autonomous AI agent OS built on <strong style="color:var(--accent-2);font-weight:600;">Anthropic's Claude</strong> —
+      persistent memory, real emotions, direct system control, and a Telegram interface
+      that works anywhere in the world.
     </p>
 
     <div class="hero-actions">
@@ -1065,6 +1104,33 @@
     </div>
   </div>
 </section>
+
+<!-- Powered-by strip -->
+<div class="powered-strip">
+  <div class="wrap">
+    <div class="powered-inner">
+      <div class="powered-item">
+        <div class="pi-icon">✦</div>
+        <span>Powered by <strong>Anthropic Claude</strong> Sonnet 4.6</span>
+      </div>
+      <div class="powered-divider"></div>
+      <div class="powered-item">
+        <div class="pi-icon">🧠</div>
+        <span>Extended thinking &amp; <strong>inner monologue</strong></span>
+      </div>
+      <div class="powered-divider"></div>
+      <div class="powered-item">
+        <div class="pi-icon">🔧</div>
+        <span><strong>Native tool use</strong> — 40+ tools</span>
+      </div>
+      <div class="powered-divider"></div>
+      <div class="powered-item">
+        <div class="pi-icon">⚡</div>
+        <span>200k context window via <strong>Claude API</strong></span>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- About -->
 <section id="about">
@@ -1149,7 +1215,7 @@
     <div class="features-header reveal">
       <div class="section-label">Capabilities</div>
       <h2 class="section-title">Everything you need.<br>Nothing you don't.</h2>
-      <p class="section-body">14 major subsystems, all coordinated by a 13-step message pipeline. Every component is tested, typed, and production-hardened.</p>
+      <p class="section-body">14 major subsystems, all coordinated by a 13-step message pipeline — every response backed by <strong style="color:var(--accent-2);font-weight:600;">Anthropic's Claude</strong>. Tested, typed, and production-hardened.</p>
     </div>
 
     <div class="feature-grid reveal">
@@ -1224,6 +1290,16 @@
         <div class="fc-title">Morning Briefings</div>
         <div class="fc-desc">Scheduled daily summaries sent to Telegram. Covers pending goals, recurring mistakes, active tasks, and memory highlights. State-persisted.</div>
         <span class="fc-tag">Proactive</span>
+      </div>
+      <div class="feature-cell" style="grid-column: span 3; background: var(--accent-dim); border-top: 1px solid rgba(232,135,74,0.15);">
+        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+          <span style="font-size:26px;">✦</span>
+          <div>
+            <div class="fc-title" style="font-size:16px;color:var(--accent-2);">Built on Anthropic's Claude API</div>
+            <div class="fc-desc" style="max-width:700px;">Every reasoning step, tool call, memory synthesis, and inner monologue is powered by <strong style="color:var(--text-1);">Claude Sonnet 4.6</strong> — Anthropic's most capable model. NEXUS uses native Claude tool use, streaming responses, and a 200k token context window to handle the most complex tasks.</div>
+          </div>
+          <a href="https://www.anthropic.com/claude" style="margin-left:auto;white-space:nowrap;" class="btn btn-ghost">Learn about Claude →</a>
+        </div>
       </div>
     </div>
   </div>
@@ -1502,7 +1578,7 @@
     <div class="cta-inner reveal">
       <div class="section-label" style="justify-content:center;">Open Source</div>
       <h2>Your AI. Your machine.<br>Your rules.</h2>
-      <p>NEXUS is fully open-source. Fork it, extend it, train it your way. Built for people who want their AI to actually know them.</p>
+      <p>NEXUS is fully open-source and powered by <strong style="color:var(--accent-2);font-weight:600;">Anthropic's Claude</strong>. Fork it, extend it, train it your way. Built for people who want their AI to actually know them.</p>
       <div class="hero-actions">
         <a href="#install" class="btn btn-primary btn-lg">Install NEXUS</a>
         <a href="https://github.com/blazelucastaco-ai/nexus" class="btn btn-ghost btn-lg">View on GitHub</a>
@@ -1524,7 +1600,7 @@
         <a href="https://github.com/blazelucastaco-ai/nexus/issues">Issues</a>
         <a href="https://github.com/blazelucastaco-ai/nexus/blob/main/README.md">Docs</a>
       </div>
-      <div class="footer-copy">MIT License · Personal AI Agent OS</div>
+      <div class="footer-copy">MIT License · Powered by <a href="https://www.anthropic.com/claude" style="color:var(--accent-2);transition:color 0.2s;" onmouseover="this.style.color='var(--text-1)'" onmouseout="this.style.color='var(--accent-2)'">Anthropic Claude</a></div>
     </div>
   </div>
 </footer>
