@@ -61,6 +61,7 @@ export class TelegramGateway {
 
     this.setupMiddleware();
     this.setupCommandHandlers();
+    this.setupCallbackQueryHandler();
     this.setupMessageHandler();
     this.setupMediaHandlers();
     this.setupErrorHandler();
@@ -416,6 +417,57 @@ export class TelegramGateway {
       if (!planId) return ctx.reply('Usage: /reject <plan_id>');
       const ok = this.orchestrator.rejectUltraPlan(planId);
       return ctx.reply(ok ? '🗑️ Plan rejected and discarded.' : `❌ No pending plan with ID <code>${escapeHtml(planId)}</code>.`, { parse_mode: 'HTML' });
+    });
+  }
+
+  // ─── Callback Query (Inline Keyboard Buttons) ─────────────────
+
+  private setupCallbackQueryHandler(): void {
+    this.bot.on('callback_query:data', async (ctx) => {
+      const data = ctx.callbackQuery.data;
+      const chatId = String(ctx.chat?.id ?? ctx.callbackQuery.from.id);
+
+      try {
+        if (data.startsWith('approve:')) {
+          const planId = data.slice('approve:'.length);
+          if (!this.orchestrator) {
+            await ctx.answerCallbackQuery({ text: 'Orchestrator not connected.' });
+            return;
+          }
+          const ok = await this.orchestrator.approveUltraPlan(planId);
+          if (ok) {
+            await ctx.answerCallbackQuery({ text: '✅ Plan approved — executing now.' });
+            // Edit the original message to remove the buttons
+            try {
+              await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
+            } catch { /* ignore if already edited */ }
+            await this.bot.api.sendMessage(chatId, '✅ Plan approved — running task now…', { parse_mode: 'HTML' });
+          } else {
+            await ctx.answerCallbackQuery({ text: '❌ Plan not found — may have already been processed.' });
+          }
+        } else if (data.startsWith('reject:')) {
+          const planId = data.slice('reject:'.length);
+          if (!this.orchestrator) {
+            await ctx.answerCallbackQuery({ text: 'Orchestrator not connected.' });
+            return;
+          }
+          const ok = this.orchestrator.rejectUltraPlan(planId);
+          if (ok) {
+            await ctx.answerCallbackQuery({ text: '🗑️ Plan rejected.' });
+            try {
+              await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
+            } catch { /* ignore */ }
+            await this.bot.api.sendMessage(chatId, '🗑️ Plan rejected and discarded.', { parse_mode: 'HTML' });
+          } else {
+            await ctx.answerCallbackQuery({ text: '❌ Plan not found — may have already been processed.' });
+          }
+        } else {
+          await ctx.answerCallbackQuery();
+        }
+      } catch (err) {
+        log.error({ err, data, chatId }, 'Callback query handler failed');
+        await ctx.answerCallbackQuery({ text: 'An error occurred.' }).catch(() => {});
+      }
     });
   }
 

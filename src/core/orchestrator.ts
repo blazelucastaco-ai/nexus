@@ -2091,10 +2091,18 @@ ${extras.memorySynthesis}`);
         `🧠 <b>Ultra Mode — Plan Ready</b>\n\n` +
         `<b>${escapeHtml(plan.title)}</b>\n\n` +
         `${stepsText}${risks}\n\n` +
-        `Reply <b>/approve</b> to execute or <b>/reject</b> to cancel.\n` +
-        `<i>Plan ID: ${planId}</i>`;
+        `<i>Plan ID: <code>${planId}</code></i>`;
 
-      await this.telegram.sendMessage(chatId, msg);
+      // Send with inline keyboard approve/reject buttons
+      await this.telegram.sendMessage(chatId, msg, {
+        parseMode: 'HTML',
+        replyMarkup: {
+          inline_keyboard: [[
+            { text: '✅ Approve & Run', callback_data: `approve:${planId}` },
+            { text: '❌ Reject', callback_data: `reject:${planId}` },
+          ]],
+        },
+      });
       return '';
     } catch (err) {
       log.error({ err }, 'Ultra mode review failed — running standard task');

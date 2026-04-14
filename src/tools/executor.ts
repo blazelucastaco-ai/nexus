@@ -5,12 +5,13 @@ import { homedir } from 'node:os';
 import {
   readFile as fsReadFile,
   writeFile as fsWriteFile,
+  rename as fsRename,
   readdir,
   stat,
   mkdir,
   chmod,
 } from 'node:fs/promises';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, extname } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createLogger } from '../utils/logger.js';
@@ -173,6 +174,44 @@ function validateFilePath(filePath: string): string | null {
     return null; // safe
   }
   return `Error: Path "${resolved}" is outside allowed directories (home directory or /tmp). Refusing to write.`;
+}
+
+/**
+ * Post-write syntax check for common code file types.
+ * Returns a warning string if syntax errors are found, null if clean.
+ * Never throws — syntax check failure is non-fatal.
+ */
+async function checkSyntax(filePath: string, content: string): Promise<string | null> {
+  const ext = extname(filePath).toLowerCase();
+  try {
+    if (ext === '.ts' || ext === '.tsx') {
+      // TypeScript: use tsc --noEmit if available, fall back to node syntax check
+      const { stderr } = await execFileAsync(
+        '/bin/zsh', ['-l', '-c', `npx --yes tsc --noEmit --allowJs --checkJs false --strict false --skipLibCheck --target ES2022 --moduleResolution node ${filePath} 2>&1 | head -20`],
+        { timeout: 15_000, maxBuffer: 1_000_000, env: { ...process.env, PATH: `/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${process.env.PATH ?? ''}` } },
+      ).catch((e: unknown) => ({ stderr: e instanceof Error ? e.message : String(e), stdout: '' }));
+      if (stderr && stderr.includes('error TS')) {
+        return stderr.split('\n').filter((l: string) => l.includes('error TS')).slice(0, 3).join('; ');
+      }
+    } else if (ext === '.js' || ext === '.mjs' || ext === '.cjs') {
+      const result = await execFileAsync('node', ['--check', filePath], { timeout: 10_000, maxBuffer: 100_000 })
+        .catch((e: unknown) => ({ stderr: e instanceof Error ? e.message : String(e), stdout: '' }));
+      if ('stderr' in result && result.stderr) return result.stderr.split('\n')[0] ?? null;
+    } else if (ext === '.py') {
+      const result = await execFileAsync('python3', ['-m', 'py_compile', filePath], { timeout: 10_000, maxBuffer: 100_000 })
+        .catch((e: unknown) => ({ stderr: e instanceof Error ? e.message : String(e), stdout: '' }));
+      if ('stderr' in result && result.stderr) return result.stderr.split('\n').slice(0, 2).join(' ');
+    } else if (ext === '.sh' || ext === '.bash') {
+      const result = await execFileAsync('/bin/bash', ['-n', filePath], { timeout: 5_000, maxBuffer: 100_000 })
+        .catch((e: unknown) => ({ stderr: e instanceof Error ? e.message : String(e), stdout: '' }));
+      if ('stderr' in result && result.stderr) return result.stderr.split('\n')[0] ?? null;
+    } else if (ext === '.json') {
+      try { JSON.parse(content); } catch (e) { return e instanceof Error ? e.message : 'Invalid JSON'; }
+    }
+  } catch {
+    // Syntax check failure is non-fatal
+  }
+  return null;
 }
 
 const DANGEROUS_PATTERNS = [
@@ -417,22 +456,58 @@ export class ToolExecutor {
     // Log full argv for all commands
     log.info({ argv, cwd }, 'Running command (full argv)');
 
-    const { stdout, stderr } = await execFileAsync('/bin/zsh', ['-c', command], {
-      timeout: timeoutMs,
-      cwd,
-      maxBuffer: 10 * 1024 * 1024,
-      env: {
-        ...process.env,
-        PATH: `/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:${process.env.PATH ?? ''}`,
-      },
-    });
+    // Source user shell config so nvm, pyenv, rbenv, and project PATH entries work.
+    // We run as a login shell (-l) AND explicitly source .zshrc for interactive-only setups.
+    const wrappedCommand = `source ~/.zshrc 2>/dev/null; source ~/.zprofile 2>/dev/null; ${command}`;
+
+    let stdout = '';
+    let stderr = '';
+    let exitCode = 0;
+
+    try {
+      const result = await execFileAsync('/bin/zsh', ['-l', '-c', wrappedCommand], {
+        timeout: timeoutMs,
+        cwd,
+        maxBuffer: 10 * 1024 * 1024,
+        env: {
+          ...process.env,
+          PATH: `/usr/local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:${process.env.PATH ?? ''}`,
+          TERM: 'xterm-256color',
+          COLORTERM: 'truecolor',
+        },
+      });
+      stdout = result.stdout;
+      stderr = result.stderr;
+    } catch (err: unknown) {
+      // execFileAsync throws on non-zero exit — extract stdout/stderr and report cleanly
+      if (err && typeof err === 'object' && 'stdout' in err && 'stderr' in err) {
+        const execErr = err as { stdout?: string; stderr?: string; code?: number; killed?: boolean; signal?: string };
+        stdout = execErr.stdout ?? '';
+        stderr = execErr.stderr ?? '';
+        exitCode = typeof execErr.code === 'number' ? execErr.code : 1;
+        if (execErr.killed) {
+          return `Error: Command timed out after ${timeoutMs / 1000}s and was killed.\n${stderr ? `STDERR:\n${cleanTruncate(stderr.trim())}` : ''}`.trim();
+        }
+      } else {
+        throw err; // unexpected error, let outer handler deal with it
+      }
+    }
 
     const out = cleanTruncate(stdout.trim());
-    const err = stderr.trim();
+    const err2 = stderr.trim();
 
-    if (out && err) return `${out}\n\nSTDERR:\n${err}`;
+    if (exitCode !== 0) {
+      // Non-zero exit — return both output and exit code so LLM knows to fix
+      const parts: string[] = [];
+      if (out) parts.push(out);
+      if (err2) parts.push(`STDERR:\n${err2}`);
+      parts.push(`\nExit code: ${exitCode}`);
+      return parts.join('\n\n');
+    }
+
+    if (out && err2) return `${out}\n\nSTDERR:\n${err2}`;
     if (out) return out;
-    if (err) return `STDERR:\n${err}`;
+    if (err2) return `STDERR:\n${err2}`;
     return '(command completed with no output)';
   }
 
@@ -447,6 +522,17 @@ export class ToolExecutor {
 
     if (!rawPath) return 'Error: No path provided';
 
+    // Guard against writing empty files (common LLM mistake when context is truncated)
+    if (content.length === 0) {
+      return 'Error: write_file called with empty content. Provide the full file content.';
+    }
+
+    // Guard against excessively large writes that could OOM the process
+    const MAX_WRITE_BYTES = 10 * 1024 * 1024; // 10 MB
+    if (content.length > MAX_WRITE_BYTES) {
+      return `Error: Content too large (${(content.length / 1024 / 1024).toFixed(1)} MB). Max write size is 10 MB. Split into multiple files.`;
+    }
+
     const filePath = expandPath(rawPath);
 
     // Security: prevent writes outside home directory or /tmp
@@ -455,7 +541,18 @@ export class ToolExecutor {
 
     // ALWAYS create parent directories first — prevents ENOENT permanently
     await mkdir(dirname(filePath), { recursive: true });
-    await fsWriteFile(filePath, content, 'utf-8');
+
+    // Atomic write: write to temp file, then rename. Prevents partial writes corrupting files.
+    const tmpPath = `${filePath}.nexus-tmp-${Date.now()}`;
+    try {
+      await fsWriteFile(tmpPath, content, 'utf-8');
+      await fsRename(tmpPath, filePath);
+    } catch (err) {
+      // Clean up temp file if rename fails
+      try { await fsWriteFile(filePath, content, 'utf-8'); } catch { /* ignore */ }
+      try { const { unlink } = await import('node:fs/promises'); await unlink(tmpPath); } catch { /* ignore */ }
+      if (err instanceof Error && !err.message.includes('EXDEV')) throw err;
+    }
 
     if (executable) {
       await chmod(filePath, 0o755);
@@ -463,8 +560,14 @@ export class ToolExecutor {
 
     const info = await stat(filePath);
     const sizeKB = (info.size / 1024).toFixed(1);
+    const lineCount = content.split('\n').length;
     log.info({ path: filePath, size: info.size }, 'File written via tool');
-    return `File written successfully: ${rawPath} (${sizeKB} KB, ${content.split('\n').length} lines${executable ? ', executable' : ''})`;
+
+    // Post-write syntax check for common code file types
+    const syntaxWarning = await checkSyntax(filePath, content);
+    const syntaxNote = syntaxWarning ? `\n⚠️  Syntax warning: ${syntaxWarning}` : '';
+
+    return `File written successfully: ${rawPath} (${sizeKB} KB, ${lineCount} lines${executable ? ', executable' : ''})${syntaxNote}`;
   }
 
   // ── read_file ──────────────────────────────────────────────────────

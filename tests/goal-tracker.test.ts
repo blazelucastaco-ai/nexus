@@ -90,13 +90,14 @@ describe('GoalTracker', () => {
       expect(unique.size).toBe(contents.length);
     });
 
-    it('should handle store failures gracefully', async () => {
+    it('should handle store failures gracefully', () => {
       const tracker = new GoalTracker();
-      const failingStore = vi.fn().mockRejectedValue(new Error('DB write failed'));
+      // extractAndStore is synchronous — it calls store as a fire-and-forget callback
+      const failingStore = vi.fn().mockImplementation(() => { throw new Error('DB write failed'); });
       // Should not throw even if store fails
-      await expect(
+      expect(() =>
         tracker.extractAndStore('I want to finish my project today', failingStore)
-      ).resolves.not.toThrow();
+      ).not.toThrow();
     });
   });
 

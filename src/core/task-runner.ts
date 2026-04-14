@@ -16,11 +16,14 @@ import { escapeHtml } from '../telegram/messages.js';
 
 const log = createLogger('TaskRunner');
 
-const MAX_STEP_ITERATIONS = 25;  // Per-step tool loop limit
-const MAX_STEP_RETRIES    = 2;   // Retry a failing step up to N times
-const TOOL_TIMEOUT_MS     = 120_000;
-const TELEGRAM_EDIT_THROTTLE_MS = 1200; // Telegram rate limit buffer
-const DEGENERATE_LOOP_LIMIT = 3; // Break if same malformed tool call repeats N times
+const MAX_STEP_ITERATIONS    = 25;       // Per-step tool loop limit
+const MAX_STEP_RETRIES       = 2;        // Retry a failing step up to N times
+const TOOL_TIMEOUT_MS        = 120_000;  // Per-tool call timeout
+const STEP_TIMEOUT_MS        = 5 * 60 * 1000;  // 5 min max per step
+const TASK_TIMEOUT_MS        = 25 * 60 * 1000; // 25 min max per whole task
+const TELEGRAM_EDIT_THROTTLE_MS = 1200;  // Telegram rate limit buffer
+const DEGENERATE_LOOP_LIMIT  = 3;        // Break if same malformed tool call repeats N times
+const TOOL_TYPE_LOOP_LIMIT   = 8;        // Break if same tool type called > N times without progress
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -38,6 +41,7 @@ export interface TaskRunResult {
   filesProduced: string[];
   summary: string;
   durationMs: number;
+  timedOut?: boolean;
 }
 
 // ─── Step System Prompt ───────────────────────────────────────────────────────
@@ -102,6 +106,74 @@ function buildVerifyPrompt(step: TaskStep, filesWritten: string[]): string {
   return `Verify step "${step.title}" is complete. Use read_file to read back these files and confirm they have proper, complete content (not empty, not placeholder): ${filesWritten.join(', ')}. Report what you found.`;
 }
 
+// ─── Step Verification ────────────────────────────────────────────────────────
+
+/**
+ * Run a quick verification pass after a step completes.
+ * Sends a single LLM call (with tools, max 5 iterations) asking it to read back
+ * files and confirm they are complete and correct.
+ * Returns the verification summary string.
+ */
+async function verifyStep(
+  step: TaskStep,
+  filesWritten: string[],
+  ai: AIManager,
+  toolExecutor: ToolExecutor,
+  model: string,
+): Promise<{ passed: boolean; summary: string }> {
+  if (filesWritten.length === 0) return { passed: true, summary: 'No files to verify.' };
+
+  const tools = toOpenAITools();
+  const verifyPrompt = buildVerifyPrompt(step, filesWritten);
+
+  const verifyMessages: AIMessage[] = [
+    { role: 'user', content: verifyPrompt },
+  ];
+
+  let lastContent = '';
+
+  for (let i = 0; i < 5; i++) {
+    let aiResponse;
+    try {
+      aiResponse = await withTimeout(
+        ai.complete({ messages: verifyMessages, model, maxTokens: 8192, temperature: 0.1, tools, tool_choice: 'auto' }),
+        TOOL_TIMEOUT_MS,
+        `verify step ${step.id}`,
+      );
+    } catch {
+      break;
+    }
+
+    if (!aiResponse.toolCalls?.length) {
+      lastContent = aiResponse.content ?? '';
+      break;
+    }
+
+    verifyMessages.push({ role: 'assistant', content: aiResponse.content || null, tool_calls: aiResponse.toolCalls });
+
+    for (const toolCall of aiResponse.toolCalls) {
+      let toolArgs: Record<string, unknown> = {};
+      try { toolArgs = JSON.parse(toolCall.function.arguments); } catch { /* ignore */ }
+
+      let result: string;
+      try {
+        result = await withTimeout(toolExecutor.execute(toolCall.function.name, toolArgs), TOOL_TIMEOUT_MS, toolCall.function.name);
+      } catch (err) {
+        result = `Error: ${err instanceof Error ? err.message : String(err)}`;
+      }
+      verifyMessages.push({ role: 'tool', content: result, tool_call_id: toolCall.id });
+    }
+  }
+
+  // Verification passes if the LLM didn't flag problems
+  const lowerContent = lastContent.toLowerCase();
+  const failed = lowerContent.includes('empty') || lowerContent.includes('placeholder') ||
+    lowerContent.includes('incomplete') || lowerContent.includes('missing') ||
+    lowerContent.includes('error') || lowerContent.includes('not found');
+
+  return { passed: !failed, summary: lastContent.slice(0, 300) || 'Verified.' };
+}
+
 // ─── Progress Message Helpers ─────────────────────────────────────────────────
 
 function formatFinalSummary(
@@ -146,7 +218,7 @@ async function executeStep(
   model: string,
   maxTokens: number,
   onDetail?: (detail: string) => void,
-): Promise<{ success: boolean; context: StepContext; rawOutput: string }> {
+): Promise<{ success: boolean; context: StepContext; rawOutput: string; verified: boolean }> {
   const tools = toOpenAITools();
   const systemPrompt = buildStepSystemPrompt(originalRequest, plan, step, previousContext);
 
@@ -162,6 +234,8 @@ async function executeStep(
   let finalContent = '';
   // Degenerate loop detection: track last N malformed call signatures
   const recentMalformedCalls: string[] = [];
+  // Tool-type frequency: detect when same tool is called many times without writing any files
+  const toolTypeCounts: Record<string, number> = {};
 
   for (let iteration = 0; iteration < MAX_STEP_ITERATIONS; iteration++) {
     let aiResponse = await withTimeout(
@@ -272,6 +346,23 @@ async function executeStep(
         onDetail?.(`Reading ${toolArgs.path}`);
       }
 
+      // Tool-type frequency check: if same tool called > TOOL_TYPE_LOOP_LIMIT times
+      // without writing any new files, it's likely stuck in a non-productive loop
+      toolTypeCounts[toolName] = (toolTypeCounts[toolName] ?? 0) + 1;
+      if (
+        toolTypeCounts[toolName]! > TOOL_TYPE_LOOP_LIMIT &&
+        toolName !== 'write_file' &&
+        filesWritten.length === 0
+      ) {
+        log.warn({ toolName, count: toolTypeCounts[toolName], step: step.id }, 'Tool type loop limit hit — breaking step');
+        loopMessages.push({
+          role: 'tool',
+          content: `[LOOP GUARD] ${toolName} has been called ${toolTypeCounts[toolName]} times without producing any files. Stop and write the output files now.`,
+          tool_call_id: toolCall.id,
+        });
+        continue;
+      }
+
       let result: string;
       try {
         result = await withTimeout(
@@ -354,17 +445,38 @@ async function executeStep(
     }
   }
 
+  // ── Verification pass ────────────────────────────────────────────────────
+  // Read back written files and confirm they are complete and correct.
+  let verified = true;
+  let verifyNote = '';
+  if (filesWritten.length > 0) {
+    try {
+      const vResult = await verifyStep(step, filesWritten, ai, toolExecutor, model);
+      verified = vResult.passed;
+      verifyNote = vResult.summary;
+      if (!verified) {
+        log.warn({ step: step.id, summary: vResult.summary }, 'Verification pass found problems');
+      } else {
+        log.debug({ step: step.id }, 'Verification pass: OK');
+      }
+    } catch (err) {
+      log.debug({ err, step: step.id }, 'Verification pass failed — treating as passed');
+    }
+  }
+
   // Build step context for future steps
   const context: StepContext = {
     filesWritten,
     commandsRun,
-    summary: finalContent.slice(0, 300).replace(/\n+/g, ' ') || `${step.title} completed`,
+    summary: (finalContent.slice(0, 250).replace(/\n+/g, ' ') || `${step.title} completed`) +
+      (verifyNote ? ` [verify: ${verifyNote.slice(0, 80)}]` : ''),
   };
 
   return {
-    success: true,
+    success: verified,
     context,
     rawOutput: finalContent,
+    verified,
   };
 }
 
@@ -389,6 +501,7 @@ export async function runTask(opts: {
   // Use at least 32768 tokens per step so write_file content is never truncated.
   const maxTokens = Math.max(opts.maxTokens, 32768);
   const startTime = Date.now();
+  let taskTimedOut = false;
 
   const completedIds = new Set<number>();
   const stepTimings = new Map<number, number>();
@@ -497,9 +610,21 @@ export async function runTask(opts: {
       let stepSuccess = false;
       let stepSummary = '';
 
+      // Check per-task deadline
+      if (Date.now() - startTime > TASK_TIMEOUT_MS) {
+        log.warn({ taskTitle: plan.title, elapsed: Date.now() - startTime }, 'Task deadline exceeded — stopping');
+        taskTimedOut = true;
+        stepSummary = 'Task timed out before this step could run.';
+        stepSuccess = false;
+        completedIds.add(step.id);
+        stepTimings.set(step.id, 0);
+        stepResults.push({ step, success: false, summary: stepSummary });
+        break;
+      }
+
       for (let attempt = 0; attempt <= MAX_STEP_RETRIES; attempt++) {
         try {
-          const result = await executeStep(
+          const result = await withTimeout(executeStep(
             step,
             plan,
             originalRequest,
@@ -519,7 +644,7 @@ export async function runTask(opts: {
                 ).catch((e) => log.debug({ e }, 'Failed to update progress message'));
               }
             },
-          );
+          ), STEP_TIMEOUT_MS, `step ${step.id}: ${step.title}`);
 
           previousContext.push(result.context);
           allFilesProduced.push(...result.context.filesWritten);
@@ -570,13 +695,14 @@ export async function runTask(opts: {
   }
 
   return {
-    success: stepResults.every((r) => r.success),
+    success: !taskTimedOut && stepResults.every((r) => r.success),
     completedSteps: stepResults.filter((r) => r.success).length,
     totalSteps: plan.steps.length,
     projectDir: plan.projectDir,
     filesProduced: uniqueFiles,
     summary: summaryMsg,
     durationMs: totalDuration,
+    timedOut: taskTimedOut,
   };
 }
 
