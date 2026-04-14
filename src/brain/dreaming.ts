@@ -125,7 +125,7 @@ export class DreamingEngine {
     if (this.aiManager) {
       try {
         const recentContext = this.gatherRecentContext(state.lastReflectedAt);
-        if (recentContext.trim().length > 50) {
+        if (recentContext.trim().length > 20) {
           await this.reflect(recentContext, reflections);
           if (reflections.length > 0) {
             // Update reflection timestamp before ideation
@@ -318,25 +318,55 @@ export class DreamingEngine {
   private gatherRecentContext(lastReflectedAt: number): string {
     const db = getDatabase();
 
-    // Only look at activity since last reflection (min 4h, max 48h)
+    // Primary window: since last reflection (min 4h, max 48h)
     const minCutoff = Date.now() - 48 * 60 * 60 * 1000;
     const sinceMs = lastReflectedAt > 0
       ? Math.max(lastReflectedAt, minCutoff)
       : minCutoff;
     const cutoffISO = new Date(sinceMs).toISOString();
 
-    // Recent episodic memories since last reflection
-    const episodes = db
+    // Recent episodic memories — lower threshold to capture more
+    let episodes = db
       .prepare(
         `SELECT content, importance, created_at
          FROM memories
          WHERE layer = 'episodic'
            AND created_at > ?
-           AND importance > 0.3
+           AND importance > 0.1
          ORDER BY importance DESC, created_at DESC
          LIMIT 30`,
       )
       .all(cutoffISO) as Array<{ content: string; importance: number; created_at: string }>;
+
+    // If very few new episodic memories, expand window to 7 days to give the LLM something real to work with
+    if (episodes.length < 5) {
+      const fallbackCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      episodes = db
+        .prepare(
+          `SELECT content, importance, created_at
+           FROM memories
+           WHERE layer = 'episodic'
+             AND created_at > ?
+             AND importance > 0.1
+           ORDER BY importance DESC, created_at DESC
+           LIMIT 20`,
+        )
+        .all(fallbackCutoff) as Array<{ content: string; importance: number; created_at: string }>;
+    }
+
+    // Also pull recent semantic facts (cross-session patterns)
+    const recentSemantic = db
+      .prepare(
+        `SELECT content, created_at
+         FROM memories
+         WHERE layer = 'semantic'
+           AND created_at > ?
+           AND tags NOT LIKE '%dream-reflection%'
+           AND tags NOT LIKE '%dream-journal%'
+         ORDER BY importance DESC, created_at DESC
+         LIMIT 10`,
+      )
+      .all(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()) as Array<{ content: string; created_at: string }>;
 
     // Top user facts (preferences/habits)
     const facts = db
@@ -360,12 +390,26 @@ export class DreamingEngine {
       )
       .all() as Array<{ content: string }>;
 
-    const parts: string[] = [];
+    const now = new Date();
+    const parts: string[] = [
+      `=== Dream Cycle Context ===`,
+      `Date: ${now.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}`,
+      `Time: ${now.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}`,
+      '',
+    ];
 
     if (episodes.length > 0) {
-      parts.push('=== Recent Activity (since last reflection) ===');
+      parts.push('=== Recent Activity ===');
       for (const ep of episodes) {
         const short = ep.content.length > 300 ? ep.content.slice(0, 300) + '…' : ep.content;
+        parts.push(`• ${short}`);
+      }
+    }
+
+    if (recentSemantic.length > 0) {
+      parts.push('\n=== Cross-Session Patterns (recent) ===');
+      for (const s of recentSemantic) {
+        const short = s.content.length > 200 ? s.content.slice(0, 200) + '…' : s.content;
         parts.push(`• ${short}`);
       }
     }
@@ -378,7 +422,7 @@ export class DreamingEngine {
     }
 
     if (pastReflections.length > 0) {
-      parts.push('\n=== Previous Dream Reflections (do not repeat) ===');
+      parts.push('\n=== Previous Dream Reflections (do not repeat these) ===');
       for (const r of pastReflections) {
         parts.push(`• ${r.content}`);
       }
@@ -408,15 +452,23 @@ export class DreamingEngine {
       ? `\n\n=== Recent User Frustration Events ===\n${frustrationRows.map((r) => `• ${r.content}`).join('\n')}`
       : '';
 
+    const now = new Date();
+    const dateLabel = now.toLocaleDateString('en-AU', {
+      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+    });
+
     const prompt =
-      `You are NEXUS, an AI agent OS that lives on a Mac. You have just finished your ` +
-      `background memory maintenance and are now reflecting on recent interactions.\n\n` +
-      `Based on the context below, generate 2-4 concise observations. Cover:\n` +
-      `1. Patterns in the user's recent activity, interests, or working style\n` +
-      `2. Cross-session patterns — things you've seen repeatedly over time\n` +
-      `3. Any areas where the user showed frustration — what caused it and how to avoid it\n` +
-      `4. Skills or knowledge you should remember for next time\n\n` +
-      `Each observation must be a single specific sentence. Be direct, not generic.\n` +
+      `You are NEXUS, an AI agent OS that lives on a Mac. ` +
+      `Today is ${dateLabel}. You have just finished your background memory maintenance.\n\n` +
+      `Based on the context below, generate 2-4 fresh, specific observations. ` +
+      `Each observation must be DIFFERENT from the "Previous Dream Reflections" listed in the context. ` +
+      `Focus on what is NEW or CHANGED since last time. Cover:\n` +
+      `1. What the user has been working on or focused on recently — be specific\n` +
+      `2. Any new patterns or shifts in behaviour compared to before\n` +
+      `3. Anything that caused friction or frustration and how to handle it differently\n` +
+      `4. A skill, tool, or approach worth remembering for next time\n\n` +
+      `Each observation must be one specific, concrete sentence — not generic advice. ` +
+      `If context is sparse, make the observation about the absence of activity itself.\n` +
       `Reply with ONLY the observations, one per line, no numbering or bullets.\n\n` +
       `Context:\n${context}${frustrationContext}`;
 
@@ -424,7 +476,7 @@ export class DreamingEngine {
       const response = await this.aiManager.complete({
         messages: [{ role: 'user', content: prompt }],
         maxTokens: 400,
-        temperature: 0.7,
+        temperature: 0.95,
       });
 
       const lines = response.content
@@ -531,20 +583,25 @@ export class DreamingEngine {
 
     const reflectionText = reflections.map((r) => `• ${r}`).join('\n');
 
+    const now = new Date();
+    const dateLabel = now.toLocaleDateString('en-AU', {
+      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+    });
+
     const prompt =
-      `You are NEXUS. Based on these observations about the user's recent activity:\n\n` +
+      `You are NEXUS. Today is ${dateLabel}.\n\n` +
+      `Based on these fresh observations about the user:\n\n` +
       `${reflectionText}\n\n` +
-      `Generate 1-2 specific, actionable ideas — things you could proactively do, ` +
-      `build, or suggest to help the user. Ideas should be concrete, not vague. ` +
-      `Examples: "Set up a Python project template", "Create a shortcut for your ` +
-      `daily deploy workflow", "Build a script to auto-archive those logs".\n\n` +
+      `Generate 1-2 specific, actionable ideas that directly follow from these observations. ` +
+      `Each idea must be tied to something concrete in the observations above — not generic advice. ` +
+      `Ideas can be: something to build, automate, improve, investigate, or suggest to the user today.\n\n` +
       `Reply with ONLY the ideas, one per line, no numbering or bullets.`;
 
     try {
       const response = await this.aiManager.complete({
         messages: [{ role: 'user', content: prompt }],
         maxTokens: 200,
-        temperature: 0.8,
+        temperature: 0.95,
       });
 
       const lines = response.content

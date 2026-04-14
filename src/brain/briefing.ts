@@ -214,21 +214,24 @@ export class BriefingEngine {
   private getTopPattern(): string | null {
     try {
       const db = getDatabase();
-      // Pull recent semantic memories tagged as dream-reflection to look for patterns
+      // Rotate through top-10 consolidated memories using day-of-month as offset
+      // so the pattern shown changes every day instead of always being the same one
+      const dayOffset = new Date().getDate() % 10;
       const rows = db
         .prepare(
           `SELECT content FROM memories
            WHERE layer = 'semantic'
              AND tags LIKE '%consolidated%'
            ORDER BY importance DESC, created_at DESC
-           LIMIT 1`,
+           LIMIT 10`,
         )
-        .get() as { content: string } | undefined;
+        .all() as Array<{ content: string }>;
 
-      if (!rows) return null;
-      const text = rows.content.length > 200
-        ? rows.content.slice(0, 200) + '…'
-        : rows.content;
+      if (rows.length === 0) return null;
+      const row = rows[dayOffset % rows.length];
+      const text = row.content.length > 200
+        ? row.content.slice(0, 200) + '…'
+        : row.content;
       return text;
     } catch {
       return null;
@@ -263,36 +266,92 @@ export class BriefingEngine {
     if (!this.aiManager) return null;
 
     try {
-      // Gather a tiny slice of recent memory for context
       const db = getDatabase();
+      const now = new Date();
+      const dateLabel = now.toLocaleDateString('en-AU', {
+        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+      });
+      const timeLabel = now.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' });
+
+      // Pull memories created since the last briefing (or last 24h as fallback)
+      const since = this.lastBriefingDate
+        ? new Date(this.lastBriefingDate + 'T00:00:00').toISOString()
+        : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
       const recentRows = db
         .prepare(
           `SELECT content FROM memories
-           WHERE layer = 'episodic'
-             AND importance > 0.5
+           WHERE layer IN ('episodic', 'semantic')
+             AND created_at > ?
+             AND importance > 0.3
            ORDER BY created_at DESC
-           LIMIT 5`,
+           LIMIT 8`,
+        )
+        .all(since) as Array<{ content: string }>;
+
+      // Fallback: grab most recent regardless of time window if none found
+      const fallbackRows = recentRows.length === 0
+        ? (db.prepare(
+            `SELECT content FROM memories
+             WHERE layer = 'episodic'
+             ORDER BY created_at DESC
+             LIMIT 5`,
+          ).all() as Array<{ content: string }>)
+        : [];
+
+      const allRows = [...recentRows, ...fallbackRows];
+
+      // Also include recent dream ideas
+      const dreamIdeas = db
+        .prepare(
+          `SELECT content FROM memories
+           WHERE tags LIKE '%dream-idea%'
+           ORDER BY created_at DESC
+           LIMIT 3`,
         )
         .all() as Array<{ content: string }>;
 
-      const context = recentRows
-        .map((r) => r.content.slice(0, 200))
-        .join('\n');
+      // Pending goals
+      const goals = db
+        .prepare(
+          `SELECT content FROM memories
+           WHERE layer = 'semantic'
+             AND tags LIKE '%goal%'
+             AND importance > 0.6
+           ORDER BY created_at DESC
+           LIMIT 3`,
+        )
+        .all() as Array<{ content: string }>;
+
+      const contextParts: string[] = [];
+      if (allRows.length > 0) {
+        contextParts.push('Recent activity:\n' + allRows.map((r) => `• ${r.content.slice(0, 180)}`).join('\n'));
+      }
+      if (dreamIdeas.length > 0) {
+        contextParts.push('Ideas from last dream:\n' + dreamIdeas.map((r) => `• ${r.content.slice(0, 150)}`).join('\n'));
+      }
+      if (goals.length > 0) {
+        contextParts.push('Active goals:\n' + goals.map((r) => `• ${r.content.slice(0, 150)}`).join('\n'));
+      }
+
+      const context = contextParts.join('\n\n') || 'No recent context available.';
 
       const response = await this.aiManager.complete({
         messages: [
           {
             role: 'user',
             content:
-              `You are NEXUS, an AI that lives on a Mac and helps its owner. ` +
-              `Based on recent context, generate one short, useful, or interesting ` +
-              `thought for today — could be a reminder, an observation, a suggestion, ` +
-              `or something to consider. Keep it to 1-2 sentences. No preamble.\n\n` +
-              `Recent context:\n${context || 'No recent context available.'}`,
+              `You are NEXUS, an AI agent OS running on a Mac. ` +
+              `Today is ${dateLabel} at ${timeLabel}.\n\n` +
+              `Based on the context below, generate ONE fresh thought for today. ` +
+              `It must be specific to the context — not generic. ` +
+              `Could be: a timely reminder, a useful observation, something to try today, ` +
+              `or a connection between recent events. 1-2 sentences only. No preamble.\n\n` +
+              `${context}`,
           },
         ],
         maxTokens: 150,
-        temperature: 0.9,
+        temperature: 1.0,
       });
 
       const thought = response.content.trim();
