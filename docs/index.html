@@ -1,0 +1,1406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NEXUS — Personal AI Agent OS</title>
+  <meta name="description" content="NEXUS is a fully autonomous AI agent that lives on your Mac, communicates via Telegram, and operates with persistent memory, emotions, and direct system control." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    /* ── Tokens ─────────────────────────────────────────────────── */
+    :root {
+      --bg-0:       #080706;
+      --bg-1:       #110f0e;
+      --bg-2:       #1c1916;
+      --bg-3:       #272320;
+      --bg-4:       #332e2a;
+      --border:     rgba(255,255,255,0.07);
+      --border-hi:  rgba(255,255,255,0.14);
+      --text-1:     #f5ece1;
+      --text-2:     #b5a596;
+      --text-3:     #7a6d62;
+      --accent:     #e8774a;
+      --accent-dim: rgba(232,119,74,0.15);
+      --accent-glow:rgba(232,119,74,0.25);
+      --green:      #4ade80;
+      --blue:       #60a5fa;
+      --purple:     #a78bfa;
+      --r:          12px;
+      --r-sm:       8px;
+    }
+
+    /* ── Reset ──────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg-0);
+      color: var(--text-1);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+    a { color: inherit; text-decoration: none; }
+    img { max-width: 100%; }
+    code, pre { font-family: 'JetBrains Mono', monospace; }
+
+    /* ── Noise texture overlay ──────────────────────────────────── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 9999;
+      opacity: 0.4;
+    }
+
+    /* ── Navigation ─────────────────────────────────────────────── */
+    nav {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 100;
+      padding: 0 40px;
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid transparent;
+      transition: background 0.3s, border-color 0.3s;
+    }
+    nav.scrolled {
+      background: rgba(8,7,6,0.88);
+      border-color: var(--border);
+      backdrop-filter: blur(20px);
+    }
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 18px;
+      letter-spacing: -0.02em;
+    }
+    .nav-logo .dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 10px var(--accent);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(0.85); }
+    }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      list-style: none;
+    }
+    .nav-links a {
+      font-size: 14px;
+      color: var(--text-2);
+      padding: 6px 12px;
+      border-radius: var(--r-sm);
+      transition: color 0.2s, background 0.2s;
+    }
+    .nav-links a:hover { color: var(--text-1); background: var(--bg-3); }
+    .nav-cta {
+      background: var(--accent) !important;
+      color: #000 !important;
+      font-weight: 600 !important;
+      padding: 7px 16px !important;
+    }
+    .nav-cta:hover { opacity: 0.9; }
+
+    /* ── Hero ───────────────────────────────────────────────────── */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 120px 24px 80px;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero-bg {
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 80% 60% at 50% 0%, rgba(232,119,74,0.12) 0%, transparent 70%),
+        radial-gradient(ellipse 60% 40% at 20% 80%, rgba(167,139,250,0.06) 0%, transparent 60%),
+        radial-gradient(ellipse 50% 40% at 80% 70%, rgba(96,165,250,0.05) 0%, transparent 60%);
+    }
+    .hero-grid {
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 40%, transparent 100%);
+    }
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-2);
+      border: 1px solid var(--border-hi);
+      border-radius: 100px;
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-2);
+      margin-bottom: 32px;
+      position: relative;
+    }
+    .hero-badge .badge-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 6px var(--green);
+    }
+    .hero-title {
+      font-size: clamp(64px, 12vw, 120px);
+      font-weight: 900;
+      letter-spacing: -0.04em;
+      line-height: 0.95;
+      position: relative;
+      background: linear-gradient(135deg, #fff 0%, #e8d5c4 40%, var(--accent) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 24px;
+    }
+    .hero-sub {
+      font-size: clamp(16px, 2.5vw, 22px);
+      color: var(--text-2);
+      max-width: 580px;
+      line-height: 1.55;
+      margin-bottom: 48px;
+      position: relative;
+    }
+    .hero-sub strong { color: var(--text-1); font-weight: 500; }
+    .hero-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: center;
+      position: relative;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #000;
+      font-weight: 700;
+      font-size: 15px;
+      padding: 12px 28px;
+      border-radius: var(--r-sm);
+      border: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: opacity 0.2s, transform 0.15s;
+    }
+    .btn-primary:hover { opacity: 0.88; transform: translateY(-1px); }
+    .btn-secondary {
+      background: var(--bg-2);
+      color: var(--text-1);
+      font-weight: 600;
+      font-size: 15px;
+      padding: 12px 28px;
+      border-radius: var(--r-sm);
+      border: 1px solid var(--border-hi);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: background 0.2s, transform 0.15s;
+    }
+    .btn-secondary:hover { background: var(--bg-3); transform: translateY(-1px); }
+    .hero-stats {
+      display: flex;
+      align-items: center;
+      gap: 40px;
+      margin-top: 72px;
+      position: relative;
+    }
+    .stat {
+      text-align: center;
+    }
+    .stat-num {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: var(--text-1);
+    }
+    .stat-num span { color: var(--accent); }
+    .stat-label {
+      font-size: 12px;
+      color: var(--text-3);
+      margin-top: 2px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .stat-divider {
+      width: 1px;
+      height: 32px;
+      background: var(--border-hi);
+    }
+
+    /* ── Section layout ─────────────────────────────────────────── */
+    section {
+      padding: 100px 24px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .section-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 14px;
+    }
+    .section-title {
+      font-size: clamp(28px, 4vw, 46px);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1.1;
+      color: var(--text-1);
+      margin-bottom: 16px;
+    }
+    .section-desc {
+      font-size: 17px;
+      color: var(--text-2);
+      max-width: 560px;
+      line-height: 1.65;
+    }
+    .section-header {
+      margin-bottom: 60px;
+    }
+
+    /* ── What is NEXUS ──────────────────────────────────────────── */
+    .what-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin-top: 48px;
+    }
+    .what-card {
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 32px;
+      transition: border-color 0.2s;
+    }
+    .what-card:hover { border-color: var(--border-hi); }
+    .what-card:first-child {
+      grid-column: 1 / -1;
+      background: var(--bg-2);
+      border-color: var(--border-hi);
+    }
+    .what-card-title {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text-1);
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .what-card-title .icon {
+      font-size: 20px;
+    }
+    .what-card p {
+      font-size: 15px;
+      color: var(--text-2);
+      line-height: 1.65;
+    }
+
+    /* ── Features ───────────────────────────────────────────────── */
+    .features-full { max-width: 100%; }
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 2px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      overflow: hidden;
+    }
+    .feature-card {
+      background: var(--bg-1);
+      padding: 32px;
+      transition: background 0.2s;
+      position: relative;
+    }
+    .feature-card:hover { background: var(--bg-2); }
+    .feature-icon {
+      width: 44px; height: 44px;
+      border-radius: var(--r-sm);
+      background: var(--accent-dim);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      margin-bottom: 18px;
+    }
+    .feature-card h3 {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text-1);
+      margin-bottom: 8px;
+    }
+    .feature-card p {
+      font-size: 14px;
+      color: var(--text-2);
+      line-height: 1.6;
+    }
+    .feature-tag {
+      display: inline-block;
+      background: var(--bg-4);
+      color: var(--text-3);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border-radius: 4px;
+      margin-top: 12px;
+    }
+
+    /* ── How it works ───────────────────────────────────────────── */
+    .how-wrapper {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 64px;
+      align-items: start;
+    }
+    .steps {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .step {
+      display: flex;
+      gap: 20px;
+      position: relative;
+    }
+    .step:not(:last-child) .step-line {
+      position: absolute;
+      left: 18px;
+      top: 40px;
+      bottom: -8px;
+      width: 1px;
+      background: linear-gradient(to bottom, var(--border-hi), transparent);
+    }
+    .step-num {
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      background: var(--bg-3);
+      border: 1px solid var(--border-hi);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--accent);
+      flex-shrink: 0;
+      position: relative;
+      z-index: 1;
+    }
+    .step-content {
+      padding-bottom: 32px;
+    }
+    .step-content h4 {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text-1);
+      margin-bottom: 6px;
+      margin-top: 6px;
+    }
+    .step-content p {
+      font-size: 14px;
+      color: var(--text-2);
+      line-height: 1.6;
+    }
+    .terminal-demo {
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      overflow: hidden;
+    }
+    .terminal-bar {
+      background: var(--bg-2);
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .terminal-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+    }
+    .terminal-dot.red { background: #ff5f57; }
+    .terminal-dot.yellow { background: #febc2e; }
+    .terminal-dot.green { background: #28c840; }
+    .terminal-title {
+      font-size: 12px;
+      color: var(--text-3);
+      margin-left: 8px;
+      font-family: 'JetBrains Mono';
+    }
+    .terminal-body {
+      padding: 24px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      line-height: 1.8;
+      min-height: 280px;
+    }
+    .t-prompt { color: var(--accent); }
+    .t-cmd { color: var(--text-1); }
+    .t-out { color: var(--text-3); }
+    .t-out.hi { color: var(--green); }
+    .t-out.info { color: var(--blue); }
+    .t-out.warn { color: #fbbf24; }
+    .t-cursor {
+      display: inline-block;
+      width: 8px; height: 14px;
+      background: var(--accent);
+      vertical-align: middle;
+      animation: blink 1s step-end infinite;
+    }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+    /* ── Comparison ─────────────────────────────────────────────── */
+    .comp-wrapper { overflow-x: auto; }
+    .comp-table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      overflow: hidden;
+    }
+    .comp-table th {
+      background: var(--bg-2);
+      padding: 16px 20px;
+      font-size: 13px;
+      font-weight: 700;
+      text-align: center;
+      color: var(--text-2);
+      border-bottom: 1px solid var(--border);
+    }
+    .comp-table th.highlight {
+      background: var(--accent-dim);
+      color: var(--accent);
+    }
+    .comp-table td {
+      padding: 14px 20px;
+      font-size: 14px;
+      color: var(--text-2);
+      border-bottom: 1px solid var(--border);
+      text-align: center;
+      background: var(--bg-1);
+    }
+    .comp-table td:first-child {
+      text-align: left;
+      font-weight: 600;
+      color: var(--text-1);
+    }
+    .comp-table td.highlight { background: rgba(232,119,74,0.05); }
+    .comp-table tr:last-child td { border-bottom: none; }
+    .check { color: var(--green); font-size: 16px; }
+    .cross { color: var(--text-3); font-size: 16px; }
+    .partial { color: #fbbf24; font-size: 16px; }
+
+    /* ── Install ────────────────────────────────────────────────── */
+    .install-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+    .install-step {
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      overflow: hidden;
+    }
+    .install-step-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 20px;
+      background: var(--bg-2);
+      border-bottom: 1px solid var(--border);
+    }
+    .install-num {
+      width: 24px; height: 24px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #000;
+      font-size: 11px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .install-step-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-1);
+    }
+    .code-block {
+      padding: 20px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      line-height: 1.8;
+      color: var(--text-2);
+      position: relative;
+      background: var(--bg-0);
+    }
+    .code-block .comment { color: var(--text-3); }
+    .code-block .cmd { color: var(--text-1); }
+    .code-block .str { color: #4ade80; }
+    .code-block .key { color: var(--accent); }
+    .code-block .val { color: var(--blue); }
+    .install-wide {
+      grid-column: 1 / -1;
+    }
+
+    /* ── Architecture ───────────────────────────────────────────── */
+    .arch-diagram {
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 40px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      position: relative;
+    }
+    .arch-layer {
+      background: var(--bg-2);
+      border: 1px solid var(--border-hi);
+      border-radius: var(--r-sm);
+      padding: 20px;
+      text-align: center;
+    }
+    .arch-layer.center {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      border-width: 1.5px;
+      grid-column: 2;
+      grid-row: 1 / 3;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+    .arch-layer-name {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-1);
+      margin-bottom: 8px;
+    }
+    .arch-layer-name.accent { color: var(--accent); font-size: 16px; }
+    .arch-layer-items {
+      font-size: 11px;
+      color: var(--text-3);
+      line-height: 1.8;
+    }
+
+    /* ── CTA Banner ─────────────────────────────────────────────── */
+    .cta-section {
+      text-align: center;
+      padding: 80px 24px 120px;
+    }
+    .cta-inner {
+      background: var(--bg-1);
+      border: 1px solid var(--border-hi);
+      border-radius: 20px;
+      padding: 72px 48px;
+      max-width: 700px;
+      margin: 0 auto;
+      position: relative;
+      overflow: hidden;
+    }
+    .cta-inner::before {
+      content: '';
+      position: absolute;
+      top: -60px; left: 50%;
+      transform: translateX(-50%);
+      width: 300px; height: 200px;
+      background: radial-gradient(ellipse, var(--accent-glow), transparent 70%);
+      pointer-events: none;
+    }
+    .cta-inner h2 {
+      font-size: 36px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      margin-bottom: 14px;
+      position: relative;
+    }
+    .cta-inner p {
+      color: var(--text-2);
+      font-size: 16px;
+      margin-bottom: 32px;
+      position: relative;
+    }
+
+    /* ── Footer ─────────────────────────────────────────────────── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 40px 40px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .footer-logo {
+      font-weight: 700;
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .footer-links {
+      display: flex;
+      gap: 24px;
+      font-size: 13px;
+      color: var(--text-3);
+    }
+    .footer-links a:hover { color: var(--text-1); }
+    .footer-copy {
+      font-size: 13px;
+      color: var(--text-3);
+    }
+
+    /* ── Divider ────────────────────────────────────────────────── */
+    .divider {
+      height: 1px;
+      background: var(--border);
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    /* ── Responsive ─────────────────────────────────────────────── */
+    @media (max-width: 860px) {
+      nav { padding: 0 20px; }
+      .nav-links { display: none; }
+      .hero-stats { gap: 20px; }
+      .what-grid { grid-template-columns: 1fr; }
+      .what-card:first-child { grid-column: 1; }
+      .how-wrapper { grid-template-columns: 1fr; }
+      .install-grid { grid-template-columns: 1fr; }
+      .install-wide { grid-column: 1; }
+      .arch-diagram { grid-template-columns: 1fr; }
+      .arch-layer.center { grid-column: 1; grid-row: auto; }
+      footer { flex-direction: column; gap: 16px; text-align: center; }
+    }
+    @media (max-width: 600px) {
+      section { padding: 64px 16px; }
+      .hero { padding: 100px 16px 64px; }
+      .hero-stats { flex-direction: column; gap: 20px; }
+      .stat-divider { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Navigation ──────────────────────────────────────────────── -->
+<nav id="nav">
+  <div class="nav-logo">
+    <div class="dot"></div>
+    NEXUS
+  </div>
+  <ul class="nav-links">
+    <li><a href="#features">Features</a></li>
+    <li><a href="#how-it-works">How it works</a></li>
+    <li><a href="#comparison">Comparison</a></li>
+    <li><a href="#install">Install</a></li>
+    <li><a href="https://github.com/blazelucastaco-ai/nexus" target="_blank" class="nav-cta">GitHub →</a></li>
+  </ul>
+</nav>
+
+<!-- ── Hero ────────────────────────────────────────────────────── -->
+<div class="hero">
+  <div class="hero-bg"></div>
+  <div class="hero-grid"></div>
+
+  <div class="hero-badge">
+    <span class="badge-dot"></span>
+    Now running on macOS · Powered by Claude Sonnet 4.6
+  </div>
+
+  <h1 class="hero-title">NEXUS</h1>
+
+  <p class="hero-sub">
+    An autonomous AI agent that <strong>lives on your Mac</strong>, thinks for itself,
+    remembers everything, and is always one Telegram message away.
+    Not a chatbot. A <strong>digital mind</strong>.
+  </p>
+
+  <div class="hero-actions">
+    <a href="#install" class="btn-primary">
+      <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 0a8 8 0 100 16A8 8 0 008 0zm-.75 4.75a.75.75 0 011.5 0v4.69l1.97-1.97a.75.75 0 011.06 1.06l-3.25 3.25a.75.75 0 01-1.06 0L4.22 8.53a.75.75 0 111.06-1.06l1.97 1.97V4.75z"/></svg>
+      Get Started
+    </a>
+    <a href="https://github.com/blazelucastaco-ai/nexus" class="btn-secondary" target="_blank">
+      <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      View on GitHub
+    </a>
+  </div>
+
+  <div class="hero-stats">
+    <div class="stat">
+      <div class="stat-num"><span>468</span>/510</div>
+      <div class="stat-label">Benchmark Score</div>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat">
+      <div class="stat-num"><span>14</span></div>
+      <div class="stat-label">Test Files</div>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat">
+      <div class="stat-num"><span>418</span></div>
+      <div class="stat-label">Tests Passing</div>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat">
+      <div class="stat-num"><span>4</span></div>
+      <div class="stat-label">Memory Layers</div>
+    </div>
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ── What is NEXUS ────────────────────────────────────────────── -->
+<section id="about">
+  <div class="section-header">
+    <p class="section-label">What is NEXUS</p>
+    <h2 class="section-title">Not an assistant.<br/>A resident AI.</h2>
+    <p class="section-desc">
+      NEXUS is a fully autonomous AI agent built in TypeScript that lives persistently
+      on your Mac. It connects via Telegram, controls your system, and accumulates
+      memory across every session — developing a genuine understanding of who you are
+      and how you work.
+    </p>
+  </div>
+
+  <div class="what-grid">
+    <div class="what-card">
+      <div class="what-card-title">
+        <span class="icon">🧠</span>
+        The core idea
+      </div>
+      <p>
+        Most AI tools reset every conversation. NEXUS doesn't. It maintains four layers of
+        persistent memory — episodic (what happened), semantic (what it knows), procedural
+        (how things work), and working memory for the current task. Every night it runs a
+        <strong style="color:var(--text-1)">dream cycle</strong>: consolidating memories,
+        decaying stale ones, generating reflections, and storing new ideas while you sleep.
+        When you message NEXUS in the morning, it already knows what's on your plate.
+      </p>
+    </div>
+    <div class="what-card">
+      <div class="what-card-title"><span class="icon">📱</span> Telegram-first</div>
+      <p>
+        Your entire interface is Telegram. Message from your phone anywhere in the world
+        via Tailscale and NEXUS responds like a colleague who's been at your desk all day.
+        No web app to open, no context to re-establish.
+      </p>
+    </div>
+    <div class="what-card">
+      <div class="what-card-title"><span class="icon">💻</span> True Mac control</div>
+      <p>
+        NEXUS can run terminal commands, write and execute code, read and write files,
+        automate Chrome via the NEXUS Bridge extension, take screenshots, query the macOS
+        accessibility tree, and control apps via AppleScript.
+      </p>
+    </div>
+    <div class="what-card">
+      <div class="what-card-title"><span class="icon">🎭</span> Genuine personality</div>
+      <p>
+        Configurable humor, sarcasm, and emotional state. NEXUS tracks whether its jokes
+        land (literally), dampens humor when they don't, and notices when you're frustrated.
+        Its style adapts to your mood and the conversation's depth.
+      </p>
+    </div>
+    <div class="what-card">
+      <div class="what-card-title"><span class="icon">🔒</span> Security-first</div>
+      <p>
+        Every terminal command passes through a four-tier approval policy: SAFE, MODERATE,
+        DANGEROUS, and BLOCKED. DANGEROUS commands require explicit confirmation. Injection
+        attempts are caught before they reach the LLM. Your system stays yours.
+      </p>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ── Features ─────────────────────────────────────────────────── -->
+<section id="features" class="features-full" style="max-width:1200px">
+  <div class="section-header">
+    <p class="section-label">Feature Set</p>
+    <h2 class="section-title">Everything an AI agent should do.</h2>
+    <p class="section-desc">
+      Fourteen production-grade subsystems, all wired together and running continuously.
+    </p>
+  </div>
+
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="feature-icon">🌙</div>
+      <h3>Dream Cycle</h3>
+      <p>Every 6 hours, NEXUS enters a dream cycle: consolidates high-access episodic memories into semantic facts, decays stale entries, runs contradiction resolution, generates reflections, produces actionable ideas, and journals everything to long-term memory.</p>
+      <span class="feature-tag">Memory · Scheduled</span>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🧩</div>
+      <h3>4-Layer Memory System</h3>
+      <p>Episodic (events), semantic (facts), procedural (skills), and short-term buffer. Full recall uses embedding-based semantic search with importance scoring, access-count weighting, and keyword fallback. Nothing is ever truly forgotten unless it should be.</p>
+      <span class="feature-tag">Core · Persistent</span>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🧬</div>
+      <h3>Memory Synthesizer</h3>
+      <p>Before each response, a fast LLM call synthesizes raw memory fragments into a coherent paragraph. Results are cached for 60 seconds per query hash. Skips synthesis when fewer than 3 memories are available to avoid wasted tokens.</p>
+      <span class="feature-tag">Cognition · Optimized</span>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">💭</div>
+      <h3>Inner Monologue</h3>
+      <p>Optionally generate a private 2–4 sentence thought before responding — surfacing relevant memories, emotional context, and reasoning intent. Automatically skips trivial or short messages to keep latency low.</p>
+      <span class="feature-tag">Cognition · Optional</span>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🌐</div>
+      <h3>Chrome Browser Control</h3>
+      <p>Full browser automation via the NEXUS Bridge Chrome extension — navigate, extract content, fill forms, click, scroll, wait for elements, dismiss cookie banners, suppress dialogs, manage tabs, and take screenshots. No Playwright scripting needed.</p>
+      <span class="feature-tag">Tools · Browser</span>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🎯</div>
+      <h3>Goal Tracker</h3>
+      <p>Automatically detects goal statements in your messages ("I want to…", "my goal is…", "by next week…") and stores them as high-importance memories. Goals appear in every system prompt. Stale goals (30+ days inactive) are pruned by keyword overlap analysis.</p>
+      <span class="feature-tag">Learning · Proactive</span>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">📊</div>
+      <h3>Pattern Recognition</h3>
+      <p>Tracks temporal patterns (time-of-day clustering, weekend activity), sequence patterns (A→B→C behavioral chains), and preference patterns (dominant choices per category). Persists detected patterns to the database for cross-session continuity.</p>
+      <span class="feature-tag">Learning · Analytics</span>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🎭</div>
+      <h3>Humor Engine</h3>
+      <p>Decides whether to inject humor based on topic seriousness, conversation length, rapport score, and frequency caps. Tracks whether jokes land (lol, 😂, "good one") vs miss. Dampens humor up to 50% when the hit rate drops below 20% over 20+ attempts.</p>
+      <span class="feature-tag">Personality · Adaptive</span>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">⏰</div>
+      <h3>Task Scheduler</h3>
+      <p>Cron-based scheduled tasks with SQLite persistence — reminders and recurring automations survive restarts. Tracks last exit code, execution duration, and consecutive failure count. Auto-disables tasks after 5 consecutive failures.</p>
+      <span class="feature-tag">Automation · Persistent</span>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">☀️</div>
+      <h3>Daily Briefing</h3>
+      <p>Each morning at a configurable hour, NEXUS sends a personalized briefing: last dream summary, scheduled tasks for today, top detected pattern, recurring mistakes to watch for, and an LLM-generated thought based on recent memory context.</p>
+      <span class="feature-tag">Productivity · Daily</span>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🔍</div>
+      <h3>Self-Evaluator</h3>
+      <p>After task-type responses, asynchronously evaluates whether the answer fully addressed the question. Gaps are stored as episodic reflections and routed to the mistake tracker. Only fires for task messages with responses over 200 characters.</p>
+      <span class="feature-tag">Quality · Background</span>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🛡️</div>
+      <h3>Injection Guard</h3>
+      <p>Every message passes through a multi-layer injection detection pipeline before reaching the LLM. Detects classic prompt injection patterns, role override attempts, instruction smuggling via code/links/images, and Unicode obfuscation techniques.</p>
+      <span class="feature-tag">Security · Always-on</span>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">📈</div>
+      <h3>Mistake Tracker</h3>
+      <p>Records categorized mistakes with root causes and prevention strategies. Detects similar past mistakes via Jaccard keyword overlap (≥30%). Automatically escalates severity every 2 recurrences (minor → moderate → major → critical).</p>
+      <span class="feature-tag">Learning · Self-improving</span>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🔭</div>
+      <h3>Proactive Monitor</h3>
+      <p>Background engine monitors ports and system health. Implements exponential backoff on alerts (5min → 30min → 2hr) to avoid notification spam. Sends Telegram alerts on state changes.</p>
+      <span class="feature-tag">Monitoring · Background</span>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ── How It Works ─────────────────────────────────────────────── -->
+<section id="how-it-works">
+  <div class="section-header">
+    <p class="section-label">How It Works</p>
+    <h2 class="section-title">Every message is a 13-step pipeline.</h2>
+    <p class="section-desc">
+      From Telegram to response, each message flows through the full NEXUS orchestration stack —
+      memory, cognition, tools, and personality all woven together.
+    </p>
+  </div>
+
+  <div class="how-wrapper">
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-line"></div>
+        <div class="step-content">
+          <h4>Injection Guard</h4>
+          <p>The raw message is scanned for injection patterns, role overrides, and Unicode tricks before anything else runs.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-line"></div>
+        <div class="step-content">
+          <h4>Memory Recall</h4>
+          <p>Embeddings + keyword scoring retrieves the most relevant episodic and semantic memories. User facts and active goals are loaded.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-line"></div>
+        <div class="step-content">
+          <h4>Memory Synthesis</h4>
+          <p>A fast LLM call synthesizes memory fragments into a coherent paragraph. Cached for 60 seconds per query hash to avoid redundant calls.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-line"></div>
+        <div class="step-content">
+          <h4>Goal &amp; Intent Detection</h4>
+          <p>Goal patterns are extracted and stored. The message is classified as task or chat, and an execution mode is assigned (standard/coordinator/ultra).</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-line"></div>
+        <div class="step-content">
+          <h4>Task Planning (if needed)</h4>
+          <p>Task messages get a structured plan with 2–15 steps. Ultra-mode tasks require a strong-model review pass before execution begins.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-line"></div>
+        <div class="step-content">
+          <h4>Inner Monologue (optional)</h4>
+          <p>If think mode is enabled and the message is substantial, a private reasoning pass runs before the main response — surfacing context and setting intent.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-line"></div>
+        <div class="step-content">
+          <h4>LLM Response + Tool Execution</h4>
+          <p>The orchestrator calls Claude with a full context window. Tool calls (terminal, browser, file, web) execute in a sandboxed approval loop.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">8</div>
+        <div class="step-line"></div>
+        <div class="step-content">
+          <h4>Self-Evaluation (async)</h4>
+          <p>After the response is returned, a background completeness check identifies gaps and routes them to the mistake tracker and episodic memory.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="terminal-demo">
+      <div class="terminal-bar">
+        <div class="terminal-dot red"></div>
+        <div class="terminal-dot yellow"></div>
+        <div class="terminal-dot green"></div>
+        <span class="terminal-title">nexus · live log</span>
+      </div>
+      <div class="terminal-body">
+        <div><span class="t-out info">[brain]</span> <span class="t-cmd">Message received from chatId 123456</span></div>
+        <div><span class="t-out">[guard]</span> <span class="t-cmd">Injection check passed</span></div>
+        <div><span class="t-out info">[memory]</span> <span class="t-cmd">Recalled 6 memories (emb+keyword)</span></div>
+        <div><span class="t-out info">[synth]</span> <span class="t-cmd">Synthesized 6 → 1 paragraph (cache miss)</span></div>
+        <div><span class="t-out">[classifier]</span> <span class="t-cmd">Type: task · Mode: standard</span></div>
+        <div><span class="t-out hi">[planner]</span> <span class="t-cmd">Plan: "Build login page" · 4 steps</span></div>
+        <div><span class="t-out">[runner]</span> <span class="t-cmd">Step 1/4 · write_file → index.html ✓</span></div>
+        <div><span class="t-out">[runner]</span> <span class="t-cmd">Step 2/4 · write_file → style.css ✓</span></div>
+        <div><span class="t-out">[runner]</span> <span class="t-cmd">Step 3/4 · run_terminal → node server.js ✓</span></div>
+        <div><span class="t-out hi">[runner]</span> <span class="t-cmd">Step 4/4 · Verify · All outputs confirmed ✓</span></div>
+        <div><span class="t-out">[memory]</span> <span class="t-cmd">Stored episodic memory (importance 0.7)</span></div>
+        <div><span class="t-out">[self-eval]</span> <span class="t-cmd">Response complete → no gaps detected</span></div>
+        <div><span class="t-out hi">[telegram]</span> <span class="t-cmd">Response delivered · 2341ms</span></div>
+        <br/>
+        <span class="t-prompt">nexus</span><span class="t-cmd">@mac</span> <span class="t-out">~</span> <span class="t-cursor"></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ── Comparison ───────────────────────────────────────────────── -->
+<section id="comparison">
+  <div class="section-header">
+    <p class="section-label">Comparison</p>
+    <h2 class="section-title">How NEXUS stacks up.</h2>
+    <p class="section-desc">
+      Most AI agents are ephemeral, stateless, or require cloud infrastructure. NEXUS is designed
+      to live on your machine permanently and grow with you.
+    </p>
+  </div>
+
+  <div class="comp-wrapper">
+    <table class="comp-table">
+      <thead>
+        <tr>
+          <th style="text-align:left">Capability</th>
+          <th class="highlight">NEXUS</th>
+          <th>AutoGPT</th>
+          <th>OpenClaw</th>
+          <th>Devin / SWE-agent</th>
+          <th>ChatGPT Plugins</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Persistent cross-session memory</td>
+          <td class="highlight"><span class="check">✓</span> 4 layers</td>
+          <td><span class="partial">~</span> Vector DB only</td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span> Session only</td>
+          <td><span class="partial">~</span> Memory plugin</td>
+        </tr>
+        <tr>
+          <td>Nightly dream / consolidation cycle</td>
+          <td class="highlight"><span class="check">✓</span> Automated</td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+        </tr>
+        <tr>
+          <td>Personality &amp; emotional state</td>
+          <td class="highlight"><span class="check">✓</span> Humor, empathy, mood</td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+        </tr>
+        <tr>
+          <td>Native Mac / OS control</td>
+          <td class="highlight"><span class="check">✓</span> Full</td>
+          <td><span class="partial">~</span> Via tools</td>
+          <td><span class="partial">~</span> Limited</td>
+          <td><span class="partial">~</span> Sandboxed VM</td>
+          <td><span class="cross">✗</span></td>
+        </tr>
+        <tr>
+          <td>Chrome browser automation</td>
+          <td class="highlight"><span class="check">✓</span> Native extension</td>
+          <td><span class="partial">~</span> Playwright</td>
+          <td><span class="partial">~</span> Playwright</td>
+          <td><span class="check">✓</span></td>
+          <td><span class="cross">✗</span></td>
+        </tr>
+        <tr>
+          <td>Prompt injection defense</td>
+          <td class="highlight"><span class="check">✓</span> Multi-layer guard</td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="partial">~</span></td>
+          <td><span class="partial">~</span></td>
+        </tr>
+        <tr>
+          <td>Command approval tiers</td>
+          <td class="highlight"><span class="check">✓</span> 4-tier policy</td>
+          <td><span class="partial">~</span> Basic</td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="partial">~</span></td>
+          <td><span class="cross">✗</span></td>
+        </tr>
+        <tr>
+          <td>Mistake learning &amp; prevention</td>
+          <td class="highlight"><span class="check">✓</span> Auto-escalates</td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+        </tr>
+        <tr>
+          <td>Goal tracking across sessions</td>
+          <td class="highlight"><span class="check">✓</span> Auto-extracted</td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+        </tr>
+        <tr>
+          <td>Runs fully offline / on-device</td>
+          <td class="highlight"><span class="check">✓</span> Local SQLite</td>
+          <td><span class="cross">✗</span> Cloud required</td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+        </tr>
+        <tr>
+          <td>Telegram interface</td>
+          <td class="highlight"><span class="check">✓</span> Full featured</td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+        </tr>
+        <tr>
+          <td>Daily briefings</td>
+          <td class="highlight"><span class="check">✓</span> Smart morning msg</td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+          <td><span class="cross">✗</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ── Architecture ─────────────────────────────────────────────── -->
+<section id="architecture">
+  <div class="section-header">
+    <p class="section-label">Architecture</p>
+    <h2 class="section-title">Built to last.</h2>
+    <p class="section-desc">
+      TypeScript throughout, SQLite for persistence, Claude (Anthropic) as the reasoning engine.
+      Everything compiles to a single CJS bundle deployed via launchctl.
+    </p>
+  </div>
+
+  <div class="arch-diagram">
+    <div class="arch-layer">
+      <div class="arch-layer-name">Interface Layer</div>
+      <div class="arch-layer-items">
+        Telegram Bot (Grammy)<br/>
+        CLI Commands<br/>
+        MCP Server<br/>
+        Dev Chat (REPL)
+      </div>
+    </div>
+    <div class="arch-layer center">
+      <div class="arch-layer-name accent">Orchestrator</div>
+      <div class="arch-layer-items" style="color:var(--text-2)">
+        13-step pipeline<br/>
+        Task classifier<br/>
+        Task planner<br/>
+        Tool executor<br/>
+        Session store
+      </div>
+    </div>
+    <div class="arch-layer">
+      <div class="arch-layer-name">Tool Layer</div>
+      <div class="arch-layer-items">
+        Terminal / File<br/>
+        Browser (Chrome)<br/>
+        Web Search<br/>
+        macOS / AppleScript<br/>
+        Vision / PDF
+      </div>
+    </div>
+    <div class="arch-layer">
+      <div class="arch-layer-name">Cognition Layer</div>
+      <div class="arch-layer-items">
+        Inner Monologue<br/>
+        Memory Synthesizer<br/>
+        Self-Evaluator<br/>
+        Reasoning Trace<br/>
+        Injection Guard
+      </div>
+    </div>
+    <div class="arch-layer">
+      <div class="arch-layer-name">Memory Layer</div>
+      <div class="arch-layer-items">
+        Episodic Memory<br/>
+        Semantic Memory<br/>
+        Procedural Memory<br/>
+        Short-term Buffer<br/>
+        Embeddings (SQLite)
+      </div>
+    </div>
+    <div class="arch-layer">
+      <div class="arch-layer-name">Learning Layer</div>
+      <div class="arch-layer-items">
+        Pattern Recognizer<br/>
+        Preference Learner<br/>
+        Mistake Tracker<br/>
+        Feedback Processor<br/>
+        Goal Tracker
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ── Installation ─────────────────────────────────────────────── -->
+<section id="install">
+  <div class="section-header">
+    <p class="section-label">Installation</p>
+    <h2 class="section-title">Up and running in minutes.</h2>
+    <p class="section-desc">
+      NEXUS runs as a persistent launchd service on macOS. All you need is Node.js 22+,
+      an Anthropic API key, and a Telegram bot token.
+    </p>
+  </div>
+
+  <div class="install-grid">
+    <div class="install-step">
+      <div class="install-step-header">
+        <div class="install-num">1</div>
+        <div class="install-step-title">Clone &amp; install dependencies</div>
+      </div>
+      <div class="code-block">
+        <div><span class="comment"># Requires Node.js 22+ and pnpm</span></div>
+        <div><span class="cmd">git clone https://github.com/blazelucastaco-ai/nexus.git</span></div>
+        <div><span class="cmd">cd nexus</span></div>
+        <div><span class="cmd">npm install</span></div>
+      </div>
+    </div>
+
+    <div class="install-step">
+      <div class="install-step-header">
+        <div class="install-num">2</div>
+        <div class="install-step-title">Configure environment</div>
+      </div>
+      <div class="code-block">
+        <div><span class="comment"># Create .env in the project root</span></div>
+        <div><span class="key">ANTHROPIC_API_KEY</span>=<span class="str">"sk-ant-..."</span></div>
+        <div><span class="key">TELEGRAM_BOT_TOKEN</span>=<span class="str">"12345:ABC..."</span></div>
+        <div><span class="key">TELEGRAM_CHAT_ID</span>=<span class="str">"your_chat_id"</span></div>
+        <div><span class="key">BRAVE_API_KEY</span>=<span class="str">"BSA..."</span> <span class="comment"># optional</span></div>
+      </div>
+    </div>
+
+    <div class="install-step">
+      <div class="install-step-header">
+        <div class="install-num">3</div>
+        <div class="install-step-title">Build the project</div>
+      </div>
+      <div class="code-block">
+        <div><span class="cmd">npm run build</span></div>
+        <div>&nbsp;</div>
+        <div><span class="comment"># Output: dist/index.js, dist/cli.js</span></div>
+        <div><span class="comment"># Auto-copies to ~/.nexus/app/index.cjs</span></div>
+      </div>
+    </div>
+
+    <div class="install-step">
+      <div class="install-step-header">
+        <div class="install-num">4</div>
+        <div class="install-step-title">Run the setup wizard</div>
+      </div>
+      <div class="code-block">
+        <div><span class="cmd">npm run setup</span></div>
+        <div>&nbsp;</div>
+        <div><span class="comment"># Interactive CLI wizard installs the</span></div>
+        <div><span class="comment"># launchd plist and starts the service</span></div>
+      </div>
+    </div>
+
+    <div class="install-step install-wide">
+      <div class="install-step-header">
+        <div class="install-num">5</div>
+        <div class="install-step-title">Verify NEXUS is running</div>
+      </div>
+      <div class="code-block">
+        <div><span class="comment"># Check service status</span></div>
+        <div><span class="cmd">launchctl list | grep nexus</span></div>
+        <div>&nbsp;</div>
+        <div><span class="comment"># Or use the CLI</span></div>
+        <div><span class="cmd">nexus status</span></div>
+        <div>&nbsp;</div>
+        <div><span class="comment"># Send a test message on Telegram</span></div>
+        <div><span class="comment"># → Type "hello" and NEXUS should respond within 2 seconds</span></div>
+        <div>&nbsp;</div>
+        <div><span class="comment"># To trigger a manual dream cycle</span></div>
+        <div><span class="cmd">nexus dream</span></div>
+        <div>&nbsp;</div>
+        <div><span class="comment"># To run tests (418 passing)</span></div>
+        <div><span class="cmd">npm test</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:32px; background:var(--bg-2); border:1px solid var(--border-hi); border-radius:var(--r); padding:24px 28px; display:flex; gap:16px; align-items:flex-start;">
+    <div style="font-size:22px; flex-shrink:0;">💡</div>
+    <div>
+      <div style="font-size:14px; font-weight:700; color:var(--text-1); margin-bottom:6px;">Install the NEXUS Bridge Chrome Extension</div>
+      <div style="font-size:14px; color:var(--text-2); line-height:1.6;">
+        For full browser automation, load the <code style="background:var(--bg-3); padding:2px 6px; border-radius:4px;">chrome-extension/</code> folder
+        as an unpacked extension in Chrome's developer mode. Once connected, NEXUS gains 16
+        <code style="background:var(--bg-3); padding:2px 6px; border-radius:4px;">browser_*</code> tools for navigating, extracting, clicking, and filling any website.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── CTA ──────────────────────────────────────────────────────── -->
+<div class="cta-section">
+  <div class="cta-inner">
+    <h2>Your AI. Your machine.<br/>Your rules.</h2>
+    <p>NEXUS is open source, self-hosted, and designed to be yours — not a cloud product with
+    rate limits and data policies.</p>
+    <div class="hero-actions">
+      <a href="https://github.com/blazelucastaco-ai/nexus" class="btn-primary" target="_blank">
+        <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        Star on GitHub
+      </a>
+      <a href="#install" class="btn-secondary">Read the docs →</a>
+    </div>
+  </div>
+</div>
+
+<!-- ── Footer ───────────────────────────────────────────────────── -->
+<div class="divider"></div>
+<footer>
+  <div class="footer-logo">
+    <div class="dot" style="width:8px;height:8px"></div>
+    NEXUS
+  </div>
+  <div class="footer-links">
+    <a href="https://github.com/blazelucastaco-ai/nexus" target="_blank">GitHub</a>
+    <a href="#features">Features</a>
+    <a href="#install">Install</a>
+    <a href="#comparison">Comparison</a>
+  </div>
+  <div class="footer-copy">Built with TypeScript · Powered by Anthropic</div>
+</footer>
+
+<script>
+  // Sticky nav scroll effect
+  const nav = document.getElementById('nav');
+  window.addEventListener('scroll', () => {
+    nav.classList.toggle('scrolled', window.scrollY > 20);
+  }, { passive: true });
+</script>
+</body>
+</html>
