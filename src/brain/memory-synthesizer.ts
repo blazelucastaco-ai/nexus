@@ -14,6 +14,16 @@ import type { Memory, UserFact } from '../types.js';
 
 const log = createLogger('MemorySynthesizer');
 
+// Minimum memories required before we bother calling the LLM
+const MIN_MEMORIES_FOR_LLM = 3;
+// Cache TTL in milliseconds
+const CACHE_TTL_MS = 60_000;
+
+interface CacheEntry {
+  result: SynthesisResult;
+  expiresAt: number;
+}
+
 export interface SynthesisResult {
   synthesis: string;        // Coherent paragraph for the system prompt
   usedMemoryIds: string[];  // Memory IDs included (for feedback loop)
@@ -21,6 +31,7 @@ export interface SynthesisResult {
 
 export class MemorySynthesizer {
   private aiManager: AIManager;
+  private cache = new Map<string, CacheEntry>();
 
   constructor(aiManager: AIManager) {
     this.aiManager = aiManager;
@@ -39,6 +50,24 @@ export class MemorySynthesizer {
 
     if (topMemories.length === 0 && topFacts.length === 0 && activeGoals.length === 0) {
       return { synthesis: '', usedMemoryIds: [] };
+    }
+
+    // Skip LLM synthesis when we have too few memories — just inline the fragments
+    if (topMemories.length < MIN_MEMORIES_FOR_LLM) {
+      const fallback = topMemories
+        .map((m) => m.summary ?? m.content.slice(0, 100))
+        .filter(Boolean)
+        .join(' | ');
+      log.debug({ memoryCount: topMemories.length }, 'Memory count below threshold — skipping LLM synthesis');
+      return { synthesis: fallback, usedMemoryIds };
+    }
+
+    // Build a cache key from the query + memory IDs (stable order)
+    const cacheKey = `${query.slice(0, 100)}:${usedMemoryIds.join(',')}`;
+    const cached = this.cache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt) {
+      log.debug({ cacheKey: cacheKey.slice(0, 60) }, 'Memory synthesis cache hit');
+      return cached.result;
     }
 
     const memoryLines = topMemories
@@ -76,10 +105,15 @@ export class MemorySynthesizer {
       const synthesis = response.content.trim();
       log.debug({ chars: synthesis.length, memoryCount: topMemories.length }, 'Memory synthesized');
 
-      return {
+      const result: SynthesisResult = {
         synthesis: synthesis.length > 20 ? synthesis : '',
         usedMemoryIds,
       };
+
+      // Store in cache
+      this.cache.set(cacheKey, { result, expiresAt: Date.now() + CACHE_TTL_MS });
+
+      return result;
     } catch (err) {
       log.debug({ err }, 'Memory synthesis LLM call failed — using text fallback');
 

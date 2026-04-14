@@ -653,6 +653,7 @@ export class Orchestrator {
       // If the message looks like a build/fix/diagnose task, hand off to
       // the TaskRunner which executes it step-by-step with live progress.
       const messageType = classifyMessage(text);
+      const isTaskMessage = messageType === 'task';
       if (messageType === 'task') {
         // Auto-detect execution mode from the request itself
         const taskMode = classifyTaskMode(text);
@@ -1167,7 +1168,7 @@ export class Orchestrator {
       if (this.selfEvaluator) {
         const evalQuery = text;
         const evalResponse = finalContent;
-        this.selfEvaluator.evaluate(evalQuery, evalResponse).then(async (note) => {
+        this.selfEvaluator.evaluate(evalQuery, evalResponse, isTaskMessage).then(async (note) => {
           if (note) {
             // Store as a high-importance reflection memory so it surfaces in future recall
             this.memory.store('episodic', 'fact',

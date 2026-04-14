@@ -11,14 +11,25 @@
 //   6. Notify      — send a Telegram message summarizing the dream (if sendFn provided)
 //   7. Journal     — store the dream log as a high-importance semantic memory
 
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { createLogger } from '../utils/logger.js';
 import { getDatabase } from '../memory/database.js';
 import { storeEmbedding } from '../memory/embeddings.js';
 import { generateId, nowISO } from '../utils/helpers.js';
 import type { AIManager } from '../ai/index.js';
 import { GoalTracker } from './goal-tracker.js';
+import { MemoryConsolidation } from '../memory/consolidation.js';
 
 const log = createLogger('DreamCycle');
+
+const STATE_PATH = join(homedir(), '.nexus', 'dream-state.json');
+
+interface DreamState {
+  lastDreamAt: number;       // epoch ms
+  lastReflectedAt: number;   // epoch ms
+}
 
 export type SendFn = (message: string) => Promise<void>;
 
@@ -32,6 +43,7 @@ export interface DreamReport {
   ideas: string[];           // actionable ideas generated from reflections
   insights: string[];        // LLM-generated semantic facts from consolidation
   durationMs: number;
+  skipped?: boolean;         // true if double-run guard fired
 }
 
 export class DreamingEngine {
@@ -45,11 +57,59 @@ export class DreamingEngine {
     this.goalTracker = new GoalTracker();
   }
 
+  // ── State persistence ──────────────────────────────────────────────
+
+  private loadDreamState(): DreamState {
+    try {
+      if (existsSync(STATE_PATH)) {
+        const raw = readFileSync(STATE_PATH, 'utf8');
+        return JSON.parse(raw) as DreamState;
+      }
+    } catch {
+      // treat as fresh
+    }
+    return { lastDreamAt: 0, lastReflectedAt: 0 };
+  }
+
+  private saveDreamState(state: DreamState): void {
+    try {
+      mkdirSync(join(homedir(), '.nexus'), { recursive: true });
+      writeFileSync(STATE_PATH, JSON.stringify(state), 'utf8');
+    } catch (err) {
+      log.warn({ err }, 'Failed to save dream state');
+    }
+  }
+
   // ── Main entry point ────────────────────────────────────────────────────────
 
   async runDreamCycle(): Promise<DreamReport> {
     const start = Date.now();
+
+    // Double-run guard — reject runs within 30 minutes of the last one
+    const state = this.loadDreamState();
+    const THIRTY_MIN = 30 * 60 * 1000;
+    if (state.lastDreamAt > 0 && start - state.lastDreamAt < THIRTY_MIN) {
+      const waitSec = Math.ceil((THIRTY_MIN - (start - state.lastDreamAt)) / 1000);
+      log.warn({ waitSec }, 'Dream cycle rejected — too soon since last run');
+      return {
+        consolidated: 0, decayed: 0, garbageCollected: 0, contradictions: 0,
+        staleGoalsPruned: 0, reflections: [], ideas: [], insights: [],
+        durationMs: Date.now() - start, skipped: true,
+      };
+    }
+
+    // Stamp immediately so concurrent callers see it
+    this.saveDreamState({ ...state, lastDreamAt: start });
     log.info('Dream cycle starting…');
+
+    // Run MemoryConsolidation (dedup, fact extraction, importance adjustment)
+    try {
+      const consolidation = new MemoryConsolidation();
+      const report = consolidation.runConsolidation();
+      log.debug(report, 'MemoryConsolidation completed');
+    } catch (err) {
+      log.warn({ err }, 'MemoryConsolidation failed — skipping');
+    }
 
     const insights: string[] = [];
     const consolidated = await this.consolidateEpisodic(insights);
@@ -64,11 +124,17 @@ export class DreamingEngine {
 
     if (this.aiManager) {
       try {
-        const recentContext = this.gatherRecentContext();
+        const recentContext = this.gatherRecentContext(state.lastReflectedAt);
         if (recentContext.trim().length > 50) {
           await this.reflect(recentContext, reflections);
           if (reflections.length > 0) {
+            // Update reflection timestamp before ideation
+            const newState: DreamState = { lastDreamAt: start, lastReflectedAt: Date.now() };
+            this.saveDreamState(newState);
+
             await this.ideate(reflections, ideas);
+            // Store ideas as episodic memories so they surface in future sessions
+            this.storeIdeasAsMemories(ideas);
           }
         }
       } catch (err) {
@@ -111,7 +177,7 @@ export class DreamingEngine {
     return report;
   }
 
-  // ── Phase 1+2+3: Consolidate high-access episodic → semantic ───────────────
+  // ── Phase 1: Consolidate high-access episodic → semantic (batched) ──────────
 
   private async consolidateEpisodic(insights: string[]): Promise<number> {
     const db = getDatabase();
@@ -148,52 +214,60 @@ export class DreamingEngine {
       return 0;
     }
 
-    log.info({ count: rows.length }, 'Consolidating episodic memories');
+    log.info({ count: rows.length }, 'Consolidating episodic memories (batched)');
     let promoted = 0;
 
-    for (const row of rows) {
-      try {
-        const insight = await this.generateInsight(row.content, row.summary);
+    // Process in batches of 5 to reduce LLM round-trips
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+      const batch = rows.slice(i, i + BATCH_SIZE);
+      const batchInsights = await this.generateInsightsBatch(batch);
+
+      for (let j = 0; j < batch.length; j++) {
+        const row = batch[j];
+        const insight = batchInsights[j];
         if (!insight) continue;
 
-        const factId = generateId();
-        const now = nowISO();
-        db.prepare(
-          `INSERT INTO memories
-             (id, layer, type, content, summary, importance, confidence,
-              emotional_valence, created_at, last_accessed, access_count,
-              tags, related_memories, source, metadata)
-           VALUES (?, 'semantic', 'fact', ?, ?, 0.8, 0.85,
-                   NULL, ?, ?, 0, '["consolidated","dream-cycle"]',
-                   '[]', 'dream-cycle', ?)`,
-        ).run(
-          factId,
-          insight,
-          `Consolidated from episodic memory ${row.id}`,
-          now,
-          now,
-          JSON.stringify({ sourceEpisodicId: row.id, dreamedAt: now }),
-        );
-
         try {
-          storeEmbedding(factId, insight);
-        } catch {
-          // non-fatal
+          const factId = generateId();
+          const now = nowISO();
+          db.prepare(
+            `INSERT INTO memories
+               (id, layer, type, content, summary, importance, confidence,
+                emotional_valence, created_at, last_accessed, access_count,
+                tags, related_memories, source, metadata)
+             VALUES (?, 'semantic', 'fact', ?, ?, 0.8, 0.85,
+                     NULL, ?, ?, 0, '["consolidated","dream-cycle"]',
+                     '[]', 'dream-cycle', ?)`,
+          ).run(
+            factId,
+            insight,
+            `Consolidated from episodic memory ${row.id}`,
+            now,
+            now,
+            JSON.stringify({ sourceEpisodicId: row.id, dreamedAt: now }),
+          );
+
+          try {
+            storeEmbedding(factId, insight);
+          } catch {
+            // non-fatal
+          }
+
+          insights.push(insight);
+          promoted++;
+
+          log.debug({ factId, sourceId: row.id }, 'Promoted episodic → semantic');
+        } catch (err) {
+          log.warn({ err, memoryId: row.id }, 'Failed to store consolidated memory — skipping');
         }
-
-        insights.push(insight);
-        promoted++;
-
-        log.debug({ factId, sourceId: row.id }, 'Promoted episodic → semantic');
-      } catch (err) {
-        log.warn({ err, memoryId: row.id }, 'Failed to consolidate memory — skipping');
       }
     }
 
     return promoted;
   }
 
-  // ── Phase 4: Decay stale rarely-accessed episodic memories ────────────────
+  // ── Phase 2: Decay stale rarely-accessed episodic memories ────────────────
 
   private decayStaleMemories(): number {
     const db = getDatabase();
@@ -215,7 +289,7 @@ export class DreamingEngine {
     return count;
   }
 
-  // ── Phase 5: Garbage collect ───────────────────────────────────────────────
+  // ── Phase 3: Garbage collect ───────────────────────────────────────────────
 
   private garbageCollect(): number {
     const db = getDatabase();
@@ -236,18 +310,22 @@ export class DreamingEngine {
     return deleted;
   }
 
-  // ── Phase 6: Gather recent context for reflection ─────────────────────────
+  // ── Phase 4: Gather recent context for reflection ─────────────────────────
 
   /**
-   * Pull the last 48h of episodic memories + top user facts to give the LLM
-   * something meaningful to reflect on.
+   * Pull activity since lastReflectedAt (or last 48h as fallback) + top user facts.
    */
-  private gatherRecentContext(): string {
+  private gatherRecentContext(lastReflectedAt: number): string {
     const db = getDatabase();
 
-    const cutoff48h = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    // Only look at activity since last reflection (min 4h, max 48h)
+    const minCutoff = Date.now() - 48 * 60 * 60 * 1000;
+    const sinceMs = lastReflectedAt > 0
+      ? Math.max(lastReflectedAt, minCutoff)
+      : minCutoff;
+    const cutoffISO = new Date(sinceMs).toISOString();
 
-    // Recent episodic memories (last 48h, importance > 0.3)
+    // Recent episodic memories since last reflection
     const episodes = db
       .prepare(
         `SELECT content, importance, created_at
@@ -258,7 +336,7 @@ export class DreamingEngine {
          ORDER BY importance DESC, created_at DESC
          LIMIT 30`,
       )
-      .all(cutoff48h) as Array<{ content: string; importance: number; created_at: string }>;
+      .all(cutoffISO) as Array<{ content: string; importance: number; created_at: string }>;
 
     // Top user facts (preferences/habits)
     const facts = db
@@ -285,7 +363,7 @@ export class DreamingEngine {
     const parts: string[] = [];
 
     if (episodes.length > 0) {
-      parts.push('=== Recent Activity (last 48h) ===');
+      parts.push('=== Recent Activity (since last reflection) ===');
       for (const ep of episodes) {
         const short = ep.content.length > 300 ? ep.content.slice(0, 300) + '…' : ep.content;
         parts.push(`• ${short}`);
@@ -309,7 +387,7 @@ export class DreamingEngine {
     return parts.join('\n');
   }
 
-  // ── Phase 7: Reflect ──────────────────────────────────────────────────────
+  // ── Phase 5: Reflect ──────────────────────────────────────────────────────
 
   private async reflect(context: string, reflections: string[]): Promise<void> {
     if (!this.aiManager) return;
@@ -362,12 +440,11 @@ export class DreamingEngine {
     }
   }
 
-  // ── Contradiction detection ───────────────────────────────────────────────
+  // ── Contradiction detection (keyword Jaccard similarity) ─────────────────
 
   private detectAndResolveContradictions(): number {
     const db = getDatabase();
 
-    // Find semantic facts that share the same key/topic but have conflicting values
     const facts = db
       .prepare(
         `SELECT id, content, created_at, importance
@@ -380,14 +457,20 @@ export class DreamingEngine {
       )
       .all() as Array<{ id: string; content: string; created_at: string; importance: number }>;
 
-    // Simple heuristic: find pairs where one says "X is Y" and another says "X is Z"
-    // Mark older one as lower importance (don't delete — may have historical value)
+    // Generic sentence starters to skip — these contain no useful topic signal
+    const SKIP_PREFIXES = [
+      'the ', 'a ', 'an ', 'i ', 'it ', 'this ', 'that ', 'there ', 'these ', 'those ',
+      'we ', 'you ', 'he ', 'she ', 'they ', 'is ', 'was ', 'are ', 'were ', 'be ',
+    ];
+
     let resolved = 0;
+    // Map from topic fingerprint → {id, created_at}
     const seen = new Map<string, { id: string; created_at: string }>();
 
     for (const fact of facts) {
-      // Extract first 40 chars as a "topic fingerprint"
-      const topic = fact.content.slice(0, 40).toLowerCase().replace(/\W+/g, ' ').trim();
+      const topic = this.buildTopicFingerprint(fact.content, SKIP_PREFIXES);
+      if (!topic) continue;
+
       const existing = seen.get(topic);
       if (existing) {
         // Older fact loses importance
@@ -403,7 +486,45 @@ export class DreamingEngine {
     return resolved;
   }
 
-  // ── Phase 8: Ideate ───────────────────────────────────────────────────────
+  /**
+   * Build a topic fingerprint using the top-N keywords from the sentence,
+   * ignoring stop words and generic prefixes. Two facts with ≥20% keyword
+   * overlap in their top-8 keywords are considered about the same topic.
+   */
+  private buildTopicFingerprint(content: string, skipPrefixes: string[]): string | null {
+    const STOP_WORDS = new Set([
+      'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+      'of', 'with', 'by', 'from', 'is', 'was', 'are', 'were', 'be', 'been',
+      'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
+      'could', 'should', 'may', 'might', 'shall', 'can', 'it', 'this', 'that',
+      'i', 'you', 'he', 'she', 'we', 'they', 'their', 'its', 'not', 'also',
+    ]);
+
+    const lower = content.toLowerCase().trim();
+
+    // Skip if starts with a generic prefix
+    for (const prefix of skipPrefixes) {
+      if (lower.startsWith(prefix)) {
+        const remainder = lower.slice(prefix.length);
+        if (remainder.split(/\s+/).length < 3) return null;
+        break;
+      }
+    }
+
+    // Extract keywords: alpha tokens > 3 chars not in stop words
+    const keywords = lower
+      .replace(/[^a-z\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length > 3 && !STOP_WORDS.has(w))
+      .slice(0, 8);
+
+    if (keywords.length < 2) return null;
+
+    // Sort so order doesn't matter — fingerprint is a bag-of-words key
+    return keywords.sort().join(' ');
+  }
+
+  // ── Phase 6: Ideate ───────────────────────────────────────────────────────
 
   private async ideate(reflections: string[], ideas: string[]): Promise<void> {
     if (!this.aiManager || reflections.length === 0) return;
@@ -439,7 +560,40 @@ export class DreamingEngine {
     }
   }
 
-  // ── Phase 9: Journal ──────────────────────────────────────────────────────
+  /**
+   * Store each generated idea as an episodic memory tagged 'dream-idea'
+   * so it surfaces in future recall and the morning briefing.
+   */
+  private storeIdeasAsMemories(ideas: string[]): void {
+    if (ideas.length === 0) return;
+    const db = getDatabase();
+    const now = nowISO();
+
+    for (const idea of ideas) {
+      try {
+        const id = generateId();
+        db.prepare(
+          `INSERT INTO memories
+             (id, layer, type, content, importance, confidence, created_at,
+              last_accessed, access_count, tags, related_memories, source, metadata)
+           VALUES (?, 'episodic', 'task', ?, 0.7, 0.8, ?, ?, 0,
+                   '["dream-idea","proactive"]', '[]', 'dream-cycle', '{}')`,
+        ).run(id, idea, now, now);
+
+        try {
+          storeEmbedding(id, idea);
+        } catch {
+          // non-fatal
+        }
+
+        log.debug({ id, idea: idea.slice(0, 60) }, 'Stored dream idea as memory');
+      } catch (err) {
+        log.warn({ err }, 'Failed to store idea as memory');
+      }
+    }
+  }
+
+  // ── Phase 7: Journal ──────────────────────────────────────────────────────
 
   private journalDream(
     reflections: string[],
@@ -508,40 +662,56 @@ export class DreamingEngine {
     return parts.join('\n');
   }
 
-  // ── LLM insight generation (consolidation step) ───────────────────────────
+  // ── Batched LLM insight generation (consolidation step) ──────────────────
 
-  private async generateInsight(
-    content: string,
-    summary: string | null,
-  ): Promise<string | null> {
-    const text = summary ?? content;
-    const truncated = text.length > 800 ? text.slice(0, 800) + '…' : text;
+  /**
+   * Generate insights for a batch of up to 5 memories in a single LLM call.
+   * Returns an array of the same length as `batch` (null entries for failures).
+   */
+  private async generateInsightsBatch(
+    batch: Array<{ id: string; content: string; summary: string | null }>,
+  ): Promise<Array<string | null>> {
+    if (batch.length === 0) return [];
 
     if (!this.aiManager) {
-      return this.extractiveSummary(truncated);
+      return batch.map((row) => this.extractiveSummary(row.summary ?? row.content));
     }
+
+    const numbered = batch.map((row, i) => {
+      const text = row.summary ?? row.content;
+      const truncated = text.length > 400 ? text.slice(0, 400) + '…' : text;
+      return `[${i + 1}] ${truncated}`;
+    });
+
+    const prompt =
+      `Summarize each of the following ${batch.length} memories into a single concise sentence ` +
+      `capturing the key fact or insight. Reply with EXACTLY ${batch.length} lines, ` +
+      `one sentence per line, numbered [1] through [${batch.length}]. ` +
+      `No preamble, no extra lines.\n\n` +
+      numbered.join('\n');
 
     try {
       const response = await this.aiManager.complete({
-        messages: [
-          {
-            role: 'user',
-            content:
-              `Summarize the following memory into a single concise sentence ` +
-              `capturing the key fact or insight. Reply with ONLY the sentence, ` +
-              `no preamble.\n\nMemory:\n${truncated}`,
-          },
-        ],
-        maxTokens: 150,
+        messages: [{ role: 'user', content: prompt }],
+        maxTokens: 100 * batch.length,
         temperature: 0.3,
       });
 
-      const sentence = response.content.trim().replace(/^["']|["']$/g, '');
-      if (!sentence || sentence.length < 5) return null;
-      return sentence;
+      const lines = response.content
+        .trim()
+        .split('\n')
+        .map((l) => l.replace(/^\[\d+\]\s*/, '').replace(/^["']|["']$/g, '').trim())
+        .filter((l) => l.length >= 5);
+
+      // Pad or trim to batch length
+      const results: Array<string | null> = [];
+      for (let i = 0; i < batch.length; i++) {
+        results.push(lines[i] ?? this.extractiveSummary(batch[i].summary ?? batch[i].content));
+      }
+      return results;
     } catch (err) {
-      log.warn({ err }, 'LLM insight generation failed — using extractive fallback');
-      return this.extractiveSummary(truncated);
+      log.warn({ err }, 'Batch insight generation failed — using extractive fallback');
+      return batch.map((row) => this.extractiveSummary(row.summary ?? row.content));
     }
   }
 

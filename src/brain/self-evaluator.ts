@@ -8,13 +8,16 @@
 // Runs asynchronously after the response is returned to the user — the
 // appended note is sent as a follow-up Telegram message if non-null.
 // This keeps the main response fast while still catching incomplete answers.
+//
+// Only evaluates task-type messages. Skips conversational/chat exchanges
+// to avoid noisy false-positives on short back-and-forth responses.
 
 import { createLogger } from '../utils/logger.js';
 import type { AIManager } from '../ai/index.js';
 
 const log = createLogger('SelfEvaluator');
 
-const MIN_RESPONSE_LENGTH = 60;
+const MIN_RESPONSE_LENGTH = 200;
 const MAX_QUERY_WORDS = 50; // Skip evaluation for very long queries
 
 export class SelfEvaluator {
@@ -32,10 +35,15 @@ export class SelfEvaluator {
 
   /**
    * Evaluates whether a response fully answered the question.
+   * Only runs for task-type messages (isTaskMessage = true).
    * Returns an optional addendum string, or null if the response was complete.
    */
-  async evaluate(query: string, response: string): Promise<string | null> {
+  async evaluate(query: string, response: string, isTaskMessage = false): Promise<string | null> {
     if (!this.enabled) return null;
+
+    // Only evaluate task messages — skip casual chat to reduce false positives
+    if (!isTaskMessage) return null;
+
     if (response.length < MIN_RESPONSE_LENGTH) return null;
 
     const wordCount = query.split(/\s+/).length;

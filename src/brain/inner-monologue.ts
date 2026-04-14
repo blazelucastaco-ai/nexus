@@ -38,9 +38,15 @@ export class InnerMonologue {
 
   /**
    * Generate a brief inner monologue thought based on the current context.
-   * Returns an empty string on failure so callers can safely ignore errors.
+   * Returns an empty string on failure or for trivial/short messages.
    */
   async generateThought(context: ThoughtContext): Promise<string> {
+    // Skip the LLM call for very short or trivially simple messages
+    if (context.task.length < 15) return '';
+
+    const TRIVIAL_PATTERNS = /^(hi|hey|hello|thanks|ok|okay|yes|no|sure|got it|cool|great|nice|wow|lol|👍|👋|🙏|nope|yep|yup|nah|k|thx|ty)[\s!.?]*$/i;
+    if (TRIVIAL_PATTERNS.test(context.task.trim())) return '';
+
     try {
       const memorySummary = context.memories.length > 0
         ? `Relevant memories surfacing: ${context.memories.slice(0, 3).join('; ')}.`
