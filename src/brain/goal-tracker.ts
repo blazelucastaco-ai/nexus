@@ -82,6 +82,77 @@ export class GoalTracker {
   }
 
   /**
+   * Scan active goals and mark any with no related episodic activity in the
+   * past 30 days as 'stale'. Returns the number of goals pruned.
+   *
+   * A goal is considered stale when:
+   *   - It was created more than 30 days ago, AND
+   *   - No episodic memory sharing keyword overlap with the goal content
+   *     has been created since the goal was recorded.
+   */
+  pruneStaleGoals(): number {
+    try {
+      const db = getDatabase();
+      const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+      // Fetch goals older than 30 days that are still active
+      const staleGoalRows = db
+        .prepare(
+          `SELECT id, content, tags, created_at FROM memories
+           WHERE layer = 'episodic'
+             AND tags LIKE '%"goal"%'
+             AND tags LIKE '%"active"%'
+             AND created_at < ?`,
+        )
+        .all(cutoff) as Array<{ id: string; content: string; tags: string; created_at: string }>;
+
+      if (staleGoalRows.length === 0) return 0;
+
+      // For each old goal, check if any episodic memories were created after it
+      // that share keyword overlap with the goal content
+      let pruned = 0;
+      for (const goal of staleGoalRows) {
+        const goalKeywords = extractKeywords(goal.content);
+        if (goalKeywords.length === 0) continue;
+
+        // Look for any episodic memory created after this goal
+        const laterRows = db
+          .prepare(
+            `SELECT content FROM memories
+             WHERE layer = 'episodic'
+               AND created_at > ?
+             ORDER BY created_at DESC
+             LIMIT 100`,
+          )
+          .all(goal.created_at) as Array<{ content: string }>;
+
+        const hasRelatedActivity = laterRows.some((row) => {
+          const rowKeywords = extractKeywords(row.content);
+          const overlap = computeOverlap(goalKeywords, rowKeywords);
+          return overlap >= 0.2;
+        });
+
+        if (!hasRelatedActivity) {
+          // Swap 'active' → 'stale' in the tags array
+          const tags: string[] = JSON.parse(goal.tags);
+          const updated = tags.filter((t) => t !== 'active').concat('stale');
+          db.prepare('UPDATE memories SET tags = ? WHERE id = ?')
+            .run(JSON.stringify(updated), goal.id);
+          pruned++;
+        }
+      }
+
+      if (pruned > 0) {
+        log.info({ pruned }, 'Stale goals pruned');
+      }
+      return pruned;
+    } catch (err) {
+      log.warn({ err }, 'pruneStaleGoals failed');
+      return 0;
+    }
+  }
+
+  /**
    * Mark a goal as resolved by swapping 'active' tag → 'resolved'.
    */
   resolveGoal(goalId: string): void {
@@ -102,4 +173,25 @@ export class GoalTracker {
       // non-fatal
     }
   }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function extractKeywords(text: string): string[] {
+  const words = text
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w) => w.replace(/[^a-z0-9]/g, ''))
+    .filter((w) => w.length >= 4);
+  return [...new Set(words)];
+}
+
+function computeOverlap(a: string[], b: string[]): number {
+  const setB = new Set(b);
+  let matches = 0;
+  for (const w of a) {
+    if (setB.has(w)) matches++;
+  }
+  const union = new Set([...a, ...b]).size;
+  return union > 0 ? matches / union : 0;
 }

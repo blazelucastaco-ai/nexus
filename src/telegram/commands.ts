@@ -677,7 +677,7 @@ export async function handleSearch(ctx: Context, orchestrator: Orchestrator): Pr
 
     await ctx.replyWithChatAction('typing');
 
-    const results = orchestrator.memory.recall(query, {
+    const results = await orchestrator.memory.recall(query, {
       layers: ['episodic', 'semantic', 'procedural'],
       limit: 8,
       minImportance: 0.2,
@@ -727,7 +727,7 @@ export async function handleForget(ctx: Context, orchestrator: Orchestrator): Pr
     }
 
     // Find matching memories
-    const matches = orchestrator.memory.recall(topic, {
+    const matches = await orchestrator.memory.recall(topic, {
       layers: ['episodic', 'semantic'],
       limit: 10,
       minImportance: 0.0,
@@ -784,7 +784,7 @@ export async function handlePin(ctx: Context, orchestrator: Orchestrator): Promi
       return;
     }
 
-    const matches = orchestrator.memory.recall(topic, {
+    const matches = await orchestrator.memory.recall(topic, {
       layers: ['episodic', 'semantic', 'procedural'],
       limit: 5,
       minImportance: 0.0,

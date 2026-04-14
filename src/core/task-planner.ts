@@ -126,6 +126,16 @@ export async function planTask(
       return null;
     }
 
+    if (plan.steps.length < 2) {
+      log.warn({ steps: plan.steps.length }, 'Plan too short (<2 steps) — falling back to chat');
+      return null;
+    }
+
+    if (plan.steps.length > 15) {
+      log.warn({ steps: plan.steps.length }, 'Plan too long (>15 steps) — falling back to chat');
+      return null;
+    }
+
     log.info({ title: plan.title, steps: plan.steps.length }, 'Task plan generated');
     return plan;
   } catch (err) {

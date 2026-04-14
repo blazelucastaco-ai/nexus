@@ -10,8 +10,10 @@ import { AIManager } from './ai/index.js';
 import { TelegramGateway } from './telegram/index.js';
 import { MacOSController } from './macos/index.js';
 import { LearningSystem } from './learning/index.js';
+import { EmbeddingProvider } from './providers/embeddings.js';
 import { checkPermissions, warnMissingPermissions } from './macos/permissions.js';
 import { browserBridge } from './browser/bridge.js';
+import { setMcpToolExecutor } from './mcp/server.js';
 
 const log = createLogger('Main');
 
@@ -24,6 +26,18 @@ async function main() {
   // Initialize subsystems
   log.info('Initializing memory system...');
   const memory = new MemoryManager(config.memory.maxShortTerm);
+
+  // Wire semantic embeddings — OpenAI gives true semantic search, local works offline
+  const openaiKey = process.env.OPENAI_API_KEY;
+  if (openaiKey) {
+    const embeddingProvider = new EmbeddingProvider('openai', { apiKey: openaiKey });
+    memory.setEmbeddingProvider(embeddingProvider, 'text-embedding-3-small');
+    log.info('Semantic embeddings: OpenAI text-embedding-3-small');
+  } else {
+    const embeddingProvider = new EmbeddingProvider('local');
+    memory.setEmbeddingProvider(embeddingProvider, 'local');
+    log.info('Semantic embeddings: local (set OPENAI_API_KEY for semantic search)');
+  }
 
   log.info('Initializing personality engine...');
   const personality = new PersonalityEngine(config);
@@ -78,6 +92,9 @@ async function main() {
   // Wire orchestrator into gateway for command handlers
   telegram.setOrchestrator(orchestrator);
 
+  // Wire MCP server so tools/call requests can dispatch to the tool executor
+  setMcpToolExecutor(orchestrator.toolExecutor);
+
   // Handle graceful shutdown
   const shutdown = async () => {
     log.info('Received shutdown signal');
@@ -103,11 +120,7 @@ async function main() {
       const permStatus = await checkPermissions();
       const warnings = await warnMissingPermissions(permStatus);
       if (warnings.length > 0) {
-        const msg =
-          '⚠️ <b>NEXUS permission check</b>\n\n' +
-          warnings.join('\n\n') +
-          '\n\nRestart NEXUS after granting permissions.';
-        await telegram.sendMessage(chatId, msg, { parseMode: 'HTML' }).catch((err) => log.warn({ err }, 'Failed to send permission warning'));
+        await telegram.sendMessage(chatId, warnings[0], { parseMode: 'HTML' }).catch((err) => log.warn({ err }, 'Failed to send permission warning'));
       }
     } catch (err) {
       log.warn({ err }, 'Permission check failed — skipping');

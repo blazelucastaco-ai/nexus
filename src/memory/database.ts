@@ -153,6 +153,53 @@ const MIGRATIONS: { version: number; description: string; sql: string }[] = [
       CREATE INDEX IF NOT EXISTS idx_mistakes_resolved ON mistakes(resolved);
     `,
   },
+  {
+    version: 6,
+    description: 'Create detected_patterns table for PatternRecognizer persistence',
+    sql: `
+      CREATE TABLE IF NOT EXISTS detected_patterns (
+        id           TEXT PRIMARY KEY,
+        description  TEXT NOT NULL UNIQUE,
+        confidence   REAL NOT NULL DEFAULT 0.5,
+        hit_count    INTEGER NOT NULL DEFAULT 1,
+        detected_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        last_seen    TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_patterns_confidence ON detected_patterns(confidence DESC);
+      CREATE INDEX IF NOT EXISTS idx_patterns_last_seen ON detected_patterns(last_seen DESC);
+    `,
+  },
+  {
+    version: 7,
+    description: 'Create reminders table for SchedulerAgent persistence',
+    sql: `
+      CREATE TABLE IF NOT EXISTS reminders (
+        id            TEXT PRIMARY KEY,
+        title         TEXT NOT NULL,
+        message       TEXT NOT NULL DEFAULT '',
+        trigger_at    TEXT NOT NULL,
+        recurring     INTEGER NOT NULL DEFAULT 0,
+        interval_ms   INTEGER,
+        status        TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','fired','cancelled')),
+        fired_count   INTEGER NOT NULL DEFAULT 0,
+        fired_at      TEXT,
+        created_at    TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status);
+      CREATE INDEX IF NOT EXISTS idx_reminders_trigger_at ON reminders(trigger_at);
+    `,
+  },
+  {
+    version: 8,
+    description: 'Add execution stats columns to scheduled_tasks',
+    sql: `
+      ALTER TABLE scheduled_tasks ADD COLUMN last_exit_code INTEGER;
+      ALTER TABLE scheduled_tasks ADD COLUMN last_duration_ms INTEGER;
+      ALTER TABLE scheduled_tasks ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 function runMigrations(database: Database.Database): void {

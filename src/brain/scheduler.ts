@@ -18,7 +18,12 @@ export interface ScheduledTask {
   last_run: string | null;
   next_run: string | null;
   created_at: string;
+  last_exit_code: number | null;
+  last_duration_ms: number | null;
+  consecutive_failures: number;
 }
+
+const MAX_CONSECUTIVE_FAILURES = 5;
 
 let tickInterval: ReturnType<typeof setInterval> | null = null;
 /** Callback invoked when a task fires — wired to the tool executor at startup */
@@ -206,20 +211,54 @@ async function tick(): Promise<void> {
 
     const db = getDatabase();
     const nextRun = nextRunAfter(task.cron_expression, now);
+    const startMs = Date.now();
 
+    // Update last_run and next_run immediately so re-entrant ticks don't double-fire
     db.prepare(`
       UPDATE scheduled_tasks SET last_run = ?, next_run = ? WHERE id = ?
     `).run(nowISO(), nextRun?.toISOString() ?? null, task.id);
 
-    if (taskRunner) {
-      try {
-        const result = await taskRunner(task.command);
-        log.info({ name: task.name, result: result.slice(0, 200) }, 'Task completed');
-      } catch (err) {
-        log.error({ name: task.name, err }, 'Task failed');
-      }
-    } else {
+    if (!taskRunner) {
       log.warn({ name: task.name }, 'No task runner configured — skipping execution');
+      continue;
+    }
+
+    try {
+      const result = await taskRunner(task.command);
+      const durationMs = Date.now() - startMs;
+
+      db.prepare(`
+        UPDATE scheduled_tasks
+        SET last_exit_code = 0, last_duration_ms = ?, consecutive_failures = 0
+        WHERE id = ?
+      `).run(durationMs, task.id);
+
+      log.info({ name: task.name, durationMs, result: result.slice(0, 200) }, 'Task completed');
+    } catch (err) {
+      const durationMs = Date.now() - startMs;
+      const newFailures = (task.consecutive_failures ?? 0) + 1;
+
+      if (newFailures >= MAX_CONSECUTIVE_FAILURES) {
+        // Auto-disable — too many consecutive failures
+        db.prepare(`
+          UPDATE scheduled_tasks
+          SET last_exit_code = 1, last_duration_ms = ?, consecutive_failures = ?, enabled = 0
+          WHERE id = ?
+        `).run(durationMs, newFailures, task.id);
+
+        log.error(
+          { name: task.name, newFailures, err },
+          `Task auto-disabled after ${MAX_CONSECUTIVE_FAILURES} consecutive failures`,
+        );
+      } else {
+        db.prepare(`
+          UPDATE scheduled_tasks
+          SET last_exit_code = 1, last_duration_ms = ?, consecutive_failures = ?
+          WHERE id = ?
+        `).run(durationMs, newFailures, task.id);
+
+        log.error({ name: task.name, newFailures, err }, 'Task failed');
+      }
     }
   }
 }
@@ -259,6 +298,13 @@ export function listTasksTool(): string {
     lines.push(`    Command: ${t.command}`);
     lines.push(`    Last run: ${t.last_run ?? 'never'}`);
     lines.push(`    Next run: ${t.next_run ?? 'unknown'}`);
+    if (t.last_duration_ms != null) {
+      const exitLabel = t.last_exit_code === 0 ? '✓' : `✗ (code ${t.last_exit_code})`;
+      lines.push(`    Last result: ${exitLabel} in ${t.last_duration_ms}ms`);
+    }
+    if ((t.consecutive_failures ?? 0) > 0) {
+      lines.push(`    Consecutive failures: ${t.consecutive_failures}`);
+    }
     lines.push(`    ID: ${t.id}`);
     lines.push('');
   }

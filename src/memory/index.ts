@@ -20,6 +20,7 @@ import { EpisodicMemory } from './episodic.js';
 import { ProceduralMemory } from './procedural.js';
 import { SemanticMemory } from './semantic.js';
 import { ShortTermMemory, type BufferEntry } from './short-term.js';
+import { EmbeddingProvider, cosineSimilarity } from '../providers/embeddings.js';
 
 const log = createLogger('MemoryManager');
 
@@ -58,6 +59,8 @@ export class MemoryManager {
   readonly consolidation: MemoryConsolidation;
 
   private initialized = false;
+  private embeddingProvider?: EmbeddingProvider;
+  private embeddingModel = 'local';
 
   constructor(maxShortTerm = 50) {
     // Initialize the database (creates tables if needed)
@@ -71,6 +74,16 @@ export class MemoryManager {
 
     this.initialized = true;
     log.info('MemoryManager initialized with all layers');
+  }
+
+  /**
+   * Wire a semantic embedding provider into recall.
+   * Call this after construction — openai gives best results, local works offline.
+   */
+  setEmbeddingProvider(provider: EmbeddingProvider, model = 'local'): void {
+    this.embeddingProvider = provider;
+    this.embeddingModel = model;
+    log.info({ model }, 'Semantic embedding provider wired into MemoryManager');
   }
 
   // ─── Unified Store ────────────────────────────────────────────────
@@ -95,7 +108,7 @@ export class MemoryManager {
       }
 
       case 'episodic': {
-        return this.episodic.store(content, {
+        const memory = this.episodic.store(content, {
           type,
           summary: options.summary,
           importance: options.importance,
@@ -105,6 +118,11 @@ export class MemoryManager {
           source: options.source,
           metadata: options.metadata,
         });
+        // Generate and store a semantic embedding async (fire-and-forget — never blocks storage)
+        if (this.embeddingProvider && typeof (memory as Memory).id === 'string') {
+          this.storeEmbeddingAsync((memory as Memory).id, content);
+        }
+        return memory;
       }
 
       case 'semantic': {
@@ -145,8 +163,10 @@ export class MemoryManager {
   /**
    * Search across memory layers for relevant content.
    * Returns a merged, deduplicated, relevance-sorted list of memories.
+   * Uses semantic embeddings when an EmbeddingProvider is wired — falls back
+   * to keyword scoring otherwise.
    */
-  recall(query: string, options: RecallOptions = {}): Memory[] {
+  async recall(query: string, options: RecallOptions = {}): Promise<Memory[]> {
     const limit = options.limit ?? 20;
     const layers = options.layers ?? [
       'buffer',
@@ -225,24 +245,32 @@ export class MemoryManager {
       results.push(...procedures);
     }
 
-    // Score and rank all results
+    // ── Semantic embedding scores (async, optional) ───────────────────
+    // Fetch stored embeddings for all candidates and compute cosine similarity
+    // against the query embedding. Blended into the final score below.
+    const embeddingScores = await this.fetchEmbeddingScores(query, results);
+
+    // ── Score and rank all results ────────────────────────────────────
     const queryTerms = query
       .toLowerCase()
       .split(/\s+/)
       .filter(Boolean);
 
     const scored = results.map((memory) => {
-      const contentScore = this.scoreContentMatch(
-        memory,
-        queryTerms,
-      );
+      const contentScore = this.scoreContentMatch(memory, queryTerms);
       const importanceScore = memory.importance;
+      const semanticScore = embeddingScores.get(memory.id);
 
-      const base =
-        contentScore * 0.55 +
-        importanceScore * 0.45;
+      let base: number;
+      if (semanticScore !== undefined) {
+        // Semantic score available: weight it highest, keyword and importance supplement
+        base = semanticScore * 0.50 + contentScore * 0.25 + importanceScore * 0.25;
+      } else {
+        // No embedding stored yet: fall back to original keyword + importance blend
+        base = contentScore * 0.55 + importanceScore * 0.45;
+      }
 
-      // Phase 3.3: 30-day half-life temporal decay for episodic/buffer memories.
+      // 30-day half-life temporal decay for episodic/buffer memories.
       // Semantic and procedural memories are evergreen — exempt from decay.
       const totalScore =
         memory.layer === 'episodic' || memory.layer === 'buffer'
@@ -270,15 +298,15 @@ export class MemoryManager {
   /**
    * Assemble relevant context for the brain to use in generating a response.
    */
-  getRelevantContext(
+  async getRelevantContext(
     query: string,
     recentMessageCount = 10,
     memoryLimit = 15,
-  ): RelevantContext {
+  ): Promise<RelevantContext> {
     const recentMessages =
       this.shortTerm.getMessages(recentMessageCount);
 
-    const relevantMemories = this.recall(query, {
+    const relevantMemories = await this.recall(query, {
       layers: ['episodic', 'procedural'],
       limit: memoryLimit,
       minImportance: 0.2,
@@ -415,6 +443,80 @@ export class MemoryManager {
   }
 
   // ─── Private Helpers ──────────────────────────────────────────────
+
+  /**
+   * Generate an embedding for `text` and persist it to memory_embeddings.
+   * Fire-and-forget — never throws, never blocks the caller.
+   */
+  private storeEmbeddingAsync(memoryId: string, text: string): void {
+    if (!this.embeddingProvider) return;
+    const provider = this.embeddingProvider;
+    const model = this.embeddingModel;
+
+    provider.embed(text).then((vector) => {
+      try {
+        const db = getDatabase();
+        db.prepare(
+          `INSERT OR REPLACE INTO memory_embeddings (memory_id, embedding, model, created_at)
+           VALUES (?, ?, ?, datetime('now'))`,
+        ).run(memoryId, Buffer.from(JSON.stringify(vector)), model);
+      } catch (err) {
+        log.debug({ err, memoryId }, 'Failed to persist embedding — skipping');
+      }
+    }).catch((err) => {
+      log.debug({ err, memoryId }, 'Embedding generation failed — skipping');
+    });
+  }
+
+  /**
+   * Look up stored embeddings for `candidates`, compute cosine similarity against
+   * the query embedding, and return a map of memory_id → normalized score [0,1].
+   * Returns an empty map if no embedding provider is configured or on any error.
+   */
+  private async fetchEmbeddingScores(
+    query: string,
+    candidates: Memory[],
+  ): Promise<Map<string, number>> {
+    if (!this.embeddingProvider || candidates.length === 0) return new Map();
+
+    const episodicCandidates = candidates.filter((m) => m.layer === 'episodic');
+    if (episodicCandidates.length === 0) return new Map();
+
+    try {
+      const db = getDatabase();
+      const ids = episodicCandidates.map((m) => m.id);
+      const placeholders = ids.map(() => '?').join(',');
+
+      const rows = db
+        .prepare(`SELECT memory_id, embedding FROM memory_embeddings WHERE memory_id IN (${placeholders})`)
+        .all(...ids) as { memory_id: string; embedding: Buffer }[];
+
+      if (rows.length === 0) return new Map();
+
+      const queryEmbedding = await this.embeddingProvider.embed(query);
+      const scores = new Map<string, number>();
+
+      for (const row of rows) {
+        try {
+          const storedVector: number[] = JSON.parse(row.embedding.toString());
+          const sim = cosineSimilarity(queryEmbedding, storedVector);
+          // Normalize from [-1, 1] to [0, 1] so it blends cleanly with other 0–1 scores
+          scores.set(row.memory_id, (sim + 1) / 2);
+        } catch {
+          // Malformed embedding — skip this entry
+        }
+      }
+
+      log.debug(
+        { queryLen: query.length, candidates: ids.length, scored: scores.size },
+        'Embedding recall scores computed',
+      );
+      return scores;
+    } catch (err) {
+      log.debug({ err }, 'Embedding recall failed — falling back to keyword scoring');
+      return new Map();
+    }
+  }
 
   private typeToFactCategory(
     type: MemoryType,

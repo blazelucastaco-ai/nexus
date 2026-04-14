@@ -197,6 +197,15 @@ export class PersonalityEngine {
     this.scheduleSave();
   }
 
+  /**
+   * Observe a raw user message — passes it to the humor engine to check
+   * whether the user reacted positively to the last humorous response.
+   * Call this on every incoming message before processEvent.
+   */
+  observeUserMessage(text: string): void {
+    this.humor.observeUserMessage(text);
+  }
+
   /** Adjust overall mood based on interaction quality (-1 to 1). */
   updateMood(interactionQuality: number): void {
     const quality = clamp(interactionQuality, -1, 1);

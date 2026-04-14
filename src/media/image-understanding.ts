@@ -30,7 +30,7 @@ async function fetchImageAsBase64(url: string): Promise<{ data: string; mimeType
 
 /**
  * Analyze an image using Claude's vision capabilities.
- * Supports URL or base64 input. No external Gemini/OpenAI endpoint needed.
+ * Supports URL or base64 input. Uses Claude's native vision — no external APIs needed.
  */
 export async function analyzeImage(params: {
   source: string;       // URL or base64 string

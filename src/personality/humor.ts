@@ -24,6 +24,17 @@ export interface HumorContext {
 const MIN_GAP_MESSAGES = 3;
 /** Maximum humor attempts in a rolling window. */
 const MAX_HUMOR_PER_WINDOW = 3;
+/** Minimum samples before reception rate influences future humor. */
+const MIN_SAMPLES_FOR_FEEDBACK = 20;
+/** If hit rate falls below this, dampen future humor probability. */
+const LOW_RECEPTION_THRESHOLD = 0.20;
+
+/** Positive reception signals — user laughed or explicitly reacted well. */
+const POSITIVE_SIGNALS = [
+  /\b(lol|lmao|haha|hehe|😂|🤣|😄|😆|😁|😏)\b/i,
+  /\b(good one|nice one|funny|hilarious|that's (great|gold|perfect)|love that|hah)\b/i,
+  /^(ha)+[.!]?$/i,
+];
 
 const HUMOR_PROMPTS: Record<HumorType, string> = {
   observational:
@@ -43,13 +54,53 @@ const HUMOR_PROMPTS: Record<HumorType, string> = {
 export class HumorEngine {
   private readonly humorLevel: number;
   private readonly sarcasmLevel: number;
-  private lastHumorAt = 0; // message index of last humor
+  private lastHumorAt = 0;            // message index of last humor
   private humorHistory: number[] = []; // timestamps of humor usage
+  private pendingReception = false;    // true if last response included humor and we haven't scored it yet
+  private humorAttempts = 0;
+  private humorHits = 0;
 
   constructor(traits: PersonalityTraits) {
     this.humorLevel = traits.humor;
     this.sarcasmLevel = traits.sarcasm;
     log.info({ humorLevel: this.humorLevel, sarcasmLevel: this.sarcasmLevel }, 'Humor engine initialized');
+  }
+
+  /**
+   * Check an incoming user message for positive humor reception signals.
+   * Call this on every user message — it's a no-op when no reception is pending.
+   */
+  observeUserMessage(text: string): void {
+    if (!this.pendingReception) return;
+    this.pendingReception = false;
+
+    const positive = POSITIVE_SIGNALS.some((p) => p.test(text));
+    this.humorAttempts += 1;
+    if (positive) this.humorHits += 1;
+
+    const rate = this.humorAttempts > 0 ? this.humorHits / this.humorAttempts : 1;
+    log.debug({ humorAttempts: this.humorAttempts, humorHits: this.humorHits, rate: rate.toFixed(2), positive }, 'Humor reception recorded');
+  }
+
+  /** Effective humor level — dampened when hit rate is persistently low. */
+  private effectiveHumorLevel(): number {
+    if (this.humorAttempts < MIN_SAMPLES_FOR_FEEDBACK) return this.humorLevel;
+    const rate = this.humorHits / this.humorAttempts;
+    if (rate < LOW_RECEPTION_THRESHOLD) {
+      // Dampen by up to 50% when reception is poor
+      const dampen = 0.5 + (rate / LOW_RECEPTION_THRESHOLD) * 0.5;
+      return clamp(this.humorLevel * dampen, 0, 1);
+    }
+    return this.humorLevel;
+  }
+
+  /** Reception stats — useful for debugging or /status output. */
+  getReceptionStats(): { attempts: number; hits: number; rate: number } {
+    return {
+      attempts: this.humorAttempts,
+      hits: this.humorHits,
+      rate: this.humorAttempts > 0 ? this.humorHits / this.humorAttempts : 1,
+    };
   }
 
   /** Decide whether to inject humor into the current response. */
@@ -75,10 +126,10 @@ export class HumorEngine {
     // If user didn't like previous humor, lower probability
     const receptivityMultiplier = context.userReceptive ? 1.0 : 0.3;
 
-    // Score based on mood, rapport, and personality
+    // Score based on mood, rapport, and personality (dampened if humor isn't landing)
     const moodBoost = clamp((emotion.valence + 1) / 2, 0, 1); // normalize valence to 0-1
     const score =
-      this.humorLevel * 0.4 +
+      this.effectiveHumorLevel() * 0.4 +
       context.rapport * 0.2 +
       moodBoost * 0.2 +
       emotion.engagement * 0.2;
@@ -140,6 +191,7 @@ export class HumorEngine {
   /** Record that humor was used at the given message index. */
   recordHumorUsage(messageIndex: number): void {
     this.lastHumorAt = messageIndex;
+    this.pendingReception = true; // await the user's next message for a signal
     this.humorHistory.push(Date.now());
 
     // Trim history older than 30 minutes

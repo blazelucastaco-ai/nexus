@@ -1,12 +1,10 @@
 // Nexus AI — Memory Cortex (main coordinator for all memory layers)
 
-import Database from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname } from 'node:path';
+import type Database from 'better-sqlite3';
 import type { Memory, MemoryLayer, MemoryType, Mistake, UserFact } from '../types.js';
 import { generateId, nowISO } from '../utils/helpers.js';
 import { createLogger } from '../utils/logger.js';
+import { getDatabase } from './database.js';
 import { EpisodicMemory } from './episodic.js';
 import { ProceduralMemory } from './procedural.js';
 import { MemoryRetrieval } from './retrieval.js';
@@ -21,22 +19,16 @@ export class MemoryCortex {
   readonly procedural: ProceduralMemory;
   readonly retrieval: MemoryRetrieval;
 
-  constructor(dbPath?: string) {
-    const resolvedPath = dbPath ?? `${homedir()}/.nexus/memory.db`;
-    mkdirSync(dirname(resolvedPath), { recursive: true });
-
-    this.db = new Database(resolvedPath);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('synchronous = NORMAL');
-    this.db.pragma('busy_timeout = 5000');
-    this.db.pragma('foreign_keys = ON');
+  constructor() {
+    // Share the singleton connection — avoids dual-handle locking issues
+    this.db = getDatabase();
 
     this.episodic = new EpisodicMemory();
     this.semantic = new SemanticMemory();
     this.procedural = new ProceduralMemory();
     this.retrieval = new MemoryRetrieval(this.db);
 
-    log.info({ dbPath: resolvedPath }, 'Memory cortex initialized');
+    log.info('Memory cortex initialized (shared DB connection)');
   }
 
   /** Expose the raw database handle (used by consolidation and other internal modules). */

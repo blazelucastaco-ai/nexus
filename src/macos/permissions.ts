@@ -167,23 +167,14 @@ export async function triggerPermissionPrompt(permission: 'contacts' | 'messages
 // (macOS TCC doesn't show dialogs for background Node.js subprocesses)
 const MANUAL_INSTRUCTIONS: Partial<Record<keyof PermissionStatus, string>> = {
   contacts:
-    `<b>How to fix:</b>\n` +
-    `1. Open <b>System Settings → Privacy &amp; Security → Contacts</b>\n` +
-    `2. Find <b>Terminal</b> (or <code>node</code>) in the list and toggle it <b>ON</b>\n` +
-    `3. If it's not listed: open <b>Script Editor</b>, paste:\n` +
-    `   <code>tell application "Contacts" to return count of every person</code>\n` +
-    `   and run it — that triggers the macOS dialog\n` +
-    `4. Restart NEXUS after granting`,
+    `System Settings → Privacy &amp; Security → Contacts\n` +
+    `Enable <b>Terminal</b> (or node). If missing, run this in Script Editor first:\n` +
+    `<code>tell application "Contacts" to return count of every person</code>`,
 
   messages:
-    `<b>How to fix:</b>\n` +
-    `1. Open <b>System Settings → Privacy &amp; Security → Automation</b>\n` +
-    `2. Find <b>Terminal</b> (or <code>node</code>) and expand it\n` +
-    `3. Enable the <b>Messages</b> checkbox underneath it\n` +
-    `4. If Terminal isn't listed: open <b>Script Editor</b>, paste:\n` +
-    `   <code>tell application "Messages" to return name of first service</code>\n` +
-    `   and run it — that triggers the macOS dialog\n` +
-    `5. Restart NEXUS after granting`,
+    `System Settings → Privacy &amp; Security → Automation\n` +
+    `Expand <b>Terminal</b> → enable the <b>Messages</b> checkbox. If missing, run this in Script Editor first:\n` +
+    `<code>tell application "Messages" to return name of first service</code>`,
 };
 
 // ─── Why macOS won't auto-prompt ─────────────────────────────────────────────
@@ -208,31 +199,25 @@ export async function warnMissingPermissions(status: PermissionStatus): Promise<
 
   logger.warn({ missing: missing.map(([k]) => k) }, 'Some macOS permissions are missing');
 
+  const lines: string[] = ['⚠️ <b>NEXUS — missing permissions</b>\n'];
+
   for (const [key] of missing) {
     const name = PERMISSION_NAMES[key];
-    logger.warn(
-      `Missing permission: ${name}. ` +
-      `Grant it in System Settings > Privacy & Security > ${name}`,
-    );
+    logger.warn(`Missing permission: ${name}. Grant it in System Settings > Privacy & Security > ${name}`);
 
     const manualSteps = MANUAL_INSTRUCTIONS[key];
-
     if (manualSteps) {
-      // These won't auto-prompt — give explicit manual instructions
-      warnings.push(
-        `⚠️ <b>Missing permission: ${name}</b>\n\n` +
-        `macOS won't auto-prompt for this when NEXUS runs in the background.\n\n` +
-        manualSteps,
-      );
+      lines.push(`<b>${name}</b>\n${manualSteps}`);
     } else {
-      warnings.push(
-        `⚠️ <b>Missing permission: ${name}</b>\n` +
-        `Go to System Settings → Privacy &amp; Security → ${name}\n` +
-        `and enable access for Terminal or node, then restart NEXUS.`,
+      lines.push(
+        `<b>${name}</b>\nSystem Settings → Privacy &amp; Security → ${name}\nEnable Terminal or node, then restart NEXUS.`,
       );
       await openPermissionPane(key);
     }
   }
+
+  lines.push('\nRestart NEXUS after granting.');
+  warnings.push(lines.join('\n\n'));
 
   return warnings;
 }

@@ -51,7 +51,8 @@ const MIN_TASK_LENGTH = 15; // messages shorter than this are always chat
 const ULTRA_TRIGGERS: RegExp[] = [
   // Destructive / irreversible actions
   /\b(?:deploy(?:ment)?|release|publish|ship|push\s+to\s+(?:prod|main|master)|go\s+live)\b/i,
-  /\b(?:delete|remove|drop|wipe|destroy|migrate|overwrite)\b/i,
+  // delete/remove only when operating on infrastructure/data — not on "this line", "this comment", etc.
+  /\b(?:delete|remove|drop|wipe|destroy|overwrite)\s+(?:all\s+|the\s+|my\s+|every\s+)?(?:database|table|branch|bucket|file|folder|directory|users?|account|repo(?:sitory)?|server|cluster|data|records?|entries|everything)\b/i,
   /\b(?:send\s+(?:email|message|notification)|post\s+to|submit\s+to)\b/i,
   // High complexity signals
   /\b(?:entire|whole|complete|full|end.to.end|from\s+scratch|production.ready|scalable)\b/i,

@@ -1,6 +1,8 @@
 // Nexus AI — Pattern recognition and behavioral analysis
 
+import type Database from 'better-sqlite3';
 import { createLogger } from '../utils/logger.js';
+import { getDatabase } from '../memory/database.js';
 
 const log = createLogger('PatternRecognizer');
 
@@ -26,9 +28,40 @@ interface StoredPattern {
 export class PatternRecognizer {
   private events: RecordedEvent[] = [];
   private patterns: Map<string, StoredPattern> = new Map();
+  private db: Database.Database;
 
   constructor() {
-    log.info('PatternRecognizer initialized');
+    this.db = getDatabase();
+    this.loadPersistedPatterns();
+    log.info({ loaded: this.patterns.size }, 'PatternRecognizer initialized');
+  }
+
+  /** Load previously detected patterns from SQLite on startup. */
+  private loadPersistedPatterns(): void {
+    try {
+      const rows = this.db
+        .prepare('SELECT * FROM detected_patterns ORDER BY confidence DESC')
+        .all() as Array<{
+          id: string;
+          description: string;
+          confidence: number;
+          hit_count: number;
+          detected_at: string;
+          last_seen: string;
+        }>;
+
+      for (const row of rows) {
+        this.patterns.set(row.description, {
+          description: row.description,
+          confidence: row.confidence,
+          detectedAt: new Date(row.detected_at),
+          lastSeen: new Date(row.last_seen),
+          hitCount: row.hit_count,
+        });
+      }
+    } catch (err) {
+      log.debug({ err }, 'Could not load persisted patterns — starting fresh');
+    }
   }
 
   /**
@@ -273,24 +306,50 @@ export class PatternRecognizer {
   // ── Internal ──────────────────────────────────────────────────────
 
   /**
-   * Store or update a detected pattern with its confidence.
+   * Store or update a detected pattern — persists to SQLite so it survives restarts.
    */
   private storePattern(description: string, confidence: number): void {
     const existing = this.patterns.get(description);
     const now = new Date();
+    const nowISO = now.toISOString();
 
     if (existing) {
       existing.confidence = Math.max(existing.confidence, confidence);
       existing.lastSeen = now;
       existing.hitCount++;
+
+      try {
+        this.db
+          .prepare(
+            `UPDATE detected_patterns
+             SET confidence = ?, hit_count = ?, last_seen = ?
+             WHERE description = ?`,
+          )
+          .run(existing.confidence, existing.hitCount, nowISO, description);
+      } catch (err) {
+        log.debug({ err }, 'Pattern update skipped');
+      }
     } else {
-      this.patterns.set(description, {
+      const pattern: StoredPattern = {
         description,
         confidence,
         detectedAt: now,
         lastSeen: now,
         hitCount: 1,
-      });
+      };
+      this.patterns.set(description, pattern);
+
+      try {
+        this.db
+          .prepare(
+            `INSERT OR IGNORE INTO detected_patterns
+             (id, description, confidence, hit_count, detected_at, last_seen)
+             VALUES (lower(hex(randomblob(8))), ?, ?, 1, ?, ?)`,
+          )
+          .run(description, confidence, nowISO, nowISO);
+      } catch (err) {
+        log.debug({ err }, 'Pattern insert skipped');
+      }
     }
   }
 }

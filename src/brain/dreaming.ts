@@ -16,6 +16,7 @@ import { getDatabase } from '../memory/database.js';
 import { storeEmbedding } from '../memory/embeddings.js';
 import { generateId, nowISO } from '../utils/helpers.js';
 import type { AIManager } from '../ai/index.js';
+import { GoalTracker } from './goal-tracker.js';
 
 const log = createLogger('DreamCycle');
 
@@ -26,6 +27,7 @@ export interface DreamReport {
   decayed: number;           // importance-decayed memories
   garbageCollected: number;
   contradictions: number;    // conflicting facts resolved
+  staleGoalsPruned: number;  // goals with no activity in 30+ days
   reflections: string[];     // observations about recent activity patterns
   ideas: string[];           // actionable ideas generated from reflections
   insights: string[];        // LLM-generated semantic facts from consolidation
@@ -35,10 +37,12 @@ export interface DreamReport {
 export class DreamingEngine {
   private aiManager: AIManager | null;
   private sendFn: SendFn | null;
+  private goalTracker: GoalTracker;
 
   constructor(aiManager?: AIManager, sendFn?: SendFn) {
     this.aiManager = aiManager ?? null;
     this.sendFn = sendFn ?? null;
+    this.goalTracker = new GoalTracker();
   }
 
   // ── Main entry point ────────────────────────────────────────────────────────
@@ -52,6 +56,7 @@ export class DreamingEngine {
     const decayed = this.decayStaleMemories();
     const garbageCollected = this.garbageCollect();
     const contradictions = this.detectAndResolveContradictions();
+    const staleGoalsPruned = this.goalTracker.pruneStaleGoals();
 
     // Reflection + ideation — only if we have an AI manager
     const reflections: string[] = [];
@@ -84,10 +89,11 @@ export class DreamingEngine {
       consolidated,
       decayed,
       garbageCollected,
+      contradictions,
+      staleGoalsPruned,
       reflections,
       ideas,
       insights,
-      contradictions,
       durationMs: Date.now() - start,
     };
 

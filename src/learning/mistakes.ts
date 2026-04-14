@@ -34,15 +34,26 @@ export class MistakeTracker {
     // Check for a similar existing mistake first
     const existing = this.findSimilarMistake(description);
     if (existing) {
-      // Increment recurrence on the existing record
+      const newCount = existing.recurrenceCount + 1;
       const db = this.cortex.getDb();
-      db.prepare('UPDATE mistakes SET recurrence_count = recurrence_count + 1 WHERE id = ?').run(
-        existing.id,
-      );
-      log.info(
-        { id: existing.id, recurrenceCount: existing.recurrenceCount + 1 },
-        'Recurring mistake detected — incremented count',
-      );
+
+      // Escalate severity every 2 recurrences (minor→moderate→major→critical)
+      const escalated = this.maybeEscalateSeverity(existing.severity, newCount);
+      db.prepare(
+        'UPDATE mistakes SET recurrence_count = ?, severity = ? WHERE id = ?',
+      ).run(newCount, escalated, existing.id);
+
+      if (escalated !== existing.severity) {
+        log.warn(
+          { id: existing.id, newCount, oldSeverity: existing.severity, newSeverity: escalated },
+          'Recurring mistake — severity escalated',
+        );
+      } else {
+        log.info(
+          { id: existing.id, recurrenceCount: newCount },
+          'Recurring mistake detected — incremented count',
+        );
+      }
       return existing.id;
     }
 
@@ -235,6 +246,22 @@ export class MistakeTracker {
     }
     const union = new Set([...wordsA, ...wordsB]).size;
     return union > 0 ? matches / union : 0;
+  }
+
+  /**
+   * Bump severity one level for every 2 recurrences, capped at 'critical'.
+   * minor(0) → moderate(2) → major(4) → critical(6+)
+   */
+  private maybeEscalateSeverity(
+    current: Mistake['severity'],
+    recurrenceCount: number,
+  ): Mistake['severity'] {
+    const ladder: Mistake['severity'][] = ['minor', 'moderate', 'major', 'critical'];
+    const currentIdx = ladder.indexOf(current);
+    // Each pair of recurrences earns one escalation step
+    const escalationSteps = Math.floor(recurrenceCount / 2);
+    const newIdx = Math.min(currentIdx + escalationSteps, ladder.length - 1);
+    return ladder[newIdx]!;
   }
 
   /**

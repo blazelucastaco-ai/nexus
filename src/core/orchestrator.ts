@@ -314,7 +314,7 @@ export class Orchestrator {
     this.goalTracker = new GoalTracker();
     this.reasoningTrace = new ReasoningTrace(this.ai);
     this.selfEvaluator = new SelfEvaluator(this.ai);
-    this.selfEvaluator.setEnabled(false); // Disabled: post-hoc critic leaks capability warnings to users
+    // Self-evaluator is now re-enabled — output routes to internal memory/mistakes, not the user
 
     // FIX 4: Wire task journal as an after-hook
     this.toolExecutor.addAfterHook(makeJournalHook());
@@ -557,6 +557,7 @@ export class Orchestrator {
       }
 
       // ── 1. Personality event + short-term memory ──────────────
+      this.personality.observeUserMessage(text); // check humor reception before event
       this.personality.processEvent('user_message');
       this.memory.addToBuffer('user', text);
 
@@ -575,8 +576,9 @@ export class Orchestrator {
         this.learning.feedback.processExplicitFeedback(text, 'user expressed frustration or correction');
       }
 
-      // Feed every message through implicit feedback detection (learning system)
-      this.learning.feedback.processImplicitFeedback(text, 'incoming_message');
+      // Feed every message through feedback classification — detects satisfaction,
+      // frustration, and correction signals to improve preference learning over time
+      this.learning.feedback.processExplicitFeedback(text, 'incoming_message');
 
       // ── 2. Recall relevant context (parallel) ─────────────────
       const [recentMemories, relevantFacts] = await Promise.all([
@@ -777,7 +779,7 @@ export class Orchestrator {
           this.sessionTokens.requests += 1;
         }
 
-        // FIX 7: Empty response retry — Gemini occasionally returns blank content with no tool calls
+        // Empty response retry — occasionally the LLM returns blank content with no tool calls
         const isEmptyResponse =
           (!aiResponse.toolCalls || aiResponse.toolCalls.length === 0) &&
           (!aiResponse.content || aiResponse.content.trim().length === 0);
@@ -1159,18 +1161,32 @@ export class Orchestrator {
       }
 
       // ── 10c. Response self-evaluation (async, fire-and-forget) ─
-      // Checks if the response was complete; sends a follow-up note via
-      // Telegram if something was missed. Doesn't block the main response.
+      // Checks if the response fully addressed the query. When a gap is found,
+      // routes it to the internal mistake tracker and episodic memory so NEXUS
+      // learns from it — never surfaces the raw evaluation to the user.
       if (this.selfEvaluator) {
-        const evalChatId = chatId;
         const evalQuery = text;
         const evalResponse = finalContent;
         this.selfEvaluator.evaluate(evalQuery, evalResponse).then(async (note) => {
           if (note) {
-            try {
-              await this.telegram.sendMessage(evalChatId, `💬 ${note}`);
-              log.debug({ note: note.slice(0, 80) }, 'Self-eval addendum sent');
-            } catch { /* non-fatal */ }
+            // Store as a high-importance reflection memory so it surfaces in future recall
+            this.memory.store('episodic', 'fact',
+              `Self-reflection: response to "${evalQuery.slice(0, 100)}" had a gap — ${note}`,
+              { importance: 0.65, tags: ['self-eval', 'reflection', 'improvement'], source: 'self-evaluator' },
+            ).catch(() => {});
+
+            // Record as a tracked mistake so /mistakes shows it and prevention checks catch it
+            this.learning.mistakes.recordMistake(
+              `Incomplete response: ${evalQuery.slice(0, 80)}`,
+              'communication',
+              {
+                whatHappened: `Response to "${evalQuery.slice(0, 150)}" did not fully address the question`,
+                whatShouldHaveHappened: note,
+                rootCause: 'response gap identified by post-response self-evaluation',
+              },
+            );
+
+            log.debug({ note: note.slice(0, 80) }, 'Self-eval gap stored to memory and mistake tracker');
           }
         }).catch(() => { /* non-fatal */ });
       }
@@ -1665,11 +1681,10 @@ ${extras.memorySynthesis}`);
    * by asking the LLM to summarize it, then replace with a single system message.
    */
   private async maybeCompact(messages: AIMessage[], systemPrompt: string): Promise<void> {
-    // Enhanced: use context-guard for Gemini's 1M token window
     const guardStatus = checkContextUsage(systemPrompt, messages);
     if (guardStatus.shouldCompact) {
-      // Aggressive compaction: trim to 60% of window budget
-      const targetTokens = Math.floor(600_000 * 0.6);
+      // Aggressive compaction: trim to 60% of Claude's context window budget
+      const targetTokens = Math.floor(200_000 * 0.6);
       const compacted = aggressiveCompact(messages, targetTokens);
       if (compacted.length < messages.length) {
         messages.splice(0, messages.length, ...compacted);

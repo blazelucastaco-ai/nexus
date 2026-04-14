@@ -27,6 +27,13 @@ const IDLE_THRESHOLD_MS = 2 * 60 * 60 * 1000;   // 2 hours
 // Minimum time between proactive idea messages
 const IDEA_COOLDOWN_MS = 4 * 60 * 60 * 1000;    // 4 hours
 
+interface PortState {
+  status: 'up' | 'down';
+  consecutiveFailures: number; // increments each check while down
+  nextCheckAt: number;         // epoch ms — skip check until this time
+  alertedDown: boolean;        // true after first down-alert is sent; reset on recovery
+}
+
 export class ProactiveEngine {
   private sendFn: SendFn;
   private quiet = false;
@@ -39,8 +46,8 @@ export class ProactiveEngine {
   private getLastMessageTime: (() => number) | null;
   private lastIdeaTime = 0;
 
-  // Port monitoring state — map port → last known state
-  private watchedPorts: Map<number, 'up' | 'down'> = new Map();
+  // Port monitoring state — map port → rich state with backoff
+  private watchedPorts: Map<number, PortState> = new Map();
 
   constructor(
     sendFn: SendFn,
@@ -59,7 +66,7 @@ export class ProactiveEngine {
     // Seed watched ports
     const ports = options?.watchPorts ?? DEFAULT_WATCHED_PORTS;
     for (const p of ports) {
-      this.watchedPorts.set(p, 'up'); // assume up at start
+      this.watchedPorts.set(p, { status: 'up', consecutiveFailures: 0, nextCheckAt: 0, alertedDown: false });
     }
   }
 
@@ -90,7 +97,7 @@ export class ProactiveEngine {
   /** Add a port to watch. */
   watchPort(port: number): void {
     if (!this.watchedPorts.has(port)) {
-      this.watchedPorts.set(port, 'up');
+      this.watchedPorts.set(port, { status: 'up', consecutiveFailures: 0, nextCheckAt: 0, alertedDown: false });
       log.info({ port }, 'Now watching port');
     }
   }
@@ -184,17 +191,44 @@ export class ProactiveEngine {
   // ── Port monitoring ───────────────────────────────────────────────
 
   private async checkPort(port: number): Promise<string | null> {
-    const isUp = await this.isPortOpen(port);
-    const wasUp = this.watchedPorts.get(port) === 'up';
+    const state = this.watchedPorts.get(port);
+    if (!state) return null;
 
-    if (isUp && !wasUp) {
-      this.watchedPorts.set(port, 'up');
+    const now = Date.now();
+
+    // Skip check if still in backoff window
+    if (now < state.nextCheckAt) {
+      const waitMin = Math.round((state.nextCheckAt - now) / 60_000);
+      log.debug({ port, waitMin }, 'Port check skipped — backoff active');
+      return null;
+    }
+
+    const isUp = await this.isPortOpen(port);
+
+    if (isUp && state.status === 'down') {
+      // Recovery — reset all backoff state
+      state.status = 'up';
+      state.consecutiveFailures = 0;
+      state.nextCheckAt = 0;
+      state.alertedDown = false;
       return `✅ <b>Port ${port} is back up</b>`;
     }
 
-    if (!isUp && wasUp) {
-      this.watchedPorts.set(port, 'down');
+    if (!isUp && state.status === 'up') {
+      // First failure — alert and start backoff
+      state.status = 'down';
+      state.consecutiveFailures = 1;
+      state.nextCheckAt = now + backoffMs(1);
+      state.alertedDown = true;
       return `🔴 <b>Port ${port} went down</b> — your service may have crashed`;
+    }
+
+    if (!isUp && state.status === 'down') {
+      // Continued failure — increment and extend backoff, no repeat alert
+      state.consecutiveFailures += 1;
+      state.nextCheckAt = now + backoffMs(state.consecutiveFailures);
+      log.debug({ port, consecutiveFailures: state.consecutiveFailures }, 'Port still down — backoff extended');
+      return null;
     }
 
     return null;
@@ -228,7 +262,7 @@ export class ProactiveEngine {
     log.info({ idleHours: (idleMs / 3_600_000).toFixed(1) }, 'Generating idle proactive idea');
 
     try {
-      const context = this.getMemoryContext();
+      const context = await this.getMemoryContext();
       const response = await this.aiManager.complete({
         messages: [
           {
@@ -257,11 +291,11 @@ export class ProactiveEngine {
     }
   }
 
-  private getMemoryContext(): string {
+  private async getMemoryContext(): Promise<string> {
     if (!this.memoryManager) return 'No memory context available.';
 
     try {
-      const recent = this.memoryManager.recall('recent activity', {
+      const recent = await this.memoryManager.recall('recent activity', {
         layers: ['episodic', 'semantic'],
         limit: 8,
         minImportance: 0.4,
@@ -274,4 +308,18 @@ export class ProactiveEngine {
       return 'No memory context available.';
     }
   }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Backoff schedule for consecutive port failures:
+ *   1–2 failures  →  5 min  (normal cadence)
+ *   3–5 failures  →  30 min
+ *   6+ failures   →  2 hours
+ */
+function backoffMs(consecutiveFailures: number): number {
+  if (consecutiveFailures >= 6) return 2 * 60 * 60 * 1000;   // 2 hours
+  if (consecutiveFailures >= 3) return 30 * 60 * 1000;        // 30 min
+  return 5 * 60 * 1000;                                        // 5 min (normal)
 }

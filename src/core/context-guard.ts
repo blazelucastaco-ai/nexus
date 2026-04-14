@@ -1,12 +1,12 @@
 // Context Guard — monitors token usage and triggers compaction before overflow
-// Uses rough char/4 estimate for Gemini's 1M token context window.
+// Uses rough char/4 estimate for Claude's ~200K token context window.
 
 import { createLogger } from '../utils/logger.js';
 import type { AIMessage } from '../types.js';
 
 const log = createLogger('ContextGuard');
 
-const GEMINI_CONTEXT_WINDOW = 1_000_000; // tokens
+const CONTEXT_WINDOW = 200_000; // tokens — Claude Sonnet/Opus context window
 const WARN_THRESHOLD = 0.6;  // warn at 60%
 const COMPACT_THRESHOLD = 0.8; // compact at 80%
 const CHARS_PER_TOKEN = 4;
@@ -56,7 +56,7 @@ export function checkContextUsage(
   messages: AIMessage[],
 ): ContextGuardStatus {
   const estimatedTokens = estimateConversationTokens(systemPrompt, messages);
-  const percentUsed = estimatedTokens / GEMINI_CONTEXT_WINDOW;
+  const percentUsed = estimatedTokens / CONTEXT_WINDOW;
 
   if (percentUsed >= COMPACT_THRESHOLD) {
     log.warn(

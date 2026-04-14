@@ -2,8 +2,9 @@
 //
 // Each chat gets its own file at ~/.nexus/sessions/{chatId}.jsonl
 // Each line is a JSON array of messages for that turn: [{role, content}, ...]
+// Sessions older than 30 days and larger than 500 KB are auto-archived.
 
-import { createWriteStream, existsSync, mkdirSync, readFileSync, statSync, openSync, readSync, closeSync } from 'fs';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, openSync, readSync, closeSync } from 'fs';
 import { appendFile } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -12,10 +13,32 @@ import { createLogger } from '../utils/logger.js';
 const log = createLogger('SessionStore');
 
 const SESSIONS_DIR = join(homedir(), '.nexus', 'sessions');
+const ARCHIVE_DIR  = join(SESSIONS_DIR, 'archive');
+
+const ARCHIVE_AGE_MS   = 30 * 24 * 60 * 60 * 1000; // 30 days
+const ARCHIVE_SIZE_MIN = 500 * 1024;                 // 500 KB
 
 function ensureDir(): void {
-  if (!existsSync(SESSIONS_DIR)) {
-    mkdirSync(SESSIONS_DIR, { recursive: true });
+  mkdirSync(SESSIONS_DIR, { recursive: true });
+}
+
+/**
+ * If the session file is both old (>30 days since last write) and large (>500 KB),
+ * move it to the archive directory and let the caller start a fresh file.
+ */
+function maybeArchive(filePath: string, chatId: string): void {
+  try {
+    const st = statSync(filePath);
+    const ageMs = Date.now() - st.mtimeMs;
+    if (ageMs < ARCHIVE_AGE_MS || st.size < ARCHIVE_SIZE_MIN) return;
+
+    mkdirSync(ARCHIVE_DIR, { recursive: true });
+    const stamp = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const dest  = join(ARCHIVE_DIR, `${chatId}_${stamp}.jsonl`);
+    renameSync(filePath, dest);
+    log.info({ chatId, dest, ageDays: Math.round(ageMs / 86_400_000), sizeKB: Math.round(st.size / 1024) }, 'Session archived');
+  } catch (err) {
+    log.debug({ err }, 'Session archive check skipped');
   }
 }
 
@@ -51,6 +74,9 @@ export function loadSession(chatId: string, lastN = 20): SessionMessage[] {
   try {
     const path = sessionPath(chatId);
     if (!existsSync(path)) return [];
+
+    // Archive stale + large sessions before loading
+    maybeArchive(path, chatId);
 
     // Read only the tail of the file to avoid loading huge session files into memory.
     // We read the last ~64KB which is enough for dozens of recent turns.

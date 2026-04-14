@@ -5,9 +5,14 @@
 //          most confident pattern detected, and an LLM-generated
 //          "thought for the day" based on recent memory context.
 
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { createLogger } from '../utils/logger.js';
 import { getDatabase } from '../memory/database.js';
 import type { AIManager } from '../ai/index.js';
+
+const STATE_PATH = join(homedir(), '.nexus', 'briefing-state.json');
 
 const log = createLogger('BriefingEngine');
 
@@ -18,12 +23,37 @@ export class BriefingEngine {
   private aiManager: AIManager | null;
   private briefingHour: number;       // 0-23, default 8
   private timer: ReturnType<typeof setInterval> | null = null;
-  private lastBriefingDate: string = ''; // YYYY-MM-DD
+  private lastBriefingDate: string;   // YYYY-MM-DD, persisted to disk
 
   constructor(sendFn: SendFn, aiManager?: AIManager, briefingHour = 8) {
     this.sendFn = sendFn;
     this.aiManager = aiManager ?? null;
     this.briefingHour = briefingHour;
+    this.lastBriefingDate = this.loadLastBriefingDate();
+  }
+
+  // ── State persistence ──────────────────────────────────────────────
+
+  private loadLastBriefingDate(): string {
+    try {
+      if (existsSync(STATE_PATH)) {
+        const raw = readFileSync(STATE_PATH, 'utf8');
+        const state = JSON.parse(raw) as { lastBriefingDate?: string };
+        return state.lastBriefingDate ?? '';
+      }
+    } catch {
+      // ignore — treat as no briefing sent yet
+    }
+    return '';
+  }
+
+  private saveLastBriefingDate(date: string): void {
+    try {
+      mkdirSync(join(homedir(), '.nexus'), { recursive: true });
+      writeFileSync(STATE_PATH, JSON.stringify({ lastBriefingDate: date }), 'utf8');
+    } catch (err) {
+      log.warn({ err }, 'Failed to save briefing state');
+    }
   }
 
   start(): void {
@@ -50,7 +80,9 @@ export class BriefingEngine {
   async sendBriefingNow(): Promise<void> {
     const briefing = await this.composeBriefing();
     await this.sendFn(briefing);
-    this.lastBriefingDate = todayString();
+    const today = todayString();
+    this.lastBriefingDate = today;
+    this.saveLastBriefingDate(today);
   }
 
   // ── Internal ───────────────────────────────────────────────────────
@@ -63,6 +95,7 @@ export class BriefingEngine {
     if (this.lastBriefingDate === today) return;  // already sent today
 
     this.lastBriefingDate = today;
+    this.saveLastBriefingDate(today);
     log.info({ date: today }, 'Sending daily briefing');
 
     try {
@@ -104,6 +137,16 @@ export class BriefingEngine {
     if (topPattern) {
       parts.push(`📊 <b>Pattern I've noticed:</b>`);
       parts.push(topPattern);
+      parts.push('');
+    }
+
+    // Recurring mistakes worth watching for today
+    const recurringMistakes = this.getRecurringMistakes();
+    if (recurringMistakes.length > 0) {
+      parts.push(`⚠️ <b>Watch out for:</b>`);
+      for (const m of recurringMistakes) {
+        parts.push(`  • ${m.description} <i>(${m.recurrenceCount}x, ${m.severity})</i>`);
+      }
       parts.push('');
     }
 
@@ -189,6 +232,30 @@ export class BriefingEngine {
       return text;
     } catch {
       return null;
+    }
+  }
+
+  private getRecurringMistakes(): Array<{ description: string; recurrenceCount: number; severity: string }> {
+    try {
+      const db = getDatabase();
+      const rows = db
+        .prepare(
+          `SELECT description, recurrence_count, severity
+           FROM mistakes
+           WHERE resolved = 0
+             AND recurrence_count > 0
+           ORDER BY recurrence_count DESC, severity DESC
+           LIMIT 2`,
+        )
+        .all() as Array<{ description: string; recurrence_count: number; severity: string }>;
+
+      return rows.map((r) => ({
+        description: r.description.slice(0, 120),
+        recurrenceCount: r.recurrence_count,
+        severity: r.severity,
+      }));
+    } catch {
+      return [];
     }
   }
 
