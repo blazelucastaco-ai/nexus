@@ -9,6 +9,7 @@
 import type Database from 'better-sqlite3';
 import type { Memory, MemoryLayer, MemoryType } from '../types.js';
 import { createLogger } from '../utils/logger.js';
+import { safeJsonParse } from '../utils/helpers.js';
 import { vectorSearch, cosineSimilarity, computeEmbedding } from './embeddings.js';
 
 const log = createLogger('MemoryRetrieval');
@@ -124,6 +125,8 @@ export class MemoryRetrieval {
 
   private temporalDecay(memory: Memory): number {
     const createdMs = new Date(memory.createdAt).getTime();
+    // Guard: invalid date → treat as recent (no decay)
+    if (isNaN(createdMs)) return 1.0;
     const ageDays = (Date.now() - createdMs) / (1000 * 60 * 60 * 24);
     // Half-life = 30 days: decay = exp(-ln2 / 30 * ageDays)
     return Math.exp((-0.693 / 30) * ageDays);
@@ -185,10 +188,10 @@ export class MemoryRetrieval {
   private scoreTags(memory: Memory, queryTerms: string[]): number {
     if (queryTerms.length === 0 || memory.tags.length === 0) return 0;
 
-    const lowerTags = memory.tags.map((t) => t.toLowerCase());
+    const tagString = memory.tags.join(' ').toLowerCase();
     let hits = 0;
     for (const term of queryTerms) {
-      if (lowerTags.some((tag) => tag.includes(term))) hits++;
+      if (tagString.includes(term)) hits++;
     }
     return hits / queryTerms.length;
   }
@@ -246,7 +249,8 @@ function mmrRerank(results: any[], lambda = 0.7): any[] {
   if (results.length <= 1) return results;
   const tokenize = (s: string) => new Set(s.toLowerCase().split(/\W+/).filter(Boolean));
   const jaccard = (a: Set<string>, b: Set<string>) => {
-    const inter = [...a].filter(x => b.has(x)).length;
+    let inter = 0;
+    for (const x of a) { if (b.has(x)) inter++; }
     return inter / (a.size + b.size - inter || 1);
   };
   const selected: any[] = [results[0]];
@@ -255,7 +259,12 @@ function mmrRerank(results: any[], lambda = 0.7): any[] {
     let bestIdx = 0, bestScore = -Infinity;
     for (let i = 0; i < remaining.length; i++) {
       const rel = remaining[i].score || 0;
-      const maxSim = Math.max(...selected.map(s => jaccard(tokenize(remaining[i].content || ''), tokenize(s.content || ''))));
+      const candidateTokens = tokenize(remaining[i].content || '');
+      // Use reduce instead of spread to avoid stack overflow on large arrays
+      const maxSim = selected.reduce((max, s) => {
+        const sim = jaccard(candidateTokens, tokenize(s.content || ''));
+        return sim > max ? sim : max;
+      }, 0);
       const mmr = lambda * rel - (1 - lambda) * maxSim;
       if (mmr > bestScore) { bestScore = mmr; bestIdx = i; }
     }
@@ -297,9 +306,9 @@ function rowToMemory(row: RawMemoryRow): Memory {
     createdAt: row.created_at,
     lastAccessed: row.last_accessed,
     accessCount: row.access_count,
-    tags: JSON.parse(row.tags),
-    relatedMemories: JSON.parse(row.related_memories),
+    tags: safeJsonParse<string[]>(row.tags, []),
+    relatedMemories: safeJsonParse<string[]>(row.related_memories, []),
     source: row.source,
-    metadata: JSON.parse(row.metadata),
+    metadata: safeJsonParse<Record<string, unknown>>(row.metadata, {}),
   };
 }

@@ -6,7 +6,7 @@
 
 import { createHash } from 'crypto';
 import { createLogger } from '../utils/logger.js';
-import { generateId, nowISO, truncate } from '../utils/helpers.js';
+import { generateId, nowISO, truncate, safeJsonParse } from '../utils/helpers.js';
 import { loadConfig } from '../config.js';
 import { assembleContext, buildSystemPrompt } from './context.js';
 import { EventLoop } from './event-loop.js';
@@ -256,7 +256,7 @@ export class Orchestrator {
           } catch { /* non-fatal */ }
         }).catch((err) => {
           log.error({ err, chatId }, 'Ultra task runner failed');
-          this.telegram.sendMessage(chatId, 'Ultra task failed unexpectedly.').catch(() => {});
+          this.telegram.sendMessage(chatId, 'Ultra task failed unexpectedly.').catch((e) => log.debug({ e }, 'Failed to send ultra task error'));
         }).finally(resolve);
       });
     });
@@ -403,7 +403,7 @@ export class Orchestrator {
     log.info('Shutting down NEXUS...');
 
     // Stop cron scheduler
-    try { stopScheduler(); } catch {}
+    try { stopScheduler(); } catch (e) { log.debug({ e }, 'Scheduler stop failed'); }
 
     // Save final session summary before shutdown
     if (this.sessionTurnCount > 0) {
@@ -527,7 +527,7 @@ export class Orchestrator {
         this.memory.store('semantic', 'fact',
           `User asked about NEXUS internals/infrastructure: "${text.slice(0, 200)}"`,
           { importance: 0.5, tags: ['undercover', 'probe'], source: chatId },
-        ).catch(() => {});
+        ).catch((e) => log.debug({ e }, 'Failed to store probe detection'));
       }
 
       const injectionResult = detectInjection(text);
@@ -541,9 +541,11 @@ export class Orchestrator {
       // ── FIX 1: Load persisted session on first message ────────
       if (this.conversationHistory.length === 0) {
         const persisted = loadSession(chatId, 10);
-        if (persisted.length > 0) {
-          this.conversationHistory.push(...persisted.map((m) => ({ role: m.role as AIMessage['role'], content: m.content })));
-          log.info({ chatId, loaded: persisted.length }, 'Loaded persisted session');
+        const validRoles = new Set(['user', 'assistant', 'system', 'tool']);
+        const validMessages = persisted.filter((m) => validRoles.has(m.role));
+        if (validMessages.length > 0) {
+          this.conversationHistory.push(...validMessages.map((m) => ({ role: m.role as AIMessage['role'], content: m.content })));
+          log.info({ chatId, loaded: validMessages.length, skipped: persisted.length - validMessages.length }, 'Loaded persisted session');
         }
       }
 
@@ -579,7 +581,7 @@ export class Orchestrator {
         this.memory.store('semantic', 'fact',
           `User showed frustration (severity: ${severity}) while discussing: "${text.slice(0, 200)}"`,
           { importance: 0.75, tags: ['frustration', 'user-emotion', severity], source: chatId },
-        ).catch(() => {});
+        ).catch((e) => log.debug({ e }, 'Failed to store frustration memory'));
         // Feed into learning system so preferences update
         this.learning.feedback.processExplicitFeedback(text, 'user expressed frustration or correction');
       }
@@ -968,7 +970,7 @@ export class Orchestrator {
                 if (untrustedTools.has(job.toolName)) result = wrapUntrustedContent(result, job.toolName);
                 this.eventLoop.emit('agent:completed', { tool: job.toolName, resultLen: result.length }, 'medium', 'orchestrator');
                 // Send screenshot images directly to Telegram
-                this.maybeSendScreenshot(job.toolName, result, chatId).catch(() => {});
+                this.maybeSendScreenshot(job.toolName, result, chatId).catch((e) => log.debug({ e }, 'Failed to send screenshot'));
                 return { id: job.toolCall.id, result };
               }),
             );
@@ -1117,7 +1119,7 @@ export class Orchestrator {
               for (const tc of forceResponse.toolCalls) {
                 if (tc.function.name === 'write_file') {
                   let tcArgs: Record<string, unknown> = {};
-                  try { tcArgs = JSON.parse(tc.function.arguments); } catch { /* ignore */ }
+                  try { tcArgs = JSON.parse(tc.function.arguments); } catch (e) { log.debug({ e }, 'Failed to parse forced write_file args'); }
                   if (typeof tcArgs.path === 'string') {
                     writeFileCallsMade.push({ path: tcArgs.path as string });
                   }
@@ -1204,7 +1206,7 @@ export class Orchestrator {
             this.memory.store('episodic', 'fact',
               `Self-reflection: response to "${evalQuery.slice(0, 100)}" had a gap — ${note}`,
               { importance: 0.65, tags: ['self-eval', 'reflection', 'improvement'], source: 'self-evaluator' },
-            ).catch(() => {});
+            ).catch((e) => log.debug({ e }, 'Failed to store self-eval reflection'));
 
             // Record as a tracked mistake so /mistakes shows it and prevention checks catch it
             this.learning.mistakes.recordMistake(
@@ -1929,7 +1931,7 @@ ${extras.memorySynthesis}`);
           return true;
         }
       } else if (toolName === 'browser_screenshot') {
-        const data = JSON.parse(result) as { base64?: string; mimeType?: string };
+        const data = safeJsonParse<{ base64?: string; mimeType?: string }>(result, {});
         if (data.base64) {
           const buf = Buffer.from(data.base64, 'base64');
           await this.telegram.sendPhoto(chatId, buf, '📸 Browser screenshot');
@@ -2061,7 +2063,7 @@ ${extras.memorySynthesis}`);
       try {
         const match = reviewResp.content.match(/\{[\s\S]*\}/);
         if (match) review = JSON.parse(match[0]);
-      } catch { /* use defaults */ }
+      } catch (e) { log.debug({ e }, 'Plan review JSON parse failed — using defaults'); }
 
       // Apply adjustments to plan steps if needed
       if (review.adjustments.length > 0) {

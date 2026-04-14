@@ -32,8 +32,11 @@ async function loadAllowlist(): Promise<AllowlistConfig> {
     cachedAllowlist = JSON.parse(raw) as AllowlistConfig;
     log.info({ path: ALLOWLIST_PATH, commands: cachedAllowlist.commands.length }, 'Allowlist loaded');
     return cachedAllowlist;
-  } catch {
-    // File doesn't exist — use defaults
+  } catch (err: unknown) {
+    const isNoEnt = err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT';
+    if (!isNoEnt) {
+      log.warn({ err, path: ALLOWLIST_PATH }, 'Failed to parse allowlist config — using defaults');
+    }
     return DEFAULT_CONFIG;
   }
 }

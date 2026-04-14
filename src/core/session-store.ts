@@ -4,7 +4,7 @@
 // Each line is a JSON array of messages for that turn: [{role, content}, ...]
 // Sessions older than 30 days and larger than 500 KB are auto-archived.
 
-import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, openSync, readSync, closeSync } from 'fs';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, openSync, readSync, closeSync, readdirSync } from 'fs';
 import { appendFile } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -106,9 +106,10 @@ export function loadSession(chatId: string, lastN = 20): SessionMessage[] {
     for (const line of recentLines) {
       try {
         const turn = JSON.parse(line) as SessionMessage[];
+        if (!Array.isArray(turn)) continue;
         messages.push(...turn);
       } catch {
-        // Skip malformed lines
+        log.debug({ chatId, lineLen: line.length }, 'Skipping malformed session line');
       }
     }
 
@@ -125,10 +126,9 @@ export function loadSession(chatId: string, lastN = 20): SessionMessage[] {
 export function listSessions(): string[] {
   try {
     ensureDir();
-    const { readdirSync } = require('fs');
-    return (readdirSync(SESSIONS_DIR) as string[])
-      .filter((f: string) => f.endsWith('.jsonl'))
-      .map((f: string) => f.replace(/\.jsonl$/, ''));
+    return readdirSync(SESSIONS_DIR)
+      .filter((f) => f.endsWith('.jsonl'))
+      .map((f) => f.replace(/\.jsonl$/, ''));
   } catch {
     return [];
   }

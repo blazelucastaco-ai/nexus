@@ -64,8 +64,8 @@ export class DreamingEngine {
         const raw = readFileSync(STATE_PATH, 'utf8');
         return JSON.parse(raw) as DreamState;
       }
-    } catch {
-      // treat as fresh
+    } catch (e) {
+      log.debug({ e }, 'Could not load dream state — treating as fresh');
     }
     return { lastDreamAt: 0, lastReflectedAt: 0 };
   }

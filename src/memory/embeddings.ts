@@ -130,8 +130,8 @@ export function getAllEmbeddings(): Array<{ memoryId: string; vector: SparseVect
         memoryId: row.memory_id,
         vector: JSON.parse(row.embedding.toString('utf-8')) as SparseVector,
       });
-    } catch {
-      // skip corrupted entries silently
+    } catch (e) {
+      log.debug({ e, memoryId: row.memory_id }, 'Skipping corrupted embedding entry');
     }
   }
   return result;

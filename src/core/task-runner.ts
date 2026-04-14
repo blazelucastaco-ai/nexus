@@ -209,7 +209,8 @@ async function executeStep(
 
       try {
         toolArgs = JSON.parse(toolCall.function.arguments);
-      } catch {
+      } catch (e) {
+        log.debug({ e, toolName, args: toolCall.function.arguments?.slice(0, 100) }, 'Failed to parse tool arguments — using empty args');
         toolArgs = {};
       }
 
@@ -515,7 +516,7 @@ export async function runTask(opts: {
                   chatId,
                   progressMsgId,
                   formatPlanMessage(plan, completedIds, step.id, stepTimings, detail),
-                ).catch(() => {});
+                ).catch((e) => log.debug({ e }, 'Failed to update progress message'));
               }
             },
           );

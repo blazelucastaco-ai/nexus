@@ -2,7 +2,7 @@
 
 import type Database from 'better-sqlite3';
 import type { AIMessage, Memory, MemoryLayer, MemoryType } from '../types.js';
-import { generateId, nowISO } from '../utils/helpers.js';
+import { generateId, nowISO, safeJsonParse } from '../utils/helpers.js';
 import { createLogger } from '../utils/logger.js';
 import { getDatabase } from './database.js';
 
@@ -61,10 +61,10 @@ function rowToMemory(row: RawMemoryRow): Memory {
     createdAt: row.created_at,
     lastAccessed: row.last_accessed,
     accessCount: row.access_count,
-    tags: JSON.parse(row.tags || '[]'),
-    relatedMemories: JSON.parse(row.related_memories || '[]'),
+    tags: safeJsonParse<string[]>(row.tags, []),
+    relatedMemories: safeJsonParse<string[]>(row.related_memories, []),
     source: row.source,
-    metadata: JSON.parse(row.metadata || '{}'),
+    metadata: safeJsonParse<Record<string, unknown>>(row.metadata, {}),
   };
 }
 

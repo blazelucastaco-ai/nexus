@@ -41,7 +41,7 @@ export function closeDatabase(): void {
     log.info('Closing database');
     // Force WAL checkpoint so all writes are in the main DB file before close.
     // This ensures memories written in this process are visible to future processes.
-    try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch {}
+    try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch (e) { log.warn({ e }, 'WAL checkpoint failed — DB may have unflushed writes'); }
     db.close();
     db = null;
   }

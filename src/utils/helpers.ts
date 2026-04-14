@@ -25,6 +25,19 @@ export function truncate(str: string, maxLen: number): string {
   return `${str.slice(0, maxLen - 3)}...`;
 }
 
+/**
+ * Safe JSON.parse — returns `fallback` on any parse error instead of throwing.
+ * Use this everywhere DB rows or external data are parsed.
+ */
+export function safeJsonParse<T>(raw: string | null | undefined, fallback: T): T {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 export function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')

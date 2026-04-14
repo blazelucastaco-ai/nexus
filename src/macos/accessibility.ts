@@ -196,10 +196,9 @@ export async function getActiveAppInfo(): Promise<{ name: string; bundleId: stri
  */
 export async function getUIElements(appName: string): Promise<unknown[]> {
   try {
-    const escaped = appName.replace(/'/g, "\\'");
     const script = `
       const se = Application('System Events');
-      const proc = se.processes.byName('${escaped}');
+      const proc = se.processes.byName(${JSON.stringify(appName)});
 
       function describeElement(el, depth) {
         if (depth > 3) return null;

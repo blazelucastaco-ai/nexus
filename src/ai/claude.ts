@@ -86,7 +86,7 @@ function toAnthropicMessages(
           let input: Record<string, unknown> = {};
           try {
             input = JSON.parse(tc.function.arguments);
-          } catch { /* ignore parse errors */ }
+          } catch (e) { log.debug({ e, name: tc.function.name }, 'Failed to parse tool_use arguments'); }
 
           contentBlocks.push({
             type: 'tool_use',
