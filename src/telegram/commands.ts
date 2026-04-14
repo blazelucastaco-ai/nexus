@@ -2,6 +2,7 @@
 import type { Bot, Context } from 'grammy';
 import type { Orchestrator } from '../core/orchestrator.js';
 import { createLogger } from '../utils/logger.js';
+import { getDatabase } from '../memory/database.js';
 import {
   escapeHtml,
   formatAgentList,
@@ -152,10 +153,7 @@ export async function handleTasks(ctx: Context, orchestrator: Orchestrator): Pro
 
 export async function handleMemory(ctx: Context, orchestrator: Orchestrator): Promise<void> {
   try {
-    if (!orchestrator.memory) {
-      await ctx.reply('Memory system not connected.', { parse_mode: 'HTML' });
-      return;
-    }
+    if (!await requireSubsystem(ctx, orchestrator.memory, 'Memory system')) return;
 
     const stats = await orchestrator.memory.getStats();
     await ctx.reply(truncateMessage(formatMemoryStats(stats as unknown as Record<string, unknown>)), {
@@ -171,10 +169,7 @@ export async function handleMemory(ctx: Context, orchestrator: Orchestrator): Pr
 
 export async function handleMood(ctx: Context, orchestrator: Orchestrator): Promise<void> {
   try {
-    if (!orchestrator.personality) {
-      await ctx.reply('Personality system not connected.', { parse_mode: 'HTML' });
-      return;
-    }
+    if (!await requireSubsystem(ctx, orchestrator.personality, 'Personality system')) return;
 
     const personalityState = orchestrator.personality.getPersonalityState();
     await ctx.reply(truncateMessage(formatMood(personalityState)), { parse_mode: 'HTML' });
@@ -188,10 +183,7 @@ export async function handleMood(ctx: Context, orchestrator: Orchestrator): Prom
 
 export async function handleAgents(ctx: Context, orchestrator: Orchestrator): Promise<void> {
   try {
-    if (!orchestrator.agents) {
-      await ctx.reply('Agent system not connected.', { parse_mode: 'HTML' });
-      return;
-    }
+    if (!await requireSubsystem(ctx, orchestrator.agents, 'Agent system')) return;
 
     const availableAgents = orchestrator.agents.getAvailableAgents();
     const agents = availableAgents.map((agent: { name: string; description: string }) => ({
@@ -307,10 +299,7 @@ export async function handleThink(ctx: Context, orchestrator: Orchestrator): Pro
 
 export async function handlePreferences(ctx: Context, orchestrator: Orchestrator): Promise<void> {
   try {
-    if (!orchestrator.learning) {
-      await ctx.reply('Learning system not connected.', { parse_mode: 'HTML' });
-      return;
-    }
+    if (!await requireSubsystem(ctx, orchestrator.learning, 'Learning system')) return;
 
     const prefs = orchestrator.learning.preferences.getAllPreferences();
 
@@ -353,10 +342,7 @@ export async function handlePreferences(ctx: Context, orchestrator: Orchestrator
 
 export async function handlePatterns(ctx: Context, orchestrator: Orchestrator): Promise<void> {
   try {
-    if (!orchestrator.learning) {
-      await ctx.reply('Learning system not connected.', { parse_mode: 'HTML' });
-      return;
-    }
+    if (!await requireSubsystem(ctx, orchestrator.learning, 'Learning system')) return;
 
     const temporal = orchestrator.learning.patterns.detectTemporalPatterns();
     const sequences = orchestrator.learning.patterns.detectSequencePatterns();
@@ -506,10 +492,7 @@ export async function handleJournal(ctx: Context): Promise<void> {
 
 export async function handleMistakes(ctx: Context, orchestrator: Orchestrator): Promise<void> {
   try {
-    if (!orchestrator.learning) {
-      await ctx.reply('Learning system not connected.', { parse_mode: 'HTML' });
-      return;
-    }
+    if (!await requireSubsystem(ctx, orchestrator.learning, 'Learning system')) return;
 
     const stats = orchestrator.learning.mistakes.getMistakeStats();
     const recurring = orchestrator.learning.mistakes.getRecurringMistakes();
@@ -739,7 +722,6 @@ export async function handleForget(ctx: Context, orchestrator: Orchestrator): Pr
     }
 
     // Delete from DB directly
-    const { getDatabase } = await import('../memory/database.js');
     const db = getDatabase();
     let deleted = 0;
     for (const mem of matches) {
@@ -795,7 +777,6 @@ export async function handlePin(ctx: Context, orchestrator: Orchestrator): Promi
       return;
     }
 
-    const { getDatabase } = await import('../memory/database.js');
     const db = getDatabase();
     let pinned = 0;
     for (const mem of matches) {
@@ -879,4 +860,11 @@ export async function handleGrant(ctx: Context): Promise<void> {
 function confidenceBar(confidence: number): string {
   const filled = Math.round(confidence * 5);
   return '█'.repeat(filled) + '░'.repeat(5 - filled);
+}
+
+/** Reply with "X not connected" and return false when a subsystem is absent. */
+async function requireSubsystem(ctx: Context, value: unknown, name: string): Promise<boolean> {
+  if (value) return true;
+  await ctx.reply(`${name} not connected.`, { parse_mode: 'HTML' });
+  return false;
 }

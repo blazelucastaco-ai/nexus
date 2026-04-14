@@ -24,10 +24,10 @@ export class GoalTracker {
    * Scan a user message for goal statements and store any found.
    * Returns the list of detected goal strings.
    */
-  async extractAndStore(
+  extractAndStore(
     message: string,
     store: (layer: string, type: string, content: string, opts: Record<string, unknown>) => unknown,
-  ): Promise<string[]> {
+  ): string[] {
     const found: string[] = [];
 
     for (const pattern of GOAL_PATTERNS) {
@@ -44,7 +44,7 @@ export class GoalTracker {
 
     for (const goal of found) {
       try {
-        await store('episodic', 'task', goal, {
+        store('episodic', 'task', goal, {
           importance: 0.85,
           tags: ['goal', 'user-goal', 'active'],
           source: 'goal-tracker',

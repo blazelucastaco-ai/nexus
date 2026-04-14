@@ -214,17 +214,14 @@ export class CreativeAgent extends BaseAgent {
     const stylePrefixes = prefixes[style] ?? prefixes.tech;
     const styleSuffixes = suffixes[style] ?? suffixes.tech;
 
+    const safeCount = Math.min(count, stylePrefixes.length * 3, 50);
     const names: string[] = [];
-    const usedPrefixes = new Set<number>();
+    // Shuffle prefix indices so each name gets a unique prefix until pool is exhausted
+    const prefixPool = stylePrefixes.map((_, i) => i).sort(() => Math.random() - 0.5);
 
-    for (let i = 0; i < count; i++) {
-      let prefixIdx: number;
-      do {
-        prefixIdx = Math.floor(Math.random() * stylePrefixes.length);
-      } while (usedPrefixes.has(prefixIdx) && usedPrefixes.size < stylePrefixes.length);
-      usedPrefixes.add(prefixIdx);
-
-      const prefix = stylePrefixes[prefixIdx % stylePrefixes.length];
+    for (let i = 0; i < safeCount; i++) {
+      const prefixIdx = prefixPool[i % prefixPool.length]!;
+      const prefix = stylePrefixes[prefixIdx]!;
       const suffix = styleSuffixes[Math.floor(Math.random() * styleSuffixes.length)];
       const keyword = keywords.length > 0 ? keywords[Math.floor(Math.random() * keywords.length)] : '';
 
@@ -241,7 +238,7 @@ export class CreativeAgent extends BaseAgent {
         concept,
         style,
         keywords,
-        names: [...new Set(names)].slice(0, count),
+        names: [...new Set(names)].slice(0, safeCount),
         generatedAt: nowISO(),
         note: 'These are starter suggestions. Combine, modify, or use as inspiration.',
       },

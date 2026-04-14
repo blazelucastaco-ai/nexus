@@ -53,7 +53,6 @@ async function main() {
 
   log.info('Initializing learning system...');
   const cortex = new MemoryCortex();
-  cortex.initialize();
   const learning = new LearningSystem(cortex);
 
   log.info('Initializing Telegram bot...');

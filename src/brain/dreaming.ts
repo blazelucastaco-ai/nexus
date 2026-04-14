@@ -20,7 +20,6 @@ import { storeEmbedding } from '../memory/embeddings.js';
 import { generateId, nowISO } from '../utils/helpers.js';
 import type { AIManager } from '../ai/index.js';
 import { GoalTracker } from './goal-tracker.js';
-import { MemoryConsolidation } from '../memory/consolidation.js';
 
 const log = createLogger('DreamCycle');
 
@@ -101,15 +100,6 @@ export class DreamingEngine {
     // Stamp immediately so concurrent callers see it
     this.saveDreamState({ ...state, lastDreamAt: start });
     log.info('Dream cycle starting…');
-
-    // Run MemoryConsolidation (dedup, fact extraction, importance adjustment)
-    try {
-      const consolidation = new MemoryConsolidation();
-      const report = consolidation.runConsolidation();
-      log.debug(report, 'MemoryConsolidation completed');
-    } catch (err) {
-      log.warn({ err }, 'MemoryConsolidation failed — skipping');
-    }
 
     const insights: string[] = [];
     const consolidated = await this.consolidateEpisodic(insights);

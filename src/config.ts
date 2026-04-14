@@ -3,6 +3,9 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { type NexusConfig, NexusConfigSchema } from './types.js';
+import { createLogger } from './utils/logger.js';
+
+const log = createLogger('Config');
 
 const NEXUS_DIR = process.env.NEXUS_DATA_DIR?.replace('~', homedir()) ?? join(homedir(), '.nexus');
 const CONFIG_PATH = join(NEXUS_DIR, 'config.yaml');
@@ -49,7 +52,16 @@ export function loadConfig(): NexusConfig {
     parsed.ai = { ...parsed.ai, model: process.env.NEXUS_AI_MODEL };
   }
 
-  return NexusConfigSchema.parse(parsed);
+  const config = NexusConfigSchema.parse(parsed);
+
+  if (!config.telegram.botToken) {
+    log.warn('TELEGRAM_BOT_TOKEN is not set — bot will not start');
+  }
+  if (!config.telegram.chatId) {
+    log.warn('No chatId configured — bot is open to ALL users (development mode only)');
+  }
+
+  return config;
 }
 
 export function saveConfig(config: NexusConfig): void {
