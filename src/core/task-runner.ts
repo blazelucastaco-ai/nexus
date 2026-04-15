@@ -13,11 +13,14 @@ import type { TelegramGateway } from '../telegram/index.js';
 import type { TaskPlan, TaskStep } from './task-planner.js';
 import type { AIMessage } from '../types.js';
 import { escapeHtml } from '../telegram/messages.js';
+import { CoWorkAgent, formatCoWorkHint } from '../agents/cowork.js';
+import type { CoWorkEvent, CoWorkResponse } from '../agents/cowork.js';
 
 const log = createLogger('TaskRunner');
 
 const MAX_STEP_ITERATIONS    = 25;       // Per-step tool loop limit
-const MAX_STEP_RETRIES       = 2;        // Retry a failing step up to N times
+const MAX_STEP_RETRIES       = 1;        // Standard retries before Co Work activates
+const MAX_COWORK_ATTEMPTS    = 3;        // Max Co Work consultations per step
 const TOOL_TIMEOUT_MS        = 120_000;  // Per-tool call timeout
 const STEP_TIMEOUT_MS        = 5 * 60 * 1000;  // 5 min max per step
 const TASK_TIMEOUT_MS        = 25 * 60 * 1000; // 25 min max per whole task
@@ -42,6 +45,7 @@ export interface TaskRunResult {
   summary: string;
   durationMs: number;
   timedOut?: boolean;
+  coworkEvents?: CoWorkEvent[];
 }
 
 // ─── Step System Prompt ───────────────────────────────────────────────────────
@@ -51,6 +55,8 @@ function buildStepSystemPrompt(
   plan: TaskPlan,
   step: TaskStep,
   previousContext: StepContext[],
+  coworkHint?: CoWorkResponse | null,
+  coworkAttemptNumber?: number,
 ): string {
   const prevSummary = previousContext.length > 0
     ? previousContext.map((c, i) => `Step ${i + 1}: ${c.summary}${c.filesWritten.length > 0 ? ` [Files: ${c.filesWritten.join(', ')}]` : ''}`).join('\n')
@@ -58,6 +64,10 @@ function buildStepSystemPrompt(
 
   const agentHint = step.agent
     ? `\nAGENT FOCUS: This step is best handled with ${step.agent} capabilities — prioritize those tools.`
+    : '';
+
+  const coworkSection = coworkHint
+    ? formatCoWorkHint(coworkHint, coworkAttemptNumber ?? 1)
     : '';
 
   return `You are NEXUS, a CLI-grade AI agent executing a task on macOS.
@@ -74,7 +84,7 @@ STEP GOAL: ${step.description}${agentHint}
 
 PREVIOUS STEPS COMPLETED:
 ${prevSummary}
-
+${coworkSection}
 ━━━ RULES — READ EVERY ONE ━━━
 
 1. TOOLS ONLY. Never put code or file content in your response text. If this step requires writing a file, call write_file. If it requires running a command, call run_terminal_command. Do NOT describe, explain, or show code in your message — just call the tool.
@@ -181,9 +191,12 @@ function formatFinalSummary(
   allFiles: string[],
   durationMs: number,
   stepResults: Array<{ step: TaskStep; success: boolean; summary: string }>,
+  allCoworkEvents: CoWorkEvent[],
 ): string {
+  const overallSuccess = stepResults.every((r) => r.success);
+  const titleIcon = overallSuccess ? '✅' : '⚠️';
   const lines: string[] = [
-    `✅ <b>${escapeHtml(plan.title)} — Done</b>`,
+    `${titleIcon} <b>${escapeHtml(plan.title)} — ${overallSuccess ? 'Done' : 'Partial'}</b>`,
     '',
   ];
 
@@ -197,6 +210,41 @@ function formatFinalSummary(
     lines.push('<b>Files created:</b>');
     for (const f of allFiles) {
       lines.push(`  <code>${escapeHtml(f)}</code>`);
+    }
+  }
+
+  // ── Co Work section ──────────────────────────────────────────────────────
+  if (allCoworkEvents.length > 0) {
+    lines.push('');
+    const resolved = allCoworkEvents.filter((e) => e.outcome === 'resolved');
+    const failed   = allCoworkEvents.filter((e) => e.outcome === 'failed');
+
+    if (resolved.length > 0 && failed.length === 0) {
+      // All Co Work consultations led to a fix
+      lines.push(`🧠 <b>I phoned a friend</b> — Co Work cracked it after ${allCoworkEvents.length} consultation${allCoworkEvents.length > 1 ? 's' : ''}.`);
+      for (const e of resolved) {
+        lines.push(`  <i>Step ${e.stepId}: ${escapeHtml(e.diagnosis)}</i>`);
+        lines.push(`  → ${escapeHtml(e.suggestion)}`);
+      }
+    } else if (resolved.length > 0) {
+      // Mixed — some resolved, some didn't
+      lines.push(`🧠 <b>I phoned a friend</b> — Co Work helped on ${resolved.length} of ${allCoworkEvents.length} issue${allCoworkEvents.length > 1 ? 's' : ''}.`);
+      for (const e of resolved) {
+        lines.push(`  ✅ Step ${e.stepId}: ${escapeHtml(e.diagnosis)}`);
+      }
+      for (const e of failed) {
+        lines.push(`  ❌ Step ${e.stepId}: still unresolved after 3 suggestions`);
+      }
+    } else {
+      // Co Work tried but couldn't fix it — tell the user what was found
+      const uniqueSteps = [...new Set(allCoworkEvents.map((e) => e.stepId))];
+      lines.push(`🧠 <b>I phoned a friend</b> — consulted Co Work ${allCoworkEvents.length} time${allCoworkEvents.length > 1 ? 's' : ''} but couldn't fully resolve the issue.`);
+      for (const stepId of uniqueSteps) {
+        const last = allCoworkEvents.filter((e) => e.stepId === stepId).at(-1)!;
+        lines.push(`  Step ${stepId} diagnosis: <i>${escapeHtml(last.diagnosis)}</i>`);
+        lines.push(`  Last suggestion: ${escapeHtml(last.suggestion)}`);
+      }
+      lines.push('  <i>Recommend manual review of the steps marked ⚠️ above.</i>');
     }
   }
 
@@ -218,9 +266,11 @@ async function executeStep(
   model: string,
   maxTokens: number,
   onDetail?: (detail: string) => void,
+  coworkHint?: CoWorkResponse | null,
+  coworkAttemptNumber?: number,
 ): Promise<{ success: boolean; context: StepContext; rawOutput: string; verified: boolean }> {
   const tools = toOpenAITools();
-  const systemPrompt = buildStepSystemPrompt(originalRequest, plan, step, previousContext);
+  const systemPrompt = buildStepSystemPrompt(originalRequest, plan, step, previousContext, coworkHint, coworkAttemptNumber);
 
   const loopMessages: AIMessage[] = [
     {
@@ -508,6 +558,10 @@ export async function runTask(opts: {
   const allFilesProduced: string[] = [];
   const stepResults: Array<{ step: TaskStep; success: boolean; summary: string }> = [];
   const previousContext: StepContext[] = [];
+  const allCoworkEvents: CoWorkEvent[] = [];
+
+  // Co Work agent — instantiated once per task, reused across steps
+  const coworkAgent = new CoWorkAgent(ai);
 
   let progressMsgId: number | null = null;
   let lastEditTime = 0;
@@ -622,45 +676,161 @@ export async function runTask(opts: {
         break;
       }
 
+      const onDetail = (detail: string) => {
+        const now = Date.now();
+        if (now - lastEditTime >= TELEGRAM_EDIT_THROTTLE_MS && progressMsgId) {
+          lastEditTime = now;
+          telegram.finalizeStreamingMessage(
+            chatId,
+            progressMsgId,
+            formatPlanMessage(plan, completedIds, step.id, stepTimings, detail),
+          ).catch((e) => log.debug({ e }, 'Failed to update progress message'));
+        }
+      };
+
+      // ── Phase 1: Standard retries ────────────────────────────────────────
+      let lastErrorContext = '';
+      let lastFilesWritten: string[] = [];
+      let lastCommandsRun: string[] = [];
+
       for (let attempt = 0; attempt <= MAX_STEP_RETRIES; attempt++) {
         try {
-          const result = await withTimeout(executeStep(
-            step,
-            plan,
-            originalRequest,
-            previousContext,
-            ai,
-            toolExecutor,
-            model,
-            maxTokens,
-            (detail) => {
-              const now = Date.now();
-              if (now - lastEditTime >= TELEGRAM_EDIT_THROTTLE_MS && progressMsgId) {
-                lastEditTime = now;
-                telegram.finalizeStreamingMessage(
-                  chatId,
-                  progressMsgId,
-                  formatPlanMessage(plan, completedIds, step.id, stepTimings, detail),
-                ).catch((e) => log.debug({ e }, 'Failed to update progress message'));
-              }
-            },
-          ), STEP_TIMEOUT_MS, `step ${step.id}: ${step.title}`);
+          const result = await withTimeout(
+            executeStep(step, plan, originalRequest, previousContext, ai, toolExecutor, model, maxTokens, onDetail),
+            STEP_TIMEOUT_MS, `step ${step.id}: ${step.title}`,
+          );
 
           previousContext.push(result.context);
           allFilesProduced.push(...result.context.filesWritten);
           stepSummary = result.context.summary;
           stepSuccess = result.success;
-          break;
+          lastFilesWritten = result.context.filesWritten;
+          lastCommandsRun = result.context.commandsRun;
+
+          if (stepSuccess) break;
+
+          // Completed but verification failed — record for Co Work
+          lastErrorContext = result.rawOutput.slice(0, 800) || 'Step completed but verification failed — output was empty, incomplete, or contained errors.';
         } catch (err) {
-          log.warn({ err, stepId: step.id, attempt }, 'Step execution error');
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn({ err: msg, stepId: step.id, attempt }, 'Step execution error');
+          lastErrorContext = msg;
+
           if (attempt < MAX_STEP_RETRIES) {
             await updateProgress(`Retrying step ${step.id} (attempt ${attempt + 2})...`, step.id);
             await delay(2000);
           } else {
-            stepSummary = `Step failed after ${MAX_STEP_RETRIES + 1} attempts: ${err instanceof Error ? err.message : String(err)}`;
-            stepSuccess = false;
+            stepSummary = `Step failed after ${MAX_STEP_RETRIES + 1} attempts: ${msg}`;
           }
         }
+      }
+
+      // ── Phase 2: Co Work (if phase 1 failed) ────────────────────────────
+      if (!stepSuccess) {
+        const stepCoworkEvents: CoWorkEvent[] = [];
+        const previousSuggestions: string[] = [];
+
+        for (let cwAttempt = 1; cwAttempt <= MAX_COWORK_ATTEMPTS; cwAttempt++) {
+          log.info({ stepId: step.id, cwAttempt }, 'Activating Co Work');
+          await updateProgress(`🧠 Phoning a friend... (Co Work ${cwAttempt}/${MAX_COWORK_ATTEMPTS})`, step.id);
+
+          // Notify user that Co Work is active
+          try {
+            await telegram.sendMessage(
+              chatId,
+              `🧠 <i>Step ${step.id} hit a wall — consulting Co Work (${cwAttempt}/${MAX_COWORK_ATTEMPTS})…</i>`,
+              { parseMode: 'HTML' },
+            );
+          } catch (e) { log.debug({ e }, 'Failed to send Co Work notification'); }
+
+          // Consult Co Work
+          let hint: import('../agents/cowork.js').CoWorkResponse;
+          try {
+            hint = await coworkAgent.consult({
+              taskTitle: plan.title,
+              stepTitle: step.title,
+              stepGoal: step.description,
+              originalRequest,
+              errorContext: lastErrorContext,
+              filesWritten: lastFilesWritten,
+              commandsRun: lastCommandsRun,
+              previousSuggestions,
+              attemptNumber: cwAttempt,
+            });
+          } catch (coworkErr) {
+            log.warn({ coworkErr, stepId: step.id }, 'Co Work consultation failed — skipping');
+            break;
+          }
+
+          previousSuggestions.push(hint.suggestion);
+
+          // Try the step again with Co Work hint injected
+          try {
+            const result = await withTimeout(
+              executeStep(step, plan, originalRequest, previousContext, ai, toolExecutor, model, maxTokens, onDetail, hint, cwAttempt),
+              STEP_TIMEOUT_MS, `step ${step.id} cowork-${cwAttempt}`,
+            );
+
+            previousContext.push(result.context);
+            allFilesProduced.push(...result.context.filesWritten);
+            stepSummary = result.context.summary;
+            stepSuccess = result.success;
+            lastFilesWritten = result.context.filesWritten;
+            lastCommandsRun = result.context.commandsRun;
+
+            const outcome = stepSuccess ? 'resolved' : 'failed';
+            const event: CoWorkEvent = {
+              stepId: step.id,
+              attemptNumber: cwAttempt,
+              diagnosis: hint.diagnosis,
+              suggestion: hint.suggestion,
+              outcome,
+            };
+            stepCoworkEvents.push(event);
+
+            if (stepSuccess) {
+              log.info({ stepId: step.id, cwAttempt }, 'Co Work resolved the step');
+              try {
+                await telegram.sendMessage(
+                  chatId,
+                  `✅ <i>Co Work suggestion worked — step ${step.id} resolved.</i>`,
+                  { parseMode: 'HTML' },
+                );
+              } catch (e) { log.debug({ e }, 'Failed to send Co Work success notification'); }
+              break;
+            }
+
+            // Still failing — update error context for next Co Work round
+            lastErrorContext = result.rawOutput.slice(0, 800) || `Co Work suggestion applied but step still failed.`;
+
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            lastErrorContext = msg;
+            stepCoworkEvents.push({
+              stepId: step.id,
+              attemptNumber: cwAttempt,
+              diagnosis: hint.diagnosis,
+              suggestion: hint.suggestion,
+              outcome: 'failed',
+            });
+            log.warn({ err: msg, stepId: step.id, cwAttempt }, 'Step still failed after Co Work suggestion');
+          }
+
+          if (!stepSuccess && cwAttempt === MAX_COWORK_ATTEMPTS) {
+            // All Co Work attempts exhausted
+            log.warn({ stepId: step.id }, 'Co Work exhausted all attempts — step marked as failed');
+            try {
+              await telegram.sendMessage(
+                chatId,
+                `⚠️ <i>I phoned a friend ${MAX_COWORK_ATTEMPTS} times for step ${step.id} — we couldn't crack it. Moving on and flagging for your review.</i>`,
+                { parseMode: 'HTML' },
+              );
+            } catch (e) { log.debug({ e }, 'Failed to send Co Work exhausted notification'); }
+            stepSummary = `Step failed after ${MAX_COWORK_ATTEMPTS} Co Work consultations. Last diagnosis: ${hint.diagnosis}`;
+          }
+        }
+
+        allCoworkEvents.push(...stepCoworkEvents);
       }
 
       const stepDuration = Date.now() - stepStart;
