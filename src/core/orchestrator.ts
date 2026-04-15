@@ -524,10 +524,12 @@ export class Orchestrator {
         this.personality.processEvent('user_message');
         // Still let the LLM respond naturally — the system prompt handles the deflection
         // Just flag it in memory so NEXUS is aware of the pattern
-        this.memory.store('semantic', 'fact',
-          `User asked about NEXUS internals/infrastructure: "${text.slice(0, 200)}"`,
-          { importance: 0.5, tags: ['undercover', 'probe'], source: chatId },
-        ).catch((e) => log.debug({ e }, 'Failed to store probe detection'));
+        try {
+          this.memory.store('semantic', 'fact',
+            `User asked about NEXUS internals/infrastructure: "${text.slice(0, 200)}"`,
+            { importance: 0.5, tags: ['undercover', 'probe'], source: chatId },
+          );
+        } catch (e) { log.debug({ e }, 'Failed to store probe detection'); }
       }
 
       const injectionResult = detectInjection(text);
@@ -578,10 +580,12 @@ export class Orchestrator {
         const severity = frustrationScore >= 2 ? 'high' : 'low';
         log.info({ chatId, score: frustrationScore, severity }, 'User frustration detected');
         // Store as a semantic memory so future tasks recall the user was unhappy here
-        this.memory.store('semantic', 'fact',
-          `User showed frustration (severity: ${severity}) while discussing: "${text.slice(0, 200)}"`,
-          { importance: 0.75, tags: ['frustration', 'user-emotion', severity], source: chatId },
-        ).catch((e) => log.debug({ e }, 'Failed to store frustration memory'));
+        try {
+          this.memory.store('semantic', 'fact',
+            `User showed frustration (severity: ${severity}) while discussing: "${text.slice(0, 200)}"`,
+            { importance: 0.75, tags: ['frustration', 'user-emotion', severity], source: chatId },
+          );
+        } catch (e) { log.debug({ e }, 'Failed to store frustration memory'); }
         // Feed into learning system so preferences update
         this.learning.feedback.processExplicitFeedback(text, 'user expressed frustration or correction');
       }
@@ -1210,10 +1214,12 @@ export class Orchestrator {
         this.selfEvaluator.evaluate(evalQuery, evalResponse, isTaskMessage).then(async (note) => {
           if (note) {
             // Store as a high-importance reflection memory so it surfaces in future recall
-            this.memory.store('episodic', 'fact',
-              `Self-reflection: response to "${evalQuery.slice(0, 100)}" had a gap — ${note}`,
-              { importance: 0.65, tags: ['self-eval', 'reflection', 'improvement'], source: 'self-evaluator' },
-            ).catch((e) => log.debug({ e }, 'Failed to store self-eval reflection'));
+            try {
+              this.memory.store('episodic', 'fact',
+                `Self-reflection: response to "${evalQuery.slice(0, 100)}" had a gap — ${note}`,
+                { importance: 0.65, tags: ['self-eval', 'reflection', 'improvement'], source: 'self-evaluator' },
+              );
+            } catch (e) { log.debug({ e }, 'Failed to store self-eval reflection'); }
 
             // Record as a tracked mistake so /mistakes shows it and prevention checks catch it
             this.learning.mistakes.recordMistake(

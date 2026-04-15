@@ -856,7 +856,7 @@ export async function runTask(opts: {
   // ── Send final summary as a separate message ──────────────────────────────
   const totalDuration = Date.now() - startTime;
   const uniqueFiles = [...new Set(allFilesProduced)];
-  const summaryMsg = formatFinalSummary(plan, uniqueFiles, totalDuration, stepResults);
+  const summaryMsg = formatFinalSummary(plan, uniqueFiles, totalDuration, stepResults, allCoworkEvents);
 
   try {
     await telegram.sendMessage(chatId, summaryMsg, { parseMode: 'HTML' });

@@ -72,6 +72,12 @@ describe('classifyMessage', () => {
       expect(classifyMessage('are you able to help?')).toBe('chat');
     });
 
+    it('should classify future goal statements as chat', () => {
+      expect(classifyMessage('I want to launch my personal portfolio website next month')).toBe('chat');
+      expect(classifyMessage('I hope to ship my app by end of quarter')).toBe('chat');
+      expect(classifyMessage('I\'m planning to release my SaaS next year')).toBe('chat');
+    });
+
     it('should classify [PHOTO] prefixed messages as chat', () => {
       expect(classifyMessage('[PHOTO] /path/to/image.jpg\nWhat is this?')).toBe('chat');
     });
@@ -219,6 +225,14 @@ describe('detectMissingRequirements', () => {
   });
 
   describe('should NOT request clarification', () => {
+    it('goal statement with future time reference — "next month"', () => {
+      expect(detectMissingRequirements('I want to launch my personal portfolio website next month')).toBeNull();
+    });
+
+    it('goal statement — "I want to ship my app"', () => {
+      expect(detectMissingRequirements('I want to ship my app next week')).toBeNull();
+    });
+
     it('website with clear purpose', () => {
       expect(detectMissingRequirements('create a portfolio website for my friend who is a photographer')).toBeNull();
     });

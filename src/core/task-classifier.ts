@@ -28,7 +28,8 @@ const TASK_TRIGGERS: RegExp[] = [
   /\b(?:and\s+(?:then|also)|then\s+(?:run|test|deploy)|with\s+(?:a|an|the)\s+\w+\s+and)\b/i,
 ];
 
-// Patterns that strongly signal the user wants to CHAT (not do work)
+// Patterns that signal chat — only checked when NO work verb is present
+// (avoids overriding "can you build me an app?" style requests)
 const CHAT_OVERRIDES: RegExp[] = [
   // Pure greetings
   /^(?:hi|hey|hello|yo|sup|howdy)\b/i,
@@ -40,6 +41,15 @@ const CHAT_OVERRIDES: RegExp[] = [
   /^(?:do you|are you|is it|can it|will it|should i|would you)\b/i,
   // Very short question (under 40 chars) ending in ?
   /^.{1,40}\?$/,
+];
+
+// Patterns that ALWAYS win — even when a work verb is present.
+// Used for goal/intent statements that look like tasks but are actually conversational.
+const STRONG_CHAT_OVERRIDES: RegExp[] = [
+  // Future-tense goal statements: "I want to launch X next month", "I'm planning to ship"
+  // These express future intent, not an immediate request to start work
+  /\b(?:want\s+to|hope\s+to|planning\s+to|trying\s+to|looking\s+to|aiming\s+to|going\s+to)\s+(?:launch|ship|release|finish|complete|deploy|publish|go\s+live|get\s+done|have\s+ready)\b/i,
+  /\b(?:launch|ship|release|finish|complete|deploy)\s+.{3,50}\s+(?:next\s+(?:week|month|year|quarter)|by\s+(?:next|end|then)|eventually|someday)\b/i,
 ];
 
 // Internal system prefixes that must never be routed to the task planner
@@ -123,6 +133,10 @@ const HAS_CONTEXT_PATTERNS: RegExp[] = [
   /\bwho\s+(?:is\s+a|is\s+an|works?\s+as|works?\s+in|does)\b/i,
   // Purpose clause with "so that" or "in order to"
   /\b(?:so\s+that|in\s+order\s+to)\b/i,
+  // Future time reference → goal/plan statement, not an immediate build request
+  /\b(?:next\s+(?:week|month|year|quarter)|by\s+(?:next|end\s+of|the\s+end)|eventually|someday|soon|one\s+day|in\s+the\s+future|down\s+the\s+road)\b/i,
+  // "launch/ship/release/finish/complete" — goal verbs, not build verbs
+  /\b(?:want\s+to\s+(?:launch|ship|release|finish|complete|deploy|go\s+live)|trying\s+to\s+(?:launch|ship|build|grow|scale))\b/i,
 ];
 
 /**
@@ -194,6 +208,9 @@ export function classifyMessage(text: string): MessageType {
   if (SYSTEM_PREFIXES.some((p) => trimmed.startsWith(p))) return 'chat';
 
   if (trimmed.length < MIN_TASK_LENGTH) return 'chat';
+
+  // Strong chat overrides always win — even when a work verb is present
+  if (STRONG_CHAT_OVERRIDES.some((p) => p.test(trimmed))) return 'chat';
 
   const hasWorkVerb = new RegExp(`\\b${WORK_VERBS}\\b`, 'i').test(trimmed);
 
