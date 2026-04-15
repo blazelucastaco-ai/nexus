@@ -165,24 +165,55 @@ warn('Telegram token validity', () => {
   }
 });
 
-warn('AI provider connectivity', () => {
-  const geminiKey = process.env.GEMINI_API_KEY ?? process.env.NEXUS_AI_KEY ?? '';
-  const openaiKey = process.env.OPENAI_API_KEY ?? '';
+check('Anthropic API key set', () => {
+  const key =
+    process.env.ANTHROPIC_API_KEY ??
+    (() => {
+      try {
+        const env = readFileSync(ENV_PATH, 'utf-8');
+        const match = env.match(/ANTHROPIC_API_KEY=([^\n]+)/);
+        return match?.[1]?.trim() ?? '';
+      } catch {
+        return '';
+      }
+    })();
 
-  if (!geminiKey && !openaiKey) {
-    return {
-      ok: false,
-      detail: 'No AI API key found (GEMINI_API_KEY or OPENAI_API_KEY)',
-      fix: 'Add your AI provider API key to .env',
-    };
+  const set = !!(key && key.length > 10 && key !== 'your_anthropic_api_key');
+  return {
+    ok: set,
+    detail: set ? `Key present (${key.slice(0, 8)}…)` : 'ANTHROPIC_API_KEY not set',
+    fix: 'Get an API key at console.anthropic.com, add ANTHROPIC_API_KEY to .env',
+  };
+});
+
+warn('Anthropic API connectivity', () => {
+  const key =
+    process.env.ANTHROPIC_API_KEY ??
+    (() => {
+      try {
+        const env = readFileSync(ENV_PATH, 'utf-8');
+        const match = env.match(/ANTHROPIC_API_KEY=([^\n]+)/);
+        return match?.[1]?.trim() ?? '';
+      } catch {
+        return '';
+      }
+    })();
+
+  if (!key || key.length < 10 || key === 'your_anthropic_api_key') {
+    return { ok: false, detail: 'No key to validate' };
   }
 
-  return {
-    ok: true,
-    detail: geminiKey
-      ? `Gemini key present (${geminiKey.slice(0, 6)}…)`
-      : `OpenAI key present (${openaiKey.slice(0, 6)}…)`,
-  };
+  try {
+    const result = run(
+      `curl -s --max-time 8 -o /dev/null -w "%{http_code}" https://api.anthropic.com/v1/models -H "x-api-key: ${key}" -H "anthropic-version: 2023-06-01"`,
+    );
+    const code = parseInt(result.trim(), 10);
+    if (code === 200) return { ok: true, detail: 'Anthropic API reachable and key valid' };
+    if (code === 401) return { ok: false, detail: 'Invalid API key (401)', fix: 'Check ANTHROPIC_API_KEY in .env' };
+    return { ok: false, detail: `Unexpected HTTP ${code}`, fix: 'Check network connectivity or Anthropic status' };
+  } catch {
+    return { ok: false, detail: 'Could not reach Anthropic API (network?)', fix: 'Check internet connectivity' };
+  }
 });
 
 check('Memory DB integrity', () => {
