@@ -21,6 +21,7 @@ const log = createLogger('TaskRunner');
 const MAX_STEP_ITERATIONS    = 25;       // Per-step tool loop limit
 const MAX_STEP_RETRIES       = 1;        // Standard retries before Co Work activates
 const MAX_COWORK_ATTEMPTS    = 3;        // Max Co Work consultations per step
+const MAX_COWORK_TOTAL       = 3;        // Hard cap on Co Work calls for entire task
 const TOOL_TIMEOUT_MS        = 120_000;  // Per-tool call timeout
 const STEP_TIMEOUT_MS        = 5 * 60 * 1000;  // 5 min max per step
 const TASK_TIMEOUT_MS        = 25 * 60 * 1000; // 25 min max per whole task
@@ -57,6 +58,7 @@ function buildStepSystemPrompt(
   previousContext: StepContext[],
   coworkHint?: CoWorkResponse | null,
   coworkAttemptNumber?: number,
+  skillsContext?: string,
 ): string {
   const prevSummary = previousContext.length > 0
     ? previousContext.map((c, i) => `Step ${i + 1}: ${c.summary}${c.filesWritten.length > 0 ? ` [Files: ${c.filesWritten.join(', ')}]` : ''}`).join('\n')
@@ -70,9 +72,20 @@ function buildStepSystemPrompt(
     ? formatCoWorkHint(coworkHint, coworkAttemptNumber ?? 1)
     : '';
 
+  const skillsSection = skillsContext
+    ? `\n━━━ RELEVANT SKILLS ━━━\n${skillsContext}\n━━━━━━━━━━━━━━━━━━━━━━━\n`
+    : '';
+
+  // Detect URLs in the original request so NEXUS knows to use browser tools
+  const urlMatches = originalRequest.match(/https?:\/\/[^\s]+|(?:tiktok|instagram|twitter|github|youtube|linkedin)\.com\/[^\s]*/gi);
+  const urlSection = urlMatches && urlMatches.length > 0
+    ? `\nREFERENCE URLs — MUST use browser tools:\n${urlMatches.map((u) => `  • ${u}`).join('\n')}\nIMPORTANT: Use browser_navigate to open each URL. Do NOT use curl, fetch, or wget — social platforms (TikTok, Instagram, Twitter) block automated HTTP clients and will return bot-challenge pages. If the browser is unavailable or returns an error, write a placeholder note and proceed with whatever information you already have.\n`
+    : '';
+
   return `You are NEXUS, a CLI-grade AI agent executing a task on macOS.
 
 ORIGINAL REQUEST: ${originalRequest}
+${urlSection}
 
 FULL PLAN: "${plan.title}"
 Project directory: ${plan.projectDir}
@@ -104,16 +117,22 @@ ${coworkSection}
 macOS notes:
 - Shell: /bin/zsh. No GNU-only flags. No declare -A.
 - Python paths: os.path.expanduser('~/...')
-- Make scripts executable: chmod +x <script>`;
+- Make scripts executable: chmod +x <script>${skillsSection}`;
 }
 
 // ─── Verification Prompt ──────────────────────────────────────────────────────
 
 function buildVerifyPrompt(step: TaskStep, filesWritten: string[]): string {
-  if (filesWritten.length === 0) {
-    return `Verify that step "${step.title}" was completed successfully. Check for any output or side effects.`;
-  }
-  return `Verify step "${step.title}" is complete. Use read_file to read back these files and confirm they have proper, complete content (not empty, not placeholder): ${filesWritten.join(', ')}. Report what you found.`;
+  const fileList = filesWritten.join(', ');
+  return `Verify step "${step.title}" is complete.
+
+${filesWritten.length > 0 ? `Use read_file to check these files: ${fileList}` : 'Check for any output or side effects.'}
+
+After checking, respond with EXACTLY one of these two lines (nothing else before it):
+  VERIFIED: PASS — [one sentence summary of what was found]
+  VERIFIED: FAIL — [specific reason: empty file / only TODO stubs / critical syntax error]
+
+Only fail if the file is literally empty, contains only placeholder stubs like "// TODO" or "Lorem ipsum", or has a syntax error so severe the file cannot run at all. Real content with minor issues = PASS.`;
 }
 
 // ─── Step Verification ────────────────────────────────────────────────────────
@@ -175,13 +194,13 @@ async function verifyStep(
     }
   }
 
-  // Verification passes if the LLM didn't flag problems
-  const lowerContent = lastContent.toLowerCase();
-  const failed = lowerContent.includes('empty') || lowerContent.includes('placeholder') ||
-    lowerContent.includes('incomplete') || lowerContent.includes('missing') ||
-    lowerContent.includes('error') || lowerContent.includes('not found');
+  // Only fail if the LLM explicitly said VERIFIED: FAIL
+  // Keyword scanning ("error", "missing") caused massive false positives — removed.
+  const failed = lastContent.includes('VERIFIED: FAIL');
+  const summary = (lastContent.match(/VERIFIED:\s*(?:PASS|FAIL)\s*[—-]\s*(.+)/)?.[1]?.trim())
+    ?? (lastContent.slice(0, 200) || 'Verified.');
 
-  return { passed: !failed, summary: lastContent.slice(0, 300) || 'Verified.' };
+  return { passed: !failed, summary };
 }
 
 // ─── Progress Message Helpers ─────────────────────────────────────────────────
@@ -268,9 +287,10 @@ async function executeStep(
   onDetail?: (detail: string) => void,
   coworkHint?: CoWorkResponse | null,
   coworkAttemptNumber?: number,
+  skillsContext?: string,
 ): Promise<{ success: boolean; context: StepContext; rawOutput: string; verified: boolean }> {
   const tools = toOpenAITools();
-  const systemPrompt = buildStepSystemPrompt(originalRequest, plan, step, previousContext, coworkHint, coworkAttemptNumber);
+  const systemPrompt = buildStepSystemPrompt(originalRequest, plan, step, previousContext, coworkHint, coworkAttemptNumber, skillsContext);
 
   const loopMessages: AIMessage[] = [
     {
@@ -542,8 +562,10 @@ export async function runTask(opts: {
   model: string;
   maxTokens: number;
   coordinatorMode?: boolean;
+  /** Pre-selected relevant skill bodies to inject into every step prompt */
+  skillsContext?: string;
 }): Promise<TaskRunResult> {
-  const { plan, originalRequest, chatId, ai, toolExecutor, telegram, model, coordinatorMode } = opts;
+  const { plan, originalRequest, chatId, ai, toolExecutor, telegram, model, coordinatorMode, skillsContext } = opts;
   if (coordinatorMode) {
     log.info({ title: plan.title, steps: plan.steps.length }, 'Coordinator mode — parallel step execution');
   }
@@ -559,6 +581,7 @@ export async function runTask(opts: {
   const stepResults: Array<{ step: TaskStep; success: boolean; summary: string }> = [];
   const previousContext: StepContext[] = [];
   const allCoworkEvents: CoWorkEvent[] = [];
+  let coworkTotalUsed = 0; // Global Co Work budget — capped at MAX_COWORK_TOTAL for the whole task
 
   // Co Work agent — instantiated once per task, reused across steps
   const coworkAgent = new CoWorkAgent(ai);
@@ -696,7 +719,7 @@ export async function runTask(opts: {
       for (let attempt = 0; attempt <= MAX_STEP_RETRIES; attempt++) {
         try {
           const result = await withTimeout(
-            executeStep(step, plan, originalRequest, previousContext, ai, toolExecutor, model, maxTokens, onDetail),
+            executeStep(step, plan, originalRequest, previousContext, ai, toolExecutor, model, maxTokens, onDetail, undefined, undefined, skillsContext),
             STEP_TIMEOUT_MS, `step ${step.id}: ${step.title}`,
           );
 
@@ -726,11 +749,11 @@ export async function runTask(opts: {
       }
 
       // ── Phase 2: Co Work (if phase 1 failed) ────────────────────────────
-      if (!stepSuccess) {
+      if (!stepSuccess && coworkTotalUsed < MAX_COWORK_TOTAL) {
         const stepCoworkEvents: CoWorkEvent[] = [];
         const previousSuggestions: string[] = [];
 
-        for (let cwAttempt = 1; cwAttempt <= MAX_COWORK_ATTEMPTS; cwAttempt++) {
+        for (let cwAttempt = 1; cwAttempt <= MAX_COWORK_ATTEMPTS && coworkTotalUsed < MAX_COWORK_TOTAL; cwAttempt++) {
           log.info({ stepId: step.id, cwAttempt }, 'Activating Co Work');
           await updateProgress(`🧠 Phoning a friend... (Co Work ${cwAttempt}/${MAX_COWORK_ATTEMPTS})`, step.id);
 
@@ -767,7 +790,7 @@ export async function runTask(opts: {
           // Try the step again with Co Work hint injected
           try {
             const result = await withTimeout(
-              executeStep(step, plan, originalRequest, previousContext, ai, toolExecutor, model, maxTokens, onDetail, hint, cwAttempt),
+              executeStep(step, plan, originalRequest, previousContext, ai, toolExecutor, model, maxTokens, onDetail, hint, cwAttempt, skillsContext),
               STEP_TIMEOUT_MS, `step ${step.id} cowork-${cwAttempt}`,
             );
 
@@ -787,6 +810,7 @@ export async function runTask(opts: {
               outcome,
             };
             stepCoworkEvents.push(event);
+            coworkTotalUsed++;
 
             if (stepSuccess) {
               log.info({ stepId: step.id, cwAttempt }, 'Co Work resolved the step');
@@ -813,6 +837,7 @@ export async function runTask(opts: {
               suggestion: hint.suggestion,
               outcome: 'failed',
             });
+            coworkTotalUsed++;
             log.warn({ err: msg, stepId: step.id, cwAttempt }, 'Step still failed after Co Work suggestion');
           }
 

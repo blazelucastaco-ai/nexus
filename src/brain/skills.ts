@@ -91,16 +91,67 @@ export async function loadSkills(): Promise<Skill[]> {
 }
 
 /**
+ * Score a skill's relevance to a piece of text (0 = no match, higher = more relevant).
+ * Matches against skill name, description, and trigger keywords.
+ */
+function scoreSkillRelevance(skill: Skill, text: string): number {
+  const lower = text.toLowerCase();
+  let score = 0;
+
+  // Trigger keyword matches (strongest signal)
+  for (const trigger of skill.triggers) {
+    if (lower.includes(trigger.toLowerCase())) score += 3;
+  }
+
+  // Name / description word matches
+  const nameWords = skill.name.toLowerCase().split(/\s+/);
+  for (const word of nameWords) {
+    if (word.length > 3 && lower.includes(word)) score += 1;
+  }
+
+  return score;
+}
+
+/**
+ * Select the most relevant skills for a given request text.
+ * Returns at most `maxSkills` skills with a relevance score > 0,
+ * sorted by score descending. Falls back to all skills if nothing matches.
+ */
+export function selectRelevantSkills(skills: Skill[], text: string, maxSkills = 3): Skill[] {
+  if (skills.length === 0) return [];
+
+  const scored = skills
+    .map((s) => ({ skill: s, score: scoreSkillRelevance(s, text) }))
+    .filter((s) => s.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, maxSkills)
+    .map((s) => s.skill);
+
+  // If nothing matched, return the top 2 by name (generic fallback)
+  return scored.length > 0 ? scored : skills.slice(0, 2);
+}
+
+/**
  * Build the skills section to inject into the system prompt.
+ * Pass `text` to select only relevant skills; omit to include all.
  * Returns empty string if no skills found.
  */
-export function buildSkillsPrompt(skills: Skill[]): string {
+export function buildSkillsPrompt(skills: Skill[], text?: string): string {
   if (skills.length === 0) return '';
 
+  const relevant = text ? selectRelevantSkills(skills, text) : skills;
+  if (relevant.length === 0) return '';
+
   const lines = [
-    '## Available Skills',
+    '## Active Skills',
     '',
-    ...skills.map((s) => `- **${s.name}**: ${s.description}`),
+    ...relevant.flatMap((s) => [
+      `### ${s.name}`,
+      s.description,
+      '',
+      s.body,
+      '',
+    ]),
   ];
 
   return lines.join('\n');

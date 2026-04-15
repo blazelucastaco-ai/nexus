@@ -36,7 +36,8 @@ import { MemorySynthesizer } from '../brain/memory-synthesizer.js';
 import { GoalTracker } from '../brain/goal-tracker.js';
 import { ReasoningTrace } from '../brain/reasoning-trace.js';
 import { SelfEvaluator } from '../brain/self-evaluator.js';
-import { loadSkills, buildSkillsPrompt } from '../brain/skills.js';
+import { loadSkills, buildSkillsPrompt, selectRelevantSkills } from '../brain/skills.js';
+import type { Skill } from '../brain/skills.js';
 import { contextCache } from './context-cache.js';
 import { checkContextUsage, aggressiveCompact } from './context-guard.js';
 import { repairToolResult } from './transcript-repair.js';
@@ -209,6 +210,14 @@ export class Orchestrator {
 
   // FIX 5: Runtime skill injection
   private cachedSkillsPrompt = '';
+  private loadedSkills: Skill[] = [];
+
+  // Interactive requirements gathering — tracks in-progress project conversations per chat
+  private pendingProjects = new Map<string, {
+    originalRequest: string;
+    answers: string[];      // accumulated user answers
+    questionRound: number;  // how many rounds of questions asked
+  }>();
 
   // FIX 6: Per-chatId command queue for serialization
   private commandQueues = new Map<string, Promise<void>>();
@@ -338,12 +347,13 @@ export class Orchestrator {
     log.info('Starting NEXUS...');
     this.eventLoop.start();
 
-    // FIX 5: Load runtime skills and cache the prompt injection
+    // FIX 5: Load runtime skills — stored raw for per-request relevance selection
     try {
-      const skills = await loadSkills();
-      this.cachedSkillsPrompt = buildSkillsPrompt(skills);
-      if (skills.length > 0) {
-        log.info({ count: skills.length }, 'Runtime skills loaded');
+      this.loadedSkills = await loadSkills();
+      // Fallback: cache a generic prompt with all skills (used in non-task chat)
+      this.cachedSkillsPrompt = buildSkillsPrompt(this.loadedSkills);
+      if (this.loadedSkills.length > 0) {
+        log.info({ count: this.loadedSkills.length }, 'Runtime skills loaded');
       }
     } catch (err) {
       log.warn({ err }, 'Failed to load runtime skills — continuing without them');
@@ -685,6 +695,81 @@ export class Orchestrator {
       // the TaskRunner which executes it step-by-step with live progress.
       const messageType = classifyMessage(text);
       const isTaskMessage = messageType === 'task';
+
+      // ── Check if user is answering requirements questions ────────────────
+      if (this.pendingProjects.has(chatId)) {
+        const pending = this.pendingProjects.get(chatId)!;
+        pending.answers.push(text);
+
+        // Build full context from original request + all answers
+        const fullContext = `${pending.originalRequest}\n\nUser provided these details:\n${pending.answers.map((a, i) => `Round ${i + 1}: ${a}`).join('\n')}`;
+
+        // Ask LLM if we have enough to start or need more info
+        const readinessCheck = await this.ai.complete({
+          model: this.config.ai.model,
+          maxTokens: 512,
+          temperature: 0.1,
+          systemPrompt: `You are deciding whether there is enough information to start a coding/web project.
+Respond with EXACTLY one of:
+  READY — [one sentence summary of what to build]
+  NEED_MORE — [one specific follow-up question, max 2 sentences]
+
+Only say READY if you know: what the project is, who it's for, and what it should contain/do.
+If any of those are unclear, say NEED_MORE with the most important missing question.`,
+          messages: [{ role: 'user', content: fullContext }],
+        });
+
+        const readiness = readinessCheck.content ?? '';
+
+        if (readiness.startsWith('READY') || pending.questionRound >= 2) {
+          // Enough info — start the task with the enriched request
+          this.pendingProjects.delete(chatId);
+          const enrichedRequest = fullContext;
+          log.info({ chatId }, 'Requirements gathered — proceeding to task planning');
+
+          const taskMode = classifyTaskMode(enrichedRequest);
+          const useCoordinator = taskMode === 'coordinator';
+          const useUltra = taskMode === 'ultra';
+          const plan = await planTask(enrichedRequest, this.ai, this.config.ai.model, useCoordinator);
+
+          if (plan) {
+            if (useUltra) return await this.handleUltraMode(plan, enrichedRequest, chatId);
+
+            const taskSkillsContext = buildSkillsPrompt(this.loadedSkills, enrichedRequest);
+            const taskPromise = new Promise<void>((resolve) => {
+              setImmediate(() => {
+                runTask({
+                  plan, originalRequest: enrichedRequest, chatId,
+                  ai: this.ai, toolExecutor: this.toolExecutor, telegram: this.telegram,
+                  model: this.config.ai.model, maxTokens: this.config.ai.maxTokens,
+                  coordinatorMode: useCoordinator, skillsContext: taskSkillsContext || undefined,
+                }).then(async (result) => {
+                  try {
+                    await this.memory.store('episodic', 'task',
+                      `Task: ${plan.title}\nRequest: ${enrichedRequest}\nResult: ${result.success ? 'success' : 'partial'}`,
+                      { importance: 0.8, tags: ['task', result.success ? 'success' : 'failure'], source: chatId },
+                    );
+                  } catch { /* non-fatal */ }
+                  this.personality.processEvent(result.success ? 'task_success' : 'task_failure');
+                  if (result.success) this.resolveMatchingGoals(enrichedRequest);
+                }).catch((err) => {
+                  log.error({ err, chatId }, 'Task runner failed');
+                  this.telegram.sendMessage(chatId, 'Task failed unexpectedly.').catch(() => {});
+                }).finally(resolve);
+              });
+            });
+            this.pendingTaskPromises.push(taskPromise);
+            return `Got it — on it now. Planning your task...`;
+          }
+          return `I have enough info — let me start on that.`;
+        }
+
+        // Need more — ask the follow-up question from the LLM
+        pending.questionRound++;
+        const question = readiness.replace(/^NEED_MORE\s*[—-]?\s*/i, '').trim();
+        return question || `Can you tell me a bit more about what you need?`;
+      }
+
       if (messageType === 'task') {
         // Auto-detect execution mode from the request itself
         const taskMode = classifyTaskMode(text);
@@ -693,10 +778,11 @@ export class Orchestrator {
 
         log.info({ chatId, taskMode }, 'Message classified as task — routing to TaskEngine');
 
-        // ── Requirements gate: ask for details before doing anything ──────────
+        // ── Requirements gate: ask for details, store pending project ─────────
         const missingInfo = detectMissingRequirements(text);
         if (missingInfo) {
-          log.info({ chatId }, 'Task lacks required details — requesting clarification before planning');
+          log.info({ chatId }, 'Task lacks required details — starting requirements conversation');
+          this.pendingProjects.set(chatId, { originalRequest: text, answers: [], questionRound: 1 });
           return missingInfo;
         }
 
@@ -711,6 +797,7 @@ export class Orchestrator {
           }
 
           // ── Standard / Coordinator Mode: run async ────────────────────────
+          const taskSkillsContext = buildSkillsPrompt(this.loadedSkills, text);
           const taskPromise = new Promise<void>((resolve) => {
             setImmediate(() => {
               runTask({
@@ -723,6 +810,7 @@ export class Orchestrator {
                 model: this.config.ai.model,
                 maxTokens: this.config.ai.maxTokens,
                 coordinatorMode: useCoordinator,
+                skillsContext: taskSkillsContext || undefined,
               }).then(async (result) => {
                 log.info({ chatId, success: result.success, steps: result.completedSteps }, 'Task completed');
                 try {

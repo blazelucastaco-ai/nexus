@@ -116,10 +116,12 @@ const FIX_VERBS = /\b(?:fix|debug|repair|troubleshoot|diagnose|solve|investigate
  * If any of these match, requirements are likely present.
  */
 const HAS_CONTEXT_PATTERNS: RegExp[] = [
+  // Explicit file path in the request ("at /tmp/file.py", "at ~/project/foo.ts") — fully specified
+  /\bat\s+[/~][\w\-./~]+\.\w+/i,
   // Describes purpose: "that does X", "which helps Y", "to track Z", "for tracking"
-  /\bthat\s+(?:does|shows|displays|tracks|manages|handles|allows|helps|lets|stores|sends|receives|fetches|connects)\b/i,
-  /\bwhich\s+(?:does|shows|tracks|manages|handles|allows|helps|stores|sends)\b/i,
-  /\bto\s+(?:track|manage|store|display|show|handle|allow|help|automate|monitor|send|receive|fetch|parse|convert|generate)\b/i,
+  /\bthat\s+(?:does|shows|displays|tracks|manages|handles|allows|helps|lets|stores|sends|receives|fetches|connects|prints?|outputs?|exports?|returns?|calculates?|reads?|writes?|generates?|parses?|converts?|renders?|runs?|checks?)\b/i,
+  /\bwhich\s+(?:does|shows|tracks|manages|handles|allows|helps|stores|sends|prints?|exports?|returns?)\b/i,
+  /\bto\s+(?:track|manage|store|display|show|handle|allow|help|automate|monitor|send|receive|fetch|parse|convert|generate|print|export|return|calculate|read|write|render|check)\b/i,
   /\bfor\s+(?:tracking|managing|storing|displaying|showing|handling|automating|monitoring|building|selling|booking|scheduling)\b/i,
   // Describes content areas: "with a homepage", "including a login", "pages for X"
   /\b(?:with\s+(?:a|an|the)\s+\w+|including\s+(?:a|an)\s+\w+|pages?\s+for|sections?\s+for|features?\s+(?:like|including|such as))\b/i,
