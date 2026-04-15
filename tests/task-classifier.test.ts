@@ -173,6 +173,10 @@ describe('detectMissingRequirements', () => {
       expect(result).toContain('purpose');
     });
 
+    it('website for my buddy — second real bug report case', () => {
+      expect(detectMissingRequirements('I need a website built for my buddy')).not.toBeNull();
+    });
+
     it('app for a client with no context', () => {
       expect(detectMissingRequirements('can you build an app for my client')).not.toBeNull();
     });
@@ -185,8 +189,20 @@ describe('detectMissingRequirements', () => {
       expect(detectMissingRequirements('build a dashboard for my boss')).not.toBeNull();
     });
 
+    it('website for my mate', () => {
+      expect(detectMissingRequirements('build a website for my mate')).not.toBeNull();
+    });
+
     it('website for someone', () => {
       expect(detectMissingRequirements('make a website for someone')).not.toBeNull();
+    });
+
+    it('past tense build verb — "I need a website built"', () => {
+      expect(detectMissingRequirements('I need a website built')).not.toBeNull();
+    });
+
+    it('"I want a script" — need/want intent', () => {
+      expect(detectMissingRequirements('I want a script')).not.toBeNull();
     });
 
     it('vague short app request with no description', () => {

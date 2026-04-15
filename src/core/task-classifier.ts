@@ -90,8 +90,9 @@ const OUTPUT_TYPES =
  * been gathered from that person yet.
  */
 const THIRD_PARTY_PATTERNS: RegExp[] = [
-  /\bfor\s+(?:my\s+)?(?:friend|client|boss|colleague|partner|coworker|someone|a\s+person|them|him|her|a\s+client|a\s+customer)\b/i,
-  /\bfor\s+(?:my\s+)?(?:friend'?s?|client'?s?|boss'?s?)\b/i,
+  /\bfor\s+(?:my\s+)?(?:friend|buddy|pal|mate|colleague|coworker|co-worker|partner|client|boss|manager|teammate|sibling|brother|sister|neighbor|neighbour|someone|a\s+person|them|him|her|a\s+client|a\s+customer|a\s+friend|a\s+buddy)\b/i,
+  /\bfor\s+(?:my\s+)?(?:friend'?s?|buddy'?s?|client'?s?|boss'?s?)\b/i,
+  /\bfor\s+(?:a\s+)?(?:friend|buddy|pal|mate)\b/i,
 ];
 
 /**
@@ -161,8 +162,13 @@ export function detectMissingRequirements(text: string): string | null {
 
   // Short vague request with a project type but no description of what it does
   if (hasOutputType && trimmed.length < 160) {
+    // Detect implied build intent — present tense, past tense, or "need/want a X"
     const hasWorkVerb = new RegExp(`\\b${WORK_VERBS}\\b`, 'i').test(trimmed);
-    if (!hasWorkVerb) return null; // no work verb = probably just a mention, not a build request
+    const hasPastTenseVerb = /\b(?:built|created|made|developed|written|coded|implemented|programmed|generated|designed)\b/i.test(trimmed);
+    const hasNeedIntent = /\b(?:need|want|would\s+like|looking\s+for)\s+(?:a|an|the|to\s+have)?\s*/i.test(trimmed);
+    const isImpliedBuildRequest = hasWorkVerb || hasPastTenseVerb || hasNeedIntent;
+
+    if (!isImpliedBuildRequest) return null; // just mentioning a project type, not requesting one
 
     const match = trimmed.match(new RegExp(`\\b${OUTPUT_TYPES}\\b`, 'i'));
     const type = match ? match[0] : 'project';
