@@ -12,7 +12,7 @@ import { assembleContext, buildSystemPrompt } from './context.js';
 import { EventLoop } from './event-loop.js';
 import { toOpenAITools } from '../tools/definitions.js';
 import { ToolExecutor } from '../tools/executor.js';
-import { classifyMessage, classifyTaskMode, isUndercoverProbe } from './task-classifier.js';
+import { classifyMessage, classifyTaskMode, isUndercoverProbe, detectMissingRequirements } from './task-classifier.js';
 import { planTask } from './task-planner.js';
 import { runTask } from './task-runner.js';
 import {
@@ -688,6 +688,13 @@ export class Orchestrator {
         const useUltra = taskMode === 'ultra';
 
         log.info({ chatId, taskMode }, 'Message classified as task — routing to TaskEngine');
+
+        // ── Requirements gate: ask for details before doing anything ──────────
+        const missingInfo = detectMissingRequirements(text);
+        if (missingInfo) {
+          log.info({ chatId }, 'Task lacks required details — requesting clarification before planning');
+          return missingInfo;
+        }
 
         // Generate plan (fast LLM call)
         const plan = await planTask(text, this.ai, this.config.ai.model, useCoordinator);

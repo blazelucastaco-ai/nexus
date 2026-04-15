@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyMessage, classifyTaskMode, isUndercoverProbe } from '../src/core/task-classifier.js';
+import { classifyMessage, classifyTaskMode, isUndercoverProbe, detectMissingRequirements } from '../src/core/task-classifier.js';
 
 describe('classifyMessage', () => {
   describe('task classification', () => {
@@ -160,5 +160,79 @@ describe('isUndercoverProbe', () => {
   it('should not flag task requests as probes', () => {
     expect(isUndercoverProbe('create a Python script for me')).toBe(false);
     expect(isUndercoverProbe('fix the bug in my code')).toBe(false);
+  });
+});
+
+// ─── detectMissingRequirements ────────────────────────────────────────────────
+
+describe('detectMissingRequirements', () => {
+  describe('should request clarification', () => {
+    it('website for a friend — exact case from bug report', () => {
+      const result = detectMissingRequirements('I was wondering if you could create a website for my friend');
+      expect(result).not.toBeNull();
+      expect(result).toContain('purpose');
+    });
+
+    it('app for a client with no context', () => {
+      expect(detectMissingRequirements('can you build an app for my client')).not.toBeNull();
+    });
+
+    it('script for a colleague', () => {
+      expect(detectMissingRequirements('write a script for my colleague')).not.toBeNull();
+    });
+
+    it('dashboard for my boss', () => {
+      expect(detectMissingRequirements('build a dashboard for my boss')).not.toBeNull();
+    });
+
+    it('website for someone', () => {
+      expect(detectMissingRequirements('make a website for someone')).not.toBeNull();
+    });
+
+    it('vague short app request with no description', () => {
+      expect(detectMissingRequirements('create a website')).not.toBeNull();
+    });
+
+    it('vague mobile app request', () => {
+      expect(detectMissingRequirements('build me a mobile app')).not.toBeNull();
+    });
+
+    it('vague script request', () => {
+      expect(detectMissingRequirements('write me a script')).not.toBeNull();
+    });
+  });
+
+  describe('should NOT request clarification', () => {
+    it('website with clear purpose', () => {
+      expect(detectMissingRequirements('create a portfolio website for my friend who is a photographer')).toBeNull();
+    });
+
+    it('app with "that does X" context', () => {
+      expect(detectMissingRequirements('build an app that tracks my daily habits')).toBeNull();
+    });
+
+    it('script with "to do X" purpose', () => {
+      expect(detectMissingRequirements('write a Python script to parse CSV files and send a report')).toBeNull();
+    });
+
+    it('website with feature list', () => {
+      expect(detectMissingRequirements('build a landing page with a hero section, pricing, and contact form')).toBeNull();
+    });
+
+    it('tech stack specified', () => {
+      expect(detectMissingRequirements('create a React dashboard using Tailwind')).toBeNull();
+    });
+
+    it('named subject — "for Acme Corp"', () => {
+      expect(detectMissingRequirements('build a website for Acme Corp')).toBeNull();
+    });
+
+    it('debugging request — no output type, already specific', () => {
+      expect(detectMissingRequirements('fix the authentication bug in my login function')).toBeNull();
+    });
+
+    it('non-task message — should return null regardless', () => {
+      expect(detectMissingRequirements('what is the weather today?')).toBeNull();
+    });
   });
 });
