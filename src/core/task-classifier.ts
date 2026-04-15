@@ -64,8 +64,9 @@ const ULTRA_TRIGGERS: RegExp[] = [
   // delete/remove only when operating on infrastructure/data — not on "this line", "this comment", etc.
   /\b(?:delete|remove|drop|wipe|destroy|overwrite)\s+(?:all\s+|the\s+|my\s+|every\s+)?(?:database|table|branch|bucket|file|folder|directory|users?|account|repo(?:sitory)?|server|cluster|data|records?|entries|everything)\b/i,
   /\b(?:send\s+(?:email|message|notification)|post\s+to|submit\s+to)\b/i,
-  // High complexity signals
-  /\b(?:entire|whole|complete|full|end.to.end|from\s+scratch|production.ready|scalable)\b/i,
+  // High complexity signals — only when describing the project itself, not content inside a file
+  /\b(?:entire|whole|complete|full|from\s+scratch|production.ready|scalable)\b/i,
+  /\bend.to.end\s+(?:system|platform|solution|application|pipeline|architecture)\b/i,
   /\b(?:architecture|system\s+design|full\s+stack|infrastructure)\b/i,
   // Multi-domain requests (browser + code + deploy etc.)
   /\b(?:and\s+(?:deploy|release|send|push|publish|post))\b/i,
@@ -155,6 +156,13 @@ export function detectMissingRequirements(text: string): string | null {
 
   // Fix/debug verbs mean existing code — never ask for requirements
   if (FIX_VERBS.test(trimmed)) return null;
+
+  // Primary output is a simple file/note/list — any project-type words are content items, not the request target
+  if (/\b(?:note|reminder|reminders|checklist|list|file|txt|log|diary|journal)\b/i.test(trimmed) &&
+      /\b(?:make|create|write|add|put|save|create)\b/i.test(trimmed)) return null;
+
+  // "with:" or "including:" followed by list items — content specification, not a project build request
+  if (/\bwith\s*:\s*\S/i.test(trimmed) || /\bincluding\s*:\s*\S/i.test(trimmed)) return null;
 
   // Already has enough context — don't block
   if (HAS_CONTEXT_PATTERNS.some((p) => p.test(trimmed))) return null;

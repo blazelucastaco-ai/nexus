@@ -6,6 +6,35 @@ import { retry } from '../utils/retry.js';
 const log = createLogger('ClaudeProvider');
 
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
+
+/**
+ * Remove lone UTF-16 surrogate characters from a string.
+ * Valid surrogate pairs (e.g. emoji like 😄) are preserved; lone surrogates are stripped.
+ * Lone surrogates are invalid in JSON (RFC 8259) and cause Anthropic API 400 errors
+ * when content stored in memory contains incorrectly encoded characters.
+ */
+function stripLoneSurrogates(str: string): string {
+  if (typeof str !== 'string') return str;
+  let result = '';
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      // High surrogate — peek ahead for a low surrogate
+      const next = str.charCodeAt(i + 1);
+      if (next >= 0xDC00 && next <= 0xDFFF) {
+        // Valid pair — keep both
+        result += str[i]! + str[i + 1]!;
+        i++;
+      }
+      // Lone high surrogate — skip it
+    } else if (code >= 0xDC00 && code <= 0xDFFF) {
+      // Lone low surrogate — skip it
+    } else {
+      result += str[i]!;
+    }
+  }
+  return result;
+}
 const MAX_RETRIES = 2;
 
 // ─── Format Converters ────────────────────────────────────────────────────────
@@ -178,13 +207,20 @@ export class ClaudeProvider {
       .map((m) => String(m.content ?? ''))
       .filter(Boolean);
 
-    const fullSystem = [
-      ...(options.systemPrompt ? [options.systemPrompt] : []),
-      ...inlineSystem,
-    ].join('\n\n') || undefined;
+    // Sanitize all text before sending — lone surrogates in stored memory/emoji corrupt JSON
+    const fullSystem = stripLoneSurrogates(
+      [
+        ...(options.systemPrompt ? [options.systemPrompt] : []),
+        ...inlineSystem,
+      ].join('\n\n') || '',
+    ) || undefined;
 
     // Convert messages and tools
-    const anthropicMessages = toAnthropicMessages(options.messages);
+    const cleanMessages = options.messages.map((m) => ({
+      ...m,
+      content: typeof m.content === 'string' ? stripLoneSurrogates(m.content) : m.content,
+    }));
+    const anthropicMessages = toAnthropicMessages(cleanMessages);
     const anthropicTools = toAnthropicTools(options.tools);
 
     // tool_choice: Anthropic uses { type: 'auto' | 'any' | 'none' }
