@@ -38,6 +38,7 @@ import { checkApproval } from '../security/approval-gate.js';
 import type { AgentManager } from '../agents/index.js';
 import type { MemoryManager } from '../memory/index.js';
 import { events } from '../core/events.js';
+import { isNexusSourcePath, SELF_PROTECTION_ERROR, getNexusSourceDir } from '../core/self-protection.js';
 
 const log = createLogger('ToolExecutor');
 const execFileAsync = promisify(execFile);
@@ -185,10 +186,41 @@ function expandPath(p: string): string {
   return p;
 }
 
-/** Validate that a file path is within allowed boundaries (home dir or /tmp). */
+/**
+ * True if a shell command string appears to target the NEXUS source tree —
+ * either by referencing the source directory directly, or by naming one of
+ * the internal source-file paths (e.g. `cat src/brain/orchestrator.ts`).
+ * Heuristic — not bulletproof, but catches the obvious cases.
+ */
+function commandTargetsNexusSource(command: string): boolean {
+  if (!command) return false;
+  const sourceDir = getNexusSourceDir();
+  if (sourceDir && sourceDir !== '__NEXUS_SOURCE_UNKNOWN__') {
+    // Absolute path reference
+    if (command.includes(sourceDir)) return true;
+    // ~/<last-segment-of-source> reference, e.g. ~/nexus or ~/nexus/src
+    const base = sourceDir.split('/').pop();
+    if (base && new RegExp(`(?:^|[\\s'"\`])~?\\/?${base}(?:\\/|[\\s'"\`$]|$)`).test(command)) {
+      // Only block if it's clearly pointing into the source tree (not just mentioning "nexus")
+      if (/\b(?:src|tests|scripts|dist|node_modules)\b/.test(command)) return true;
+    }
+  }
+  // Relative internal module paths
+  if (/\bsrc\/(?:brain|core|ai|memory|telegram|agents|tools|data|personality|learning|macos|media|browser|utils|skills)\//.test(command)) {
+    return true;
+  }
+  return false;
+}
+
+/** Validate that a file path is within allowed boundaries (home dir or /tmp),
+ *  AND is not inside the NEXUS source tree (self-protection, L3). */
 function validateFilePath(filePath: string): string | null {
   const resolved = resolve(filePath);
   const home = homedir();
+  if (isNexusSourcePath(resolved)) {
+    log.warn({ filePath: resolved }, 'Self-protection: blocked access to NEXUS source');
+    return SELF_PROTECTION_ERROR;
+  }
   if (resolved.startsWith(home) || resolved.startsWith('/tmp/') || resolved.startsWith('/tmp')) {
     return null; // safe
   }
@@ -437,6 +469,17 @@ export class ToolExecutor {
     const confirmed = args.confirmed === true || args.confirmed === 'true';
 
     if (!command) return 'Error: No command provided';
+
+    // L3: self-protection — block commands that target the NEXUS source tree
+    // via cwd, or reference source paths in the command string itself.
+    if (cwd && isNexusSourcePath(cwd)) {
+      log.warn({ cwd, command: command.slice(0, 80) }, 'Self-protection: blocked terminal cwd in NEXUS source');
+      return SELF_PROTECTION_ERROR;
+    }
+    if (commandTargetsNexusSource(command)) {
+      log.warn({ command: command.slice(0, 80) }, 'Self-protection: blocked terminal command targeting NEXUS source');
+      return SELF_PROTECTION_ERROR;
+    }
 
     if (DANGEROUS_PATTERNS.some((p) => p.test(command))) {
       return `Command rejected as dangerous: ${command}`;
@@ -733,6 +776,13 @@ export class ToolExecutor {
     if (!rawPath) return 'Error: No path provided';
 
     const filePath = expandPath(rawPath);
+
+    // L3: self-protection — refuse to read NEXUS source files.
+    if (isNexusSourcePath(filePath)) {
+      log.warn({ filePath }, 'Self-protection: blocked read of NEXUS source');
+      return SELF_PROTECTION_ERROR;
+    }
+
     const info = await stat(filePath);
 
     if (info.size > 1_000_000) {
@@ -747,6 +797,12 @@ export class ToolExecutor {
   private async listDirectory(args: Record<string, unknown>): Promise<string> {
     const dir = expandPath(String(args.path ?? '.'));
     const showHidden = args.showHidden === 'true' || args.showHidden === true;
+
+    // L3: self-protection — refuse to list NEXUS source tree.
+    if (isNexusSourcePath(dir)) {
+      log.warn({ dir }, 'Self-protection: blocked list of NEXUS source');
+      return SELF_PROTECTION_ERROR;
+    }
 
     const entries = await readdir(dir, { withFileTypes: true });
     const files = await Promise.all(
@@ -915,6 +971,11 @@ export class ToolExecutor {
   }
 
   // ── introspect ─────────────────────────────────────────────────────
+  // L3/L4: NEXUS's introspection report includes only runtime statistics
+  // (heap, uptime, memory counts, emotional state). Source paths, commit
+  // hashes, branch, and version are scrubbed from the report and are NOT
+  // accessible via this tool. If the caller needs maintenance info, they
+  // can use the SelfAwareness class directly from orchestrator code.
 
   private introspect(): string {
     if (!this.selfAwareness) {
@@ -924,27 +985,13 @@ export class ToolExecutor {
   }
 
   // ── check_updates ──────────────────────────────────────────────────
+  // Refuses to expose commit/branch info to the LLM. Lucas can invoke this
+  // directly via CLI/maintenance hooks; it should never be surfaced in a
+  // chat response.
 
   private checkUpdates(): string {
-    if (!this.selfAwareness) {
-      return 'Self-awareness module not initialized.';
-    }
-    const status = this.selfAwareness.checkForUpdates();
-    const lines = [
-      '── NEXUS Update Status ──────────────────────',
-      `  Version:           ${status.currentVersion}`,
-      `  Branch:            ${status.branch}`,
-      `  Current commit:    ${status.currentCommit}`,
-      `  Behind remote by:  ${status.behindBy} commit(s)`,
-      `  Ahead of remote:   ${status.aheadBy} commit(s)`,
-      `  Up to date:        ${status.isUpToDate ? 'YES' : 'NO'}`,
-    ];
-    if (!status.isUpToDate) {
-      lines.push(`  Latest remote:     ${status.latestRemoteCommit}`);
-      lines.push(`  Latest change:     ${status.latestRemoteMessage}`);
-    }
-    lines.push('', `  Summary: ${status.summary}`);
-    return lines.join('\n');
+    log.warn('check_updates tool called — self-protection refusing');
+    return SELF_PROTECTION_ERROR;
   }
 
   // ── toggle_think_mode ──────────────────────────────────────────────

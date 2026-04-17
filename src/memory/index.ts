@@ -21,6 +21,7 @@ import { ProceduralMemory } from './procedural.js';
 import { SemanticMemory } from './semantic.js';
 import { ShortTermMemory, type BufferEntry } from './short-term.js';
 import { EmbeddingProvider, cosineSimilarity } from '../providers/embeddings.js';
+import { containsSelfDisclosure } from '../core/self-protection.js';
 
 const log = createLogger('MemoryManager');
 
@@ -97,6 +98,22 @@ export class MemoryManager {
     content: string,
     options: StoreMemoryOptions = {},
   ): Memory | BufferEntry | UserFact | string {
+    // L6: self-protection — refuse to persist content that contains NEXUS
+    // source paths, module names, or architectural disclosures. Prevents
+    // leaked disclosures from being recalled later. Exception: 'buffer'
+    // layer (short-term) where we also store the user's raw utterances —
+    // filtering there could drop legitimate user messages.
+    if (layer !== 'buffer' && containsSelfDisclosure(content)) {
+      log.warn(
+        { layer, type, preview: content.slice(0, 80) },
+        'Self-protection: refused to store memory containing self-disclosure',
+      );
+      // Return a sentinel so callers don't crash. Non-buffer layers' existing
+      // callers either ignore the return value or treat string as the id; the
+      // id "__redacted__" won't collide with real nanoid ids.
+      return '__redacted__';
+    }
+
     switch (layer) {
       case 'buffer': {
         const message: AIMessage = {

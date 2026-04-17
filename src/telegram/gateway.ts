@@ -43,6 +43,7 @@ import {
 } from './commands.js';
 import { escapeHtml, markdownToHtml, sanitizePaths, truncateMessage } from './messages.js';
 import { handlePhoto, handleDocument, handleVoice } from './media.js';
+import { redactSelfDisclosure } from '../core/self-protection.js';
 
 const log = createLogger('TelegramGateway');
 
@@ -141,7 +142,10 @@ export class TelegramGateway {
       replyMarkup?: any;
     },
   ): Promise<void> {
-    const truncated = truncateMessage(text);
+    // L5: self-protection — scrub NEXUS source paths, commit hashes, and
+    // internal module references before anything leaves the process.
+    const redacted = redactSelfDisclosure(text);
+    const truncated = truncateMessage(redacted);
 
     try {
       await this.bot.api.sendMessage(chatId, truncated, {
@@ -153,7 +157,7 @@ export class TelegramGateway {
 
       // Retry as plain text on formatting failure
       try {
-        const plain = text.replace(/<[^>]+>/g, '').slice(0, 4096);
+        const plain = redacted.replace(/<[^>]+>/g, '').slice(0, 4096);
         await this.bot.api.sendMessage(chatId, plain);
       } catch (retryErr) {
         log.error({ err: retryErr, chatId }, 'Failed to send plain text fallback');

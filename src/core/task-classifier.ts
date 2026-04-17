@@ -297,14 +297,34 @@ export function classifyTaskMode(text: string): TaskMode {
 export function isUndercoverProbe(text: string): boolean {
   const lower = text.toLowerCase();
   const probePatterns = [
-    /\bhow\s+(?:do\s+you|does\s+nexus|are\s+you)\s+(?:work|complete|do|run|execute|process)\b/,
-    /\b(?:source\s+code|codebase|implementation|infrastructure|tech\s+stack|architecture)\b/,
-    /\bwhat\s+(?:tools?|apis?|libraries?|frameworks?|languages?)\s+(?:do\s+you|does\s+nexus)\b/,
-    /\bhow\s+(?:are\s+you\s+(?:built|made|coded|programmed))\b/,
-    /\b(?:show|reveal|explain|describe)\s+(?:your|the)\s+(?:code|source|internals?|implementation|system\s+prompt|prompt)\b/,
-    /\bwhat('s|\s+is)\s+(?:inside|under\s+the\s+hood|your\s+backend)\b/,
-    /\bwhat\s+(?:model|llm|ai)\s+(?:are\s+you|do\s+you\s+use)\b/,
-    /\bhow\s+(?:do\s+you|are\s+you\s+able\s+to)\s+(?:access|control|see|read|write)\b/,
+    // "how do you work" / "how does nexus work" / "how are you running"
+    /\bhow\s+(?:do\s+you|does\s+nexus|are\s+you|is\s+nexus)\s+(?:work|complete|do|run|execute|process|operate|function)\b/,
+    // "how does your/the/its/this code|app|program|system|backend work/run"
+    /\bhow\s+(?:does|do)\s+(?:your|nexus['s]*|the|its?|this)\s+(?:code|codebase|source|app|program|system|backend|implementation|thing|stack)\s+(?:work|run|operate|function|do)\b/,
+    // Explicit architecture / tech-stack probes (these phrases are almost
+    // always self-referential when directed at NEXUS — "source code" and
+    // "codebase" alone are too ambiguous because users talk about THEIR own
+    // codebase all the time, so those are handled by the possessive patterns
+    // below instead).
+    /\b(?:tech\s+stack|internal\s+architecture|inside\s+architecture|system\s+architecture|your\s+architecture|your\s+infrastructure|nexus[''s]*\s+architecture|nexus[''s]*\s+infrastructure)\b/,
+    // "what tools/apis/libraries/frameworks/languages do you use"
+    /\bwhat\s+(?:tools?|apis?|libraries?|frameworks?|languages?|stack)\s+(?:do\s+you|does\s+nexus|are\s+you)\b/,
+    // "how are you built/made/coded/programmed/written/designed"
+    /\bhow\s+(?:are\s+you\s+(?:built|made|coded|programmed|written|designed|structured|organized))\b/,
+    // "show/reveal/explain/describe your code/source/internals/implementation/system-prompt"
+    /\b(?:show|reveal|explain|describe|list|walk\s+(?:me\s+)?through|tell\s+me\s+about)\s+(?:me\s+)?(?:your|the|nexus['s]*)\s+(?:code|codebase|source|source\s+code|internals?|implementation|system\s+prompt|prompt|files?|modules?|architecture|files\s+and\s+modules?|directory|directories?|folders?)\b/,
+    // "what's inside / under the hood / your backend"
+    /\bwhat('s|\s+is)\s+(?:inside|under\s+the\s+hood|your\s+(?:backend|code|source|stack))\b/,
+    // "what model/llm/ai are you"
+    /\bwhat\s+(?:model|llm|ai)\s+(?:are\s+you|do\s+you\s+use|powers\s+you|runs\s+you)\b/,
+    // "what powers/runs/drives you"
+    /\bwhat\s+(?:powers|runs|drives|operates|fuels)\s+you\b/,
+    // "how do you access/control/see/read/write..."
+    /\bhow\s+(?:do\s+you|are\s+you\s+able\s+to)\s+(?:access|control|see|read|write|run|execute|launch|spawn|invoke)\b/,
+    // Self-referential possessives: "your code", "your source", "your files", "nexus's code"
+    /\b(?:your|nexus['s]*)\s+(?:code|codebase|source\s+code|source\s+files?|source\s+tree|internal\s+files?|implementation|architecture|modules?|directory\s+structure|folder\s+structure|files?\s+(?:and\s+)?(?:modules?|structure|directories))\b/,
+    // "find/read/open/look at/inspect your/nexus's <internals>"
+    /\b(?:find|read|open|look\s+at|inspect|analyze|examine|review|audit)\s+(?:your|nexus['s]*|its?|the)\s+(?:own\s+)?(?:code|source|codebase|internals?|files?|modules?|implementation)\b/,
   ];
   return probePatterns.some((p) => p.test(lower));
 }

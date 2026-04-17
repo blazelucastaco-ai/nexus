@@ -163,7 +163,6 @@ export class SelfAwareness {
    * memory, emotional state, workspace, and host machine.
    */
   getSelfReport(): string {
-    const pid = process.pid;
     const uptimeSecs = Math.floor(process.uptime());
     const mem = process.memoryUsage();
     const nodeVersion = process.version;
@@ -222,33 +221,24 @@ export class SelfAwareness {
       timeZoneName: 'short',
     });
 
-    const vInfo = this.getVersionInfo();
-
+    // Note: version/branch/commit/source/data paths intentionally omitted from
+    // this report to avoid self-disclosure. That data lives in getVersionInfo()
+    // and checkForUpdates() for maintenance use only.
     return [
       '╔══════════════════════════════════════════╗',
       '║       NEXUS SELF-AWARENESS REPORT        ║',
       '╚══════════════════════════════════════════╝',
       '',
-      '── Version ──────────────────────────────────',
-      `  Version:       ${vInfo.version}`,
-      `  Branch:        ${vInfo.branch}`,
-      `  Commit:        ${vInfo.commitHash}`,
-      `  Commit date:   ${vInfo.commitDate}`,
-      `  Last change:   ${vInfo.commitMessage}`,
-      `  Source dir:    ${vInfo.sourceDir}`,
-      '',
       '── Process ──────────────────────────────────',
-      `  PID:           ${pid}`,
       `  Node version:  ${nodeVersion}`,
       `  Process uptime:${formatUptime(uptimeSecs)}`,
       `  Heap used:     ${heapUsedMB} MB / ${heapTotalMB} MB total`,
       `  RSS:           ${rssMB} MB`,
       `  External:      ${externalMB} MB`,
       '',
-      '── Filesystem ───────────────────────────────',
-      `  Data dir:      ${dataDir}`,
-      `  Memory DB:     ${dbPath}  (${dbSize})`,
-      `  Brain state:   ${brainStatePath}  (${brainStateSize})`,
+      '── Storage ──────────────────────────────────',
+      `  Memory DB:     ${dbSize}`,
+      `  Brain state:   ${brainStateSize}`,
       '',
       '── Memory Stats ─────────────────────────────',
       `  Total memories:  ${stats.totalMemories}`,
@@ -286,21 +276,22 @@ export class SelfAwareness {
   /**
    * One-line compact summary — injected into every system prompt so
    * NEXUS always knows its own runtime state.
+   *
+   * SECURITY: This string lands in the LLM's context every turn. Do NOT
+   * include version, commit hash, branch, source directory, or any other
+   * identifier that could leak back to the user in a response. Runtime
+   * stats (uptime, heap, memory counts, emotion) are safe.
    */
   getCompactStatus(): string {
-    const pid = process.pid;
     const uptimeSecs = Math.floor(process.uptime());
     const heapMB = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(0);
     const stats = this.memory.getStats();
     const ps = this.personality.getPersonalityState();
-    const vInfo = this.getVersionInfo();
 
     return (
-      `[self: pid=${pid} uptime=${formatUptime(uptimeSecs)} ` +
-      `v=${vInfo.version} commit=${vInfo.commitHash} branch=${vInfo.branch} ` +
-      `heap=${heapMB}MB memories=${stats.totalMemories} ` +
-      `facts=${stats.totalFacts} emotion=${ps.emotionLabel} ` +
-      `mood=${ps.mood.toFixed(2)}]`
+      `[state: uptime=${formatUptime(uptimeSecs)} heap=${heapMB}MB ` +
+      `memories=${stats.totalMemories} facts=${stats.totalFacts} ` +
+      `emotion=${ps.emotionLabel} mood=${ps.mood.toFixed(2)}]`
     );
   }
 }
