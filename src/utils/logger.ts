@@ -47,11 +47,80 @@ const rootLogger: Logger = isTTY
 /**
  * Create a child logger scoped to a specific component.
  *
+ * Every log line emitted via this logger is auto-enriched with the current
+ * trace context (traceId, chatId) if one is active — so you can filter logs
+ * by traceId to see everything that happened for one user message, across
+ * every subsystem, without threading ids manually.
+ *
  * @param name - Component or module name (e.g. 'MemoryManager', 'TelegramBot')
  * @returns A pino child logger with the component field set
  */
 export function createLogger(name: string): Logger {
-  return rootLogger.child({ component: name });
+  const componentLogger = rootLogger.child({ component: name });
+  // Wrap to inject current trace context lazily at log time.
+  return wrapWithTrace(componentLogger);
+}
+
+/**
+ * Wraps a logger so every log method includes the current trace context
+ * (from AsyncLocalStorage) as fields. Trace context is resolved at call
+ * time, not construction time, so a single logger works across messages.
+ */
+function wrapWithTrace(logger: Logger): Logger {
+  // Lazy-resolve currentTrace to avoid any module init order issues.
+  // Trace module does NOT import logger, so no cycle.
+  let currentTraceFn: (() => { traceId?: string; chatId?: string } | undefined) | null = null;
+  const resolveTrace = (): { traceId?: string; chatId?: string } | undefined => {
+    if (!currentTraceFn) {
+      try {
+        // Using a relative sync require — we're in Node, the trace module is already loaded.
+        // This works in both ESM (via module interop) and CJS builds.
+        const mod: { currentTrace?: () => { traceId?: string; chatId?: string } | undefined } = (globalThis as any).__nexus_trace__ ?? {};
+        currentTraceFn = mod.currentTrace ?? (() => undefined);
+      } catch {
+        currentTraceFn = () => undefined;
+      }
+    }
+    return currentTraceFn();
+  };
+
+  const methods = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const;
+  const wrapped = Object.create(logger);
+  for (const method of methods) {
+    wrapped[method] = function (...args: unknown[]) {
+      const ctx = resolveTrace();
+      if (ctx && (ctx.traceId || ctx.chatId)) {
+        // If first arg is an object (pino's "mergingObject"), merge trace fields in.
+        if (args[0] && typeof args[0] === 'object' && !Array.isArray(args[0])) {
+          const first = args[0] as Record<string, unknown>;
+          // Don't overwrite explicit caller-provided traceId/chatId
+          const enriched = {
+            ...(ctx.traceId && !first.traceId ? { traceId: ctx.traceId } : {}),
+            ...(ctx.chatId && !first.chatId ? { chatId: ctx.chatId } : {}),
+            ...first,
+          };
+          return (logger[method] as (obj: Record<string, unknown>, ...rest: unknown[]) => void)(enriched, ...args.slice(1));
+        }
+        // First arg is a string — inject trace fields as the object
+        const enriched = {
+          ...(ctx.traceId ? { traceId: ctx.traceId } : {}),
+          ...(ctx.chatId ? { chatId: ctx.chatId } : {}),
+        };
+        return (logger[method] as (obj: Record<string, unknown>, msg: string, ...rest: unknown[]) => void)(enriched, args[0] as string, ...args.slice(1));
+      }
+      return (logger[method] as (...a: unknown[]) => void)(...args);
+    };
+  }
+  return wrapped as Logger;
+}
+
+/**
+ * Register the trace accessor on globalThis so the logger can read trace context
+ * without a static import (which would create a cycle risk if trace ever logs).
+ * Called once at module load of trace.ts.
+ */
+export function registerTraceAccessor(currentTrace: () => { traceId?: string; chatId?: string } | undefined): void {
+  (globalThis as any).__nexus_trace__ = { currentTrace };
 }
 
 export default rootLogger;

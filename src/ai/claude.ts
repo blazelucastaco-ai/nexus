@@ -198,8 +198,8 @@ export class ClaudeProvider {
 
   async complete(options: AICompletionOptions): Promise<AIResponse> {
     const model = options.model ?? DEFAULT_MODEL;
-    const maxTokens = options.maxTokens ?? 16384;
-    const temperature = options.temperature ?? 0.7;
+    const maxTokens = options.maxTokens ?? 32768;
+    const temperature = options.temperature ?? 0.4;
 
     // Build system prompt (top-level Anthropic param)
     const inlineSystem = options.messages
@@ -252,7 +252,7 @@ export class ClaudeProvider {
           max_tokens: maxTokens,
           temperature,
           messages: anthropicMessages,
-          ...(fullSystem ? { system: fullSystem } : {}),
+          ...(fullSystem ? { system: [{ type: 'text' as const, text: fullSystem, cache_control: { type: 'ephemeral' as const } }] } : {}),
           ...(anthropicTools.length > 0 ? { tools: anthropicTools } : {}),
           ...(toolChoice ? { tool_choice: toolChoice } : {}),
         };

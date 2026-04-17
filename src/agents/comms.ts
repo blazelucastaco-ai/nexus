@@ -56,13 +56,14 @@ export class CommsAgent extends BaseAgent {
     const subtitle = params.subtitle ? String(params.subtitle) : undefined;
     const sound = String(params.sound ?? 'default');
 
-    // Escape double quotes for AppleScript
-    const escTitle = title.replace(/"/g, '\\"');
-    const escMessage = message.replace(/"/g, '\\"');
+    // Escape for AppleScript: backslashes first, then double quotes
+    const escAS = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const escTitle = escAS(title);
+    const escMessage = escAS(message);
 
     let script = `display notification "${escMessage}" with title "${escTitle}"`;
     if (subtitle) {
-      script += ` subtitle "${subtitle.replace(/"/g, '\\"')}"`;
+      script += ` subtitle "${escAS(subtitle)}"`;
     }
     if (sound !== 'none') {
       script += ` sound name "${sound}"`;
@@ -193,5 +194,13 @@ export class CommsAgent extends BaseAgent {
       undefined,
       start,
     );
+  }
+
+  /** Clear all pending scheduled-message timers on shutdown. */
+  destroy(): void {
+    for (const msg of this.scheduledMessages.values()) {
+      if (msg.timer) clearTimeout(msg.timer);
+    }
+    this.scheduledMessages.clear();
   }
 }

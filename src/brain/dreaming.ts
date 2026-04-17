@@ -20,6 +20,7 @@ import { storeEmbedding } from '../memory/embeddings.js';
 import { generateId, nowISO } from '../utils/helpers.js';
 import type { AIManager } from '../ai/index.js';
 import { GoalTracker } from './goal-tracker.js';
+import { events } from '../core/events.js';
 
 const log = createLogger('DreamCycle');
 
@@ -100,6 +101,9 @@ export class DreamingEngine {
     // Stamp immediately so concurrent callers see it
     this.saveDreamState({ ...state, lastDreamAt: start });
     log.info('Dream cycle starting…');
+    // Notify subscribers (Code Dreams, telemetry, etc.) — the bus is the only
+    // mechanism for tying side cycles to the dream run.
+    events.emit({ type: 'dream.started' });
 
     const insights: string[] = [];
     const consolidated = await this.consolidateEpisodic(insights);
@@ -154,6 +158,12 @@ export class DreamingEngine {
     };
 
     log.info(report, 'Dream cycle complete');
+    events.emit({
+      type: 'dream.completed',
+      consolidated, decayed, gcd: garbageCollected,
+      reflections: reflections.length, ideas: ideas.length,
+      durationMs: report.durationMs,
+    });
 
     // Notify via Telegram if there's anything interesting to share
     if (this.sendFn && (reflections.length > 0 || insights.length > 0 || ideas.length > 0)) {

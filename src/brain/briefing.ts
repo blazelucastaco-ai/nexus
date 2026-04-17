@@ -10,6 +10,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createLogger } from '../utils/logger.js';
 import { getDatabase } from '../memory/database.js';
+import { listRecentDreamIdeas, getLatestDreamJournal } from '../data/episodic-queries.js';
 import type { AIManager } from '../ai/index.js';
 
 const STATE_PATH = join(homedir(), '.nexus', 'briefing-state.json');
@@ -24,11 +25,13 @@ export class BriefingEngine {
   private briefingHour: number;       // 0-23, default 8
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastBriefingDate: string;   // YYYY-MM-DD, persisted to disk
+  private model?: string;             // lightweight model for the "thought for today"
 
-  constructor(sendFn: SendFn, aiManager?: AIManager, briefingHour = 8) {
+  constructor(sendFn: SendFn, aiManager?: AIManager, briefingHour = 8, model?: string) {
     this.sendFn = sendFn;
     this.aiManager = aiManager ?? null;
     this.briefingHour = briefingHour;
+    this.model = model;
     this.lastBriefingDate = this.loadLastBriefingDate();
   }
 
@@ -122,6 +125,16 @@ export class BriefingEngine {
       parts.push('');
     }
 
+    // Dream-generated ideas from the last cycle (if any)
+    const dreamIdeas = this.getRecentDreamIdeas(3);
+    if (dreamIdeas.length > 0) {
+      parts.push(`✨ <b>Ideas from my last dream:</b>`);
+      for (const idea of dreamIdeas) {
+        parts.push(`  • ${idea}`);
+      }
+      parts.push('');
+    }
+
     // Scheduled tasks for today
     const scheduledTasks = this.getScheduledTasksForToday();
     if (scheduledTasks.length > 0) {
@@ -163,34 +176,31 @@ export class BriefingEngine {
   }
 
   private getLastDreamSummary(): string | null {
-    try {
-      const db = getDatabase();
-      const row = db
-        .prepare(
-          `SELECT content FROM memories
-           WHERE layer = 'semantic'
-             AND tags LIKE '%dream-journal%'
-           ORDER BY created_at DESC
-           LIMIT 1`,
-        )
-        .get() as { content: string } | undefined;
+    const row = getLatestDreamJournal();
+    if (!row) return null;
 
-      if (!row) return null;
-
-      // Extract reflections from the journal content
-      const lines = row.content.split('\n');
-      const reflectionLine = lines.find((l) => l.startsWith('Reflections:'));
-      if (reflectionLine) {
-        const reflections = reflectionLine.replace('Reflections:', '').trim();
-        // Take first reflection only
-        const first = reflections.split('|')[0]?.trim();
-        return first ? first : null;
-      }
-
-      return null;
-    } catch {
-      return null;
+    // Extract reflections from the journal content
+    const lines = row.content.split('\n');
+    const reflectionLine = lines.find((l) => l.startsWith('Reflections:'));
+    if (reflectionLine) {
+      const reflections = reflectionLine.replace('Reflections:', '').trim();
+      // Take first reflection only
+      const first = reflections.split('|')[0]?.trim();
+      return first ? first : null;
     }
+
+    return null;
+  }
+
+  /**
+   * Fetch the most recent dream-generated ideas (from last cycle).
+   * Returns up to `limit` ideas, trimmed to reasonable briefing length.
+   */
+  private getRecentDreamIdeas(limit = 3): string[] {
+    return listRecentDreamIdeas(limit, 2)
+      .map((r) => (r.content ?? '').trim())
+      .filter(Boolean)
+      .map((s) => s.length > 180 ? s.slice(0, 180) + '…' : s);
   }
 
   private getScheduledTasksForToday(): string[] {
@@ -337,6 +347,7 @@ export class BriefingEngine {
       const context = contextParts.join('\n\n') || 'No recent context available.';
 
       const response = await this.aiManager.complete({
+        model: this.model,
         messages: [
           {
             role: 'user',

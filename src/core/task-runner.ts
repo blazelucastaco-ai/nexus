@@ -15,6 +15,7 @@ import type { AIMessage } from '../types.js';
 import { escapeHtml } from '../telegram/messages.js';
 import { CoWorkAgent, formatCoWorkHint } from '../agents/cowork.js';
 import type { CoWorkEvent, CoWorkResponse } from '../agents/cowork.js';
+import { events } from './events.js';
 
 const log = createLogger('TaskRunner');
 
@@ -26,6 +27,7 @@ const TOOL_TIMEOUT_MS        = 120_000;  // Per-tool call timeout
 const STEP_TIMEOUT_MS        = 5 * 60 * 1000;  // 5 min max per step
 const TASK_TIMEOUT_MS        = 25 * 60 * 1000; // 25 min max per whole task
 const TELEGRAM_EDIT_THROTTLE_MS = 1200;  // Telegram rate limit buffer
+const HEARTBEAT_INTERVAL_MS = 120_000;   // Interim "still working" message every 2 min per step
 const DEGENERATE_LOOP_LIMIT  = 3;        // Break if same malformed tool call repeats N times
 const TOOL_TYPE_LOOP_LIMIT   = 8;        // Break if same tool type called > N times without progress
 
@@ -33,6 +35,7 @@ const TOOL_TYPE_LOOP_LIMIT   = 8;        // Break if same tool type called > N t
 
 interface StepContext {
   filesWritten: string[];
+  fileContents: Record<string, string>;  // path → content snapshot for cross-step context
   commandsRun: string[];
   summary: string;
 }
@@ -63,6 +66,26 @@ function buildStepSystemPrompt(
   const prevSummary = previousContext.length > 0
     ? previousContext.map((c, i) => `Step ${i + 1}: ${c.summary}${c.filesWritten.length > 0 ? ` [Files: ${c.filesWritten.join(', ')}]` : ''}`).join('\n')
     : 'None — this is the first step.';
+
+  // Build a file content snapshot from prior steps so this step can reference them
+  // without needing to call read_file. Cap total to ~12K chars to avoid bloating the prompt.
+  let fileSnapshot = '';
+  const MAX_SNAPSHOT_CHARS = 12_000;
+  let snapshotChars = 0;
+  for (const ctx of previousContext) {
+    for (const [filePath, content] of Object.entries(ctx.fileContents)) {
+      const entry = `\n--- ${filePath} ---\n${content}\n`;
+      if (snapshotChars + entry.length > MAX_SNAPSHOT_CHARS) {
+        fileSnapshot += `\n--- ${filePath} --- [truncated, use read_file to see full content]\n`;
+        continue;
+      }
+      fileSnapshot += entry;
+      snapshotChars += entry.length;
+    }
+  }
+  const fileSnapshotSection = fileSnapshot
+    ? `\nFILES FROM PREVIOUS STEPS (reference these — do NOT recreate them unless fixing issues):\n${fileSnapshot}\n`
+    : '';
 
   const agentHint = step.agent
     ? `\nAGENT FOCUS: This step is best handled with ${step.agent} capabilities — prioritize those tools.`
@@ -97,7 +120,7 @@ STEP GOAL: ${step.description}${agentHint}
 
 PREVIOUS STEPS COMPLETED:
 ${prevSummary}
-${coworkSection}
+${fileSnapshotSection}${coworkSection}
 ━━━ RULES — READ EVERY ONE ━━━
 
 1. TOOLS ONLY. Never put code or file content in your response text. If this step requires writing a file, call write_file. If it requires running a command, call run_terminal_command. Do NOT describe, explain, or show code in your message — just call the tool.
@@ -106,13 +129,24 @@ ${coworkSection}
 
 3. ABSOLUTE PATHS. Always use ~/... paths. Project files go in ${plan.projectDir}/
 
-4. VERIFY WRITES. After every write_file call, immediately call read_file on the same path to confirm it was saved.
+4. FIX ERRORS. If a tool returns an error, diagnose it and retry with a corrected approach. Never claim success after an error.
 
-5. FIX ERRORS. If a tool returns an error, diagnose it and retry with a corrected approach. Never claim success after an error.
+5. ONE STEP ONLY. Complete this step and stop. Do not do future steps.
 
-6. ONE STEP ONLY. Complete this step and stop. Do not do future steps.
+6. BRIEF REPORT. After all tool calls, write 1-2 sentences saying what was done. Do not include code.
 
-7. BRIEF REPORT. After all tool calls, write 1-2 sentences saying what was done. Do not include code.
+━━━ CODE QUALITY — MANDATORY ━━━
+
+- Build the real thing, not a stub or skeleton. Complete, working, production-quality code.
+- Proper project structure: separate concerns, real dependencies, setup instructions.
+- Handle errors, validate inputs, use modern idioms for the language.
+- Every generated file should be runnable as-is — no placeholder comments or TODOs.
+
+For web/UI projects:
+- Always use Tailwind CSS (CDN for single pages, npm for projects). Never ship unstyled HTML.
+- Semantic HTML5, responsive viewport meta, mobile-first design.
+- Cohesive color palette, proper typography (Google Fonts), generous spacing, hover states, transitions.
+- Every page must look professional and production-ready — not a wireframe.
 
 macOS notes:
 - Shell: /bin/zsh. No GNU-only flags. No declare -A.
@@ -300,6 +334,7 @@ async function executeStep(
   ];
 
   const filesWritten: string[] = [];
+  const fileContents: Record<string, string> = {};
   const commandsRun: string[] = [];
   let finalContent = '';
   // Degenerate loop detection: track last N malformed call signatures
@@ -460,6 +495,13 @@ async function executeStep(
       // Record what was done
       if (toolName === 'write_file' && typeof toolArgs.path === 'string' && !isError) {
         filesWritten.push(toolArgs.path as string);
+        // Capture content snapshot for cross-step context (cap at 4K per file)
+        if (typeof toolArgs.content === 'string') {
+          const snap = toolArgs.content.length > 4000
+            ? toolArgs.content.slice(0, 4000) + '\n// ... [truncated]'
+            : toolArgs.content;
+          fileContents[toolArgs.path as string] = snap;
+        }
       }
       if (toolName === 'run_terminal_command' && typeof toolArgs.command === 'string' && !isError) {
         commandsRun.push(toolArgs.command as string);
@@ -482,13 +524,24 @@ async function executeStep(
   // ── Rescue pass: detect when model described code instead of calling write_file ──
   // If the final response contains fenced code blocks but no files were written,
   // extract and save them automatically.
+  // Only enable when we can pair blocks 1:1 with paths — otherwise we risk
+  // writing code to an unrelated path (e.g. `~/.bashrc` mentioned in prose).
   if (filesWritten.length === 0 && finalContent.length > 500) {
     const codeBlocks = [...finalContent.matchAll(/```(?:(\w+)\n)?([\s\S]*?)```/g)];
-    // Look for a path mentioned near each code block
+    // Look for a path mentioned near each code block — must be inside project dir
     const pathPattern = /[`'"]?(~\/[\w\-\/\.]+|\/[\w\-\/\.]+)/g;
-    const mentionedPaths = [...finalContent.matchAll(pathPattern)].map((m) => m[1]);
+    const allPaths = [...finalContent.matchAll(pathPattern)].map((m) => m[1]);
+    // Filter to paths inside the project dir to prevent writing to unrelated locations
+    const projectDirExpanded = plan.projectDir.replace(/^~/, process.env.HOME ?? '~');
+    const mentionedPaths = allPaths.filter((p): p is string =>
+      typeof p === 'string' && (p.startsWith(plan.projectDir) || p.startsWith(projectDirExpanded))
+    );
 
-    if (codeBlocks.length > 0 && mentionedPaths.length > 0) {
+    // Safety: only run rescue pass if we have one path per code block (or exactly one of each)
+    const safeToRun = codeBlocks.length > 0 && mentionedPaths.length > 0 &&
+      (codeBlocks.length === mentionedPaths.length || (codeBlocks.length === 1 && mentionedPaths.length === 1));
+
+    if (safeToRun) {
       log.warn({ step: step.id, blocks: codeBlocks.length, paths: mentionedPaths.length }, 'Rescue pass: model described code without calling write_file — auto-saving');
 
       for (let i = 0; i < codeBlocks.length; i++) {
@@ -506,6 +559,7 @@ async function executeStep(
           const writeResult = await toolExecutor.execute('write_file', { path: targetPath, content });
           if (!writeResult.startsWith('Error')) {
             filesWritten.push(targetPath);
+            fileContents[targetPath] = content.length > 4000 ? content.slice(0, 4000) + '\n// ... [truncated]' : content;
             log.info({ path: targetPath }, 'Rescue pass: auto-saved code block');
           }
         } catch (err) {
@@ -537,6 +591,7 @@ async function executeStep(
   // Build step context for future steps
   const context: StepContext = {
     filesWritten,
+    fileContents,
     commandsRun,
     summary: (finalContent.slice(0, 250).replace(/\n+/g, ' ') || `${step.title} completed`) +
       (verifyNote ? ` [verify: ${verifyNote.slice(0, 80)}]` : ''),
@@ -574,6 +629,9 @@ export async function runTask(opts: {
   const maxTokens = Math.max(opts.maxTokens, 32768);
   const startTime = Date.now();
   let taskTimedOut = false;
+
+  events.emit({ type: 'task.planned', title: plan.title, stepCount: plan.steps.length, coordinatorMode: !!coordinatorMode });
+  events.emit({ type: 'task.started', title: plan.title });
 
   const completedIds = new Set<number>();
   const stepTimings = new Map<number, number>();
@@ -711,11 +769,25 @@ export async function runTask(opts: {
         }
       };
 
+      // Heartbeat: if a step runs longer than 2 minutes, send an interim
+      // "still working" message so the user knows we're not hung.
+      let heartbeatCount = 0;
+      const heartbeatTimer = setInterval(() => {
+        heartbeatCount++;
+        const minutes = Math.round((heartbeatCount * HEARTBEAT_INTERVAL_MS) / 60_000);
+        telegram.sendMessage(
+          chatId,
+          `⏳ Still working on step ${step.id} (${escapeHtml(step.title)}) — ${minutes}m elapsed`,
+          { parseMode: 'HTML' },
+        ).catch((e) => log.debug({ e }, 'Failed to send heartbeat'));
+      }, HEARTBEAT_INTERVAL_MS);
+
       // ── Phase 1: Standard retries ────────────────────────────────────────
       let lastErrorContext = '';
       let lastFilesWritten: string[] = [];
       let lastCommandsRun: string[] = [];
 
+      try {
       for (let attempt = 0; attempt <= MAX_STEP_RETRIES; attempt++) {
         try {
           const result = await withTimeout(
@@ -787,6 +859,20 @@ export async function runTask(opts: {
 
           previousSuggestions.push(hint.suggestion);
 
+          // Surface the diagnosis + suggestion to the user — previously internal-only.
+          // This makes CoWork feel transparent instead of a silent "magic recovery".
+          try {
+            const confidencePct = Math.round((hint.confidence ?? 0.5) * 100);
+            await telegram.sendMessage(
+              chatId,
+              `🧠 <b>Co Work diagnosed it</b> (${confidencePct}% confidence):\n` +
+                `<i>${escapeHtml(hint.diagnosis)}</i>\n\n` +
+                `💡 ${escapeHtml(hint.suggestion)}\n\n` +
+                `<i>Retrying step ${step.id} with this approach…</i>`,
+              { parseMode: 'HTML' },
+            );
+          } catch (e) { log.debug({ e }, 'Failed to send Co Work diagnosis'); }
+
           // Try the step again with Co Work hint injected
           try {
             const result = await withTimeout(
@@ -857,6 +943,10 @@ export async function runTask(opts: {
 
         allCoworkEvents.push(...stepCoworkEvents);
       }
+      } finally {
+        // Always clear the heartbeat timer, even if the step threw
+        clearInterval(heartbeatTimer);
+      }
 
       const stepDuration = Date.now() - stepStart;
       completedIds.add(step.id);
@@ -889,15 +979,28 @@ export async function runTask(opts: {
     log.warn({ err }, 'Failed to send final summary message');
   }
 
+  const finalSuccess = !taskTimedOut && stepResults.every((r) => r.success);
+  const stepsCompleted = stepResults.filter((r) => r.success).length;
+  events.emit({
+    type: 'task.completed',
+    title: plan.title,
+    success: finalSuccess,
+    durationMs: totalDuration,
+    stepsCompleted,
+    totalSteps: plan.steps.length,
+    filesProduced: uniqueFiles,
+  });
+
   return {
-    success: !taskTimedOut && stepResults.every((r) => r.success),
-    completedSteps: stepResults.filter((r) => r.success).length,
+    success: finalSuccess,
+    completedSteps: stepsCompleted,
     totalSteps: plan.steps.length,
     projectDir: plan.projectDir,
     filesProduced: uniqueFiles,
     summary: summaryMsg,
     durationMs: totalDuration,
     timedOut: taskTimedOut,
+    coworkEvents: allCoworkEvents,
   };
 }
 

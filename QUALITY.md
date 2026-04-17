@@ -83,6 +83,13 @@ Normal content that mentions words like "error" or "missing" in context is **not
 | v0.3 | Classifier goal-statement detection | "I want to launch X" → task | → chat |
 | v0.3 | Requirements gate third-party patterns | "for my buddy" bypassed gate | caught |
 | v0.3 | Classifier file-path detection | "at /tmp/file.py" triggered gate | bypasses gate |
+| v0.4 | PNG image MIME type bug | PNG sent as image/jpeg → Anthropic 400 error | correct media_type passed |
+| v0.4 | Malicious request safety gate | "delete all files on someone's computer" → requirements gate | → Claude refusal |
+| v0.4 | Requirements gate — tech stack | "HTML, CSS, JavaScript" not recognized as context | bypasses gate |
+| v0.4 | Requirements gate — named project | "called todo-app" not recognized as context | bypasses gate |
+| v0.4 | Requirements gate — modify existing | "add X to it" triggered gate | bypasses gate (modification pattern) |
+| v0.4 | Planner defaults — survey tasks | report written to ~/nexus-workspace/reports/ | answer inline in chat |
+| v0.4 | 76-prompt natural language test suite | — | 73/76 passing (audio requires Whisper, browser extension not connected) |
 
 ---
 

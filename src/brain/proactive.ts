@@ -14,6 +14,7 @@ import { execSync } from 'node:child_process';
 import { createLogger } from '../utils/logger.js';
 import type { AIManager } from '../ai/index.js';
 import type { MemoryManager } from '../memory/index.js';
+import { countRecentTaskFailures } from '../data/episodic-queries.js';
 
 const log = createLogger('ProactiveEngine');
 
@@ -143,6 +144,14 @@ export class ProactiveEngine {
       }
     }
 
+    // Task-failure cascade — alert when tasks repeatedly fail
+    try {
+      const taskAlert = this.checkTaskFailures();
+      if (taskAlert) alerts.push(taskAlert);
+    } catch (err) {
+      log.debug({ err }, 'Task failure check skipped');
+    }
+
     for (const alert of alerts) {
       try {
         await this.sendFn(alert);
@@ -186,6 +195,32 @@ export class ProactiveEngine {
     if (usage <= 90) return null;
 
     return `🔥 <b>High CPU usage</b> — ${usage}% load\n\n<code>${output.trim()}</code>`;
+  }
+
+  // ── Task-failure monitoring ──────────────────────────────────────
+  // Tracks when we last alerted so we don't spam. Alerts again after 2h.
+  private lastTaskFailureAlert = 0;
+  private readonly TASK_FAILURE_COOLDOWN_MS = 2 * 60 * 60 * 1000;
+  private readonly TASK_FAILURE_THRESHOLD = 3;
+  private readonly TASK_FAILURE_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+
+  /**
+   * Alert if 3+ task failures happened in the last hour.
+   * Queries routed through the episodic-queries repository — no raw SQL here.
+   */
+  private checkTaskFailures(): string | null {
+    const now = Date.now();
+    if (now - this.lastTaskFailureAlert < this.TASK_FAILURE_COOLDOWN_MS) {
+      return null; // cooldown active
+    }
+
+    const { count, titles } = countRecentTaskFailures(this.TASK_FAILURE_WINDOW_MS);
+    if (count < this.TASK_FAILURE_THRESHOLD) return null;
+
+    this.lastTaskFailureAlert = now;
+
+    const bullets = titles.map((t) => `  • ${t}`).join('\n');
+    return `⚠️ <b>${count} tasks failed in the last hour</b>\n\n${bullets}\n\n<i>Want me to investigate a pattern?</i>`;
   }
 
   // ── Port monitoring ───────────────────────────────────────────────

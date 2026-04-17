@@ -23,9 +23,11 @@ const MAX_QUERY_WORDS = 50; // Skip evaluation for very long queries
 export class SelfEvaluator {
   private aiManager: AIManager;
   private enabled = true;
+  private model?: string;
 
-  constructor(aiManager: AIManager) {
+  constructor(aiManager: AIManager, model?: string) {
     this.aiManager = aiManager;
+    this.model = model;
   }
 
   setEnabled(enabled: boolean): void {
@@ -55,6 +57,7 @@ export class SelfEvaluator {
 
     try {
       const result = await this.aiManager.complete({
+        model: this.model,
         messages: [
           {
             role: 'user',

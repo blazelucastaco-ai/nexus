@@ -88,8 +88,8 @@ export function storeEmbedding(memoryId: string, text: string): void {
 
   const blob = Buffer.from(JSON.stringify(vec), 'utf-8');
   db.prepare(
-    `INSERT OR REPLACE INTO memory_embeddings (memory_id, embedding, model)
-     VALUES (?, ?, 'tfidf-local')`,
+    `INSERT OR REPLACE INTO memory_embeddings (memory_id, embedding, model, created_at)
+     VALUES (?, ?, 'tfidf-local', datetime('now'))`,
   ).run(memoryId, blob);
 
   log.debug({ memoryId, terms: termCount }, 'Embedding stored');
@@ -119,8 +119,10 @@ export function getEmbedding(memoryId: string): SparseVector | null {
  */
 export function getAllEmbeddings(): Array<{ memoryId: string; vector: SparseVector }> {
   const db = getDatabase();
+  // Limit to most recent 2000 entries to prevent OOM on large databases.
+  // Vector search quality degrades gracefully — the most recent memories are most relevant.
   const rows = db
-    .prepare('SELECT memory_id, embedding FROM memory_embeddings')
+    .prepare('SELECT memory_id, embedding FROM memory_embeddings ORDER BY rowid DESC LIMIT 2000')
     .all() as { memory_id: string; embedding: Buffer }[];
 
   const result: Array<{ memoryId: string; vector: SparseVector }> = [];

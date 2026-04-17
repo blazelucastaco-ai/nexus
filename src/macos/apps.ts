@@ -72,7 +72,7 @@ export class AppManager {
         });
         logger.info({ name, force: true }, 'App force-quit');
       } else {
-        const escaped = name.replace(/"/g, '\\"');
+        const escaped = name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
         await osascript(`tell application "${escaped}" to quit`);
         logger.info({ name }, 'App quit');
       }
@@ -87,7 +87,7 @@ export class AppManager {
    */
   async isAppRunning(name: string): Promise<boolean> {
     try {
-      const escaped = name.replace(/"/g, '\\"');
+      const escaped = name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
       const result = await osascript(
         `tell application "System Events" to (name of processes) contains "${escaped}"`
       );
@@ -103,7 +103,7 @@ export class AppManager {
    */
   async getAppInfo(name: string): Promise<{ path: string; version: string }> {
     try {
-      const escaped = name.replace(/"/g, '\\"');
+      const escaped = name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
       // Find the app bundle path
       const { stdout: pathOutput } = await execFileAsync('mdfind', [
         `kMDItemFSName == "${escaped}.app" && kMDItemKind == "Application"`,

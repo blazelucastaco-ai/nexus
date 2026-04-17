@@ -289,15 +289,16 @@ export class ProceduralMemory {
    * Find tool patterns by tool name.
    */
   findToolPatterns(toolName: string): Memory[] {
+    const escaped = toolName.replace(/[%_\\]/g, '\\$&');
     const rows = this.db
       .prepare(
         `SELECT * FROM memories
         WHERE layer = 'procedural'
           AND source = 'tool-usage'
-          AND tags LIKE ?
+          AND tags LIKE ? ESCAPE '\\'
         ORDER BY confidence DESC`,
       )
-      .all(`%"${toolName}"%`) as RawMemoryRow[];
+      .all(`%"${escaped}"%`) as RawMemoryRow[];
     return rows.map(rowToMemory);
   }
 
@@ -305,15 +306,16 @@ export class ProceduralMemory {
    * Find error recovery procedures by error type.
    */
   findErrorRecovery(errorType: string): Memory[] {
+    const escaped = errorType.replace(/[%_\\]/g, '\\$&');
     const rows = this.db
       .prepare(
         `SELECT * FROM memories
         WHERE layer = 'procedural'
           AND source = 'error-recovery'
-          AND tags LIKE ?
+          AND tags LIKE ? ESCAPE '\\'
         ORDER BY confidence DESC`,
       )
-      .all(`%"${errorType}"%`) as RawMemoryRow[];
+      .all(`%"${escaped}"%`) as RawMemoryRow[];
     return rows.map(rowToMemory);
   }
 

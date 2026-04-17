@@ -29,6 +29,15 @@ import {
   handleGrant,
   handleQuiet,
   handleLoud,
+  handleUndo,
+  handleHistory,
+  handleRetry,
+  handleProjects,
+  handleGo,
+  handleProject,
+  handleDreams,
+  handleResume,
+  handleThinking,
   handleStop,
   handleHelp,
 } from './commands.js';
@@ -391,6 +400,55 @@ export class TelegramGateway {
       return handleLoud(ctx, this.orchestrator);
     });
 
+    this.bot.command('undo', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      return handleUndo(ctx, this.orchestrator);
+    });
+
+    this.bot.command('history', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      return handleHistory(ctx, this.orchestrator);
+    });
+
+    this.bot.command('retry', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      return handleRetry(ctx, this.orchestrator);
+    });
+
+    this.bot.command('projects', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      return handleProjects(ctx, this.orchestrator);
+    });
+
+    this.bot.command('go', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      const arg = ctx.match?.toString().trim();
+      return handleGo(ctx, this.orchestrator, arg);
+    });
+
+    this.bot.command('project', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      const arg = ctx.match?.toString().trim();
+      return handleProject(ctx, this.orchestrator, arg);
+    });
+
+    this.bot.command('dreams', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      const arg = ctx.match?.toString().trim();
+      return handleDreams(ctx, this.orchestrator, arg);
+    });
+
+    this.bot.command('thinking', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      return handleThinking(ctx, this.orchestrator);
+    });
+
+    this.bot.command('resume', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      const arg = ctx.match?.toString().trim();
+      return handleResume(ctx, this.orchestrator, arg);
+    });
+
     this.bot.command('stop', (ctx) => handleStop(ctx));
 
     this.bot.command('help', (ctx) => handleHelp(ctx));
@@ -466,7 +524,10 @@ export class TelegramGateway {
         }
       } catch (err) {
         log.error({ err, data, chatId }, 'Callback query handler failed');
-        await ctx.answerCallbackQuery({ text: 'An error occurred.' }).catch(() => {});
+        // Notify user via inline callback response. If that also fails, user sees spinner forever — log it.
+        await ctx.answerCallbackQuery({ text: 'An error occurred.' }).catch((e) => {
+          log.warn({ e, chatId }, 'Failed to answer callback query after handler error — user may see spinner');
+        });
       }
     });
   }
@@ -513,11 +574,15 @@ export class TelegramGateway {
             if (now - lastStatusEditTime < STATUS_THROTTLE_MS) return;
             lastStatusText = status;
             lastStatusEditTime = now;
-            this.editMessage(chatId, statusMsgId!, status).catch(() => {});
+            // High-frequency streaming edits — "message is not modified" is already filtered in editMessage()
+            this.editMessage(chatId, statusMsgId!, status).catch((e) => {
+              log.debug({ e, chatId }, 'Failed to edit streaming status message');
+            });
           };
 
           // ── Response message: streams the final answer as it arrives ────────
           let responseMsgId: number | null = null;
+          let creatingResponse = false;  // guard against concurrent sendStreamingMessage calls
           let responseBuffer = '';
           let lastResponseEditTime = 0;
           const RESPONSE_THROTTLE_MS = 900;
@@ -528,13 +593,17 @@ export class TelegramGateway {
             if (now - lastResponseEditTime < RESPONSE_THROTTLE_MS) return;
             lastResponseEditTime = now;
 
-            if (!responseMsgId) {
-              // Create the response message on first token
+            if (!responseMsgId && !creatingResponse) {
+              // Create the response message on first token (only one call in flight)
+              creatingResponse = true;
               this.sendStreamingMessage(chatId, responseBuffer + ' ▍')
-                .then((id) => { responseMsgId = id; })
-                .catch(() => {});
-            } else {
-              this.editMessage(chatId, responseMsgId, responseBuffer.slice(0, 4000) + ' ▍').catch(() => {});
+                .then((id) => { responseMsgId = id; creatingResponse = false; })
+                .catch(() => { creatingResponse = false; });
+            } else if (responseMsgId) {
+              // High-frequency streaming token edits — suppress noise but record failures
+              this.editMessage(chatId, responseMsgId, responseBuffer.slice(0, 4000) + ' ▍').catch((e) => {
+                log.debug({ e, chatId }, 'Failed to edit streaming response token');
+              });
             }
           };
 

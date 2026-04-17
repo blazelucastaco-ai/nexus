@@ -1,8 +1,16 @@
 // ─── Telegram Command Handlers ────────────────────────────────────────
 import type { Bot, Context } from 'grammy';
+import { execFileSync } from 'node:child_process';
 import type { Orchestrator } from '../core/orchestrator.js';
 import { createLogger } from '../utils/logger.js';
 import { getDatabase } from '../memory/database.js';
+import { listRecentSessionSummaries } from '../data/episodic-queries.js';
+import {
+  listProjects,
+  getProject,
+  listJournalEntries,
+  slugify,
+} from '../data/projects-repository.js';
 import {
   escapeHtml,
   formatAgentList,
@@ -52,6 +60,13 @@ export const commands: BotCommand[] = [
   { command: 'briefing', description: 'Send today\'s morning briefing now' },
   { command: 'quiet', description: 'Disable proactive system alerts' },
   { command: 'loud', description: 'Enable proactive system alerts' },
+  { command: 'undo', description: 'Undo the most recent file change' },
+  { command: 'history', description: 'Recent session summaries' },
+  { command: 'retry', description: 'Retry the last failed task' },
+  { command: 'projects', description: 'List tracked projects with activity' },
+  { command: 'go', description: 'Resume context on a project — /go <name>' },
+  { command: 'project', description: 'Detailed status for a project — /project <name>' },
+  { command: 'dreams', description: 'Recent Code Dreams observations — /dreams [project]' },
   { command: 'stop', description: 'Graceful shutdown' },
   { command: 'help', description: 'Show all available commands' },
 ];
@@ -855,7 +870,406 @@ export async function handleGrant(ctx: Context): Promise<void> {
   }
 }
 
+// ─── /undo ───────────────────────────────────────────────────────────
+
+export async function handleUndo(ctx: Context, orchestrator: Orchestrator): Promise<void> {
+  try {
+    const executor = orchestrator.toolExecutor;
+    if (!executor) {
+      await ctx.reply('Tool executor not available.');
+      return;
+    }
+    const result = await executor.undoLastWrite();
+    await ctx.reply(`↩️ ${result}`);
+    log.info({ chatId: ctx.chat?.id }, '/undo command');
+  } catch (err) {
+    log.error({ err }, 'Error in /undo');
+    await ctx.reply('Undo failed — check the logs.');
+  }
+}
+
+// ─── /history ────────────────────────────────────────────────────────
+
+export async function handleHistory(ctx: Context, orchestrator: Orchestrator): Promise<void> {
+  try {
+    if (!await requireSubsystem(ctx, orchestrator.memory, 'Memory system')) return;
+
+    const rows = listRecentSessionSummaries(10);
+
+    if (rows.length === 0) {
+      await ctx.reply('No recent session history yet.');
+      return;
+    }
+
+    const lines: string[] = ['<b>📜 Recent history</b>\n'];
+    for (const r of rows) {
+      const time = new Date(r.created_at).toLocaleString('en-US', {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      });
+      const snippet = r.content.replace(/\n+/g, ' ').slice(0, 200);
+      lines.push(`<i>${escapeHtml(time)}</i>`);
+      lines.push(escapeHtml(snippet));
+      lines.push('');
+    }
+
+    await ctx.reply(truncateMessage(lines.join('\n')), { parse_mode: 'HTML' });
+    log.info({ chatId: ctx.chat?.id, count: rows.length }, '/history command');
+  } catch (err) {
+    log.error({ err }, 'Error in /history');
+    await ctx.reply('Failed to retrieve history.');
+  }
+}
+
+// ─── /retry ──────────────────────────────────────────────────────────
+
+export async function handleRetry(ctx: Context, orchestrator: Orchestrator): Promise<void> {
+  try {
+    const chatId = String(ctx.chat?.id ?? '');
+    const lastRequest = orchestrator.getLastFailedRequest(chatId);
+    if (!lastRequest) {
+      await ctx.reply('No recent failed task to retry.');
+      return;
+    }
+    await ctx.reply(`🔁 Retrying: <i>${escapeHtml(lastRequest.slice(0, 200))}</i>`, { parse_mode: 'HTML' });
+    // Re-enter handleMessage with the original text
+    const result = await orchestrator.handleMessage(chatId, lastRequest);
+    await ctx.reply(truncateMessage(result), { parse_mode: 'HTML' });
+    log.info({ chatId: ctx.chat?.id }, '/retry command');
+  } catch (err) {
+    log.error({ err }, 'Error in /retry');
+    await ctx.reply('Retry failed — check the logs.');
+  }
+}
+
+// ─── /projects ───────────────────────────────────────────────────────
+
+export async function handleProjects(ctx: Context, _orchestrator: Orchestrator): Promise<void> {
+  try {
+    const projects = listProjects({ limit: 20 });
+    if (projects.length === 0) {
+      await ctx.reply('No projects tracked yet. Start a task and I\'ll begin tracking.');
+      return;
+    }
+
+    const lines: string[] = ['<b>📁 Projects</b>\n'];
+    const now = Date.now();
+    for (const p of projects) {
+      const lastActive = new Date(p.last_active_at).getTime();
+      const ageMs = now - lastActive;
+      const ageLabel = formatAge(ageMs);
+      const status = p.last_task_success === null ? '' :
+                     p.last_task_success === 1 ? ' ✅' : ' ⚠️';
+      lines.push(`<b>${escapeHtml(p.display_name)}</b>${status}`);
+      lines.push(`  <code>${escapeHtml(p.name)}</code> · ${p.task_count} task${p.task_count === 1 ? '' : 's'} · ${ageLabel}`);
+      if (p.last_task_title) {
+        lines.push(`  <i>Last: ${escapeHtml(p.last_task_title.slice(0, 80))}</i>`);
+      }
+      lines.push('');
+    }
+    lines.push('<i>Use /go &lt;name&gt; to resume context or /project &lt;name&gt; for details.</i>');
+
+    await ctx.reply(truncateMessage(lines.join('\n')), { parse_mode: 'HTML' });
+    log.info({ chatId: ctx.chat?.id, count: projects.length }, '/projects command');
+  } catch (err) {
+    log.error({ err }, 'Error in /projects');
+    await ctx.reply('Failed to list projects.');
+  }
+}
+
+// ─── /go <name> ──────────────────────────────────────────────────────
+
+export async function handleGo(ctx: Context, _orchestrator: Orchestrator, name?: string): Promise<void> {
+  try {
+    if (!name) {
+      await ctx.reply('Usage: /go &lt;project-name&gt; — see /projects for the list.', { parse_mode: 'HTML' });
+      return;
+    }
+    const slug = slugify(name);
+    const project = getProject(slug);
+    if (!project) {
+      await ctx.reply(`No project "${escapeHtml(slug)}". Try /projects.`, { parse_mode: 'HTML' });
+      return;
+    }
+
+    const journal = listJournalEntries(slug, 5);
+    const lastTaskEntry = journal.find((e) => e.kind === 'task');
+    const lastErrorEntry = journal.find((e) => e.kind === 'error');
+
+    const lines: string[] = [
+      `<b>📂 ${escapeHtml(project.display_name)}</b>`,
+      project.path ? `<code>${escapeHtml(project.path)}</code>` : '',
+      '',
+      `<b>Last active:</b> ${formatAge(Date.now() - new Date(project.last_active_at).getTime())} ago`,
+      `<b>Total tasks:</b> ${project.task_count}`,
+    ];
+
+    if (project.last_task_title) {
+      const icon = project.last_task_success === 1 ? '✅' : project.last_task_success === 0 ? '⚠️' : '•';
+      lines.push(`<b>Last task:</b> ${icon} ${escapeHtml(project.last_task_title)}`);
+    }
+
+    if (lastErrorEntry) {
+      lines.push('');
+      lines.push(`<b>⚠️ Recent blocker:</b>`);
+      lines.push(`<i>${escapeHtml(lastErrorEntry.summary.slice(0, 200))}</i>`);
+    }
+
+    lines.push('');
+    lines.push(`<b>Activity log</b> (last ${journal.length}):`);
+    for (const j of journal) {
+      const icon = j.kind === 'task' ? '⚙️' : j.kind === 'error' ? '❌' : j.kind === 'tool' ? '🔧' : '📝';
+      lines.push(`  ${icon} <i>${escapeHtml(j.summary.slice(0, 120))}</i>`);
+    }
+
+    await ctx.reply(truncateMessage(lines.filter(Boolean).join('\n')), { parse_mode: 'HTML' });
+    log.info({ chatId: ctx.chat?.id, project: slug }, '/go command');
+  } catch (err) {
+    log.error({ err }, 'Error in /go');
+    await ctx.reply('Failed to load project.');
+  }
+}
+
+// ─── /project <name> ─────────────────────────────────────────────────
+// Alias-like detailed view — for now identical to /go but named distinctly
+// so future versions can diverge (e.g. /go auto-navigates + shows briefing,
+// /project just lists metadata).
+
+export async function handleProject(ctx: Context, orchestrator: Orchestrator, name?: string): Promise<void> {
+  await handleGo(ctx, orchestrator, name);
+}
+
+// ─── /resume <name> ──────────────────────────────────────────────────
+// Sets the active project for the session and shows a resume brief:
+// last task, recent blockers, most recent journal entries, and a quick
+// git log tail if the project has a disk path.
+
+export async function handleResume(ctx: Context, orchestrator: Orchestrator, name?: string): Promise<void> {
+  try {
+    if (!name) {
+      const active = orchestrator.activeProject;
+      if (active) {
+        await ctx.reply(
+          `Currently resumed on <b>${escapeHtml(active)}</b>. Usage: /resume &lt;project-name&gt; to switch, or /resume --clear to stop.`,
+          { parse_mode: 'HTML' },
+        );
+      } else {
+        await ctx.reply('Usage: /resume &lt;project-name&gt; — see /projects for the list.', { parse_mode: 'HTML' });
+      }
+      return;
+    }
+
+    if (name === '--clear' || name === 'clear') {
+      orchestrator.setActiveProject(null);
+      await ctx.reply('Active project cleared.');
+      return;
+    }
+
+    const slug = slugify(name);
+    const project = getProject(slug);
+    if (!project) {
+      await ctx.reply(`No project "${escapeHtml(slug)}". Try /projects.`, { parse_mode: 'HTML' });
+      return;
+    }
+
+    orchestrator.setActiveProject(slug);
+
+    const journal = listJournalEntries(slug, 10);
+    const lastTaskEntry = journal.find((e) => e.kind === 'task');
+    const lastErrorEntry = journal.find((e) => e.kind === 'error');
+
+    const lines: string[] = [
+      `<b>▶️ Resuming: ${escapeHtml(project.display_name)}</b>`,
+    ];
+    if (project.path) lines.push(`<code>${escapeHtml(project.path)}</code>`);
+    lines.push('');
+
+    // Where we left off
+    lines.push('<b>Where you left off</b>');
+    if (project.last_task_title) {
+      const icon = project.last_task_success === 1 ? '✅' : project.last_task_success === 0 ? '⚠️' : '•';
+      lines.push(`${icon} ${escapeHtml(project.last_task_title)}`);
+    } else {
+      lines.push('<i>No tasks recorded yet.</i>');
+    }
+    lines.push(`<i>Last active: ${formatAge(Date.now() - new Date(project.last_active_at).getTime())} ago · ${project.task_count} task${project.task_count === 1 ? '' : 's'} total</i>`);
+
+    // Unsolved blocker (most recent error that isn't resolved)
+    if (lastErrorEntry) {
+      lines.push('');
+      lines.push('<b>⚠️ Last blocker</b>');
+      lines.push(`<i>${escapeHtml(lastErrorEntry.summary.slice(0, 240))}</i>`);
+    }
+
+    // Recent activity
+    if (journal.length > 0) {
+      lines.push('');
+      lines.push('<b>Recent activity</b>');
+      for (const j of journal.slice(0, 5)) {
+        const icon = j.kind === 'task' ? '⚙️' : j.kind === 'error' ? '❌' : j.kind === 'tool' ? '🔧' : '📝';
+        lines.push(`  ${icon} <i>${escapeHtml(j.summary.slice(0, 120))}</i>`);
+      }
+    }
+
+    // Git log tail
+    if (project.path) {
+      const gitLog = safeGitLog(project.path);
+      if (gitLog.length > 0) {
+        lines.push('');
+        lines.push('<b>Recent commits</b>');
+        for (const entry of gitLog.slice(0, 5)) {
+          lines.push(`  <code>${escapeHtml(entry)}</code>`);
+        }
+      }
+    }
+
+    lines.push('');
+    lines.push('<i>Active project set. New file writes default to this project\'s directory.</i>');
+
+    await ctx.reply(truncateMessage(lines.join('\n')), { parse_mode: 'HTML' });
+    log.info({ chatId: ctx.chat?.id, project: slug }, '/resume command');
+  } catch (err) {
+    log.error({ err }, 'Error in /resume');
+    await ctx.reply('Failed to resume project.');
+  }
+}
+
+function safeGitLog(cwd: string): string[] {
+  try {
+    // Only attempt git log if this looks like a git repo
+    const out = execFileSync('git', ['log', '--oneline', '-5'], {
+      cwd,
+      timeout: 3000,
+      encoding: 'utf-8',
+    }).trim();
+    return out ? out.split('\n') : [];
+  } catch {
+    return [];
+  }
+}
+
+// ─── /dreams [project] ───────────────────────────────────────────────
+
+export async function handleDreams(ctx: Context, _orchestrator: Orchestrator, name?: string): Promise<void> {
+  try {
+    if (name) {
+      // One project's recent code-dream observations
+      const slug = slugify(name);
+      const project = getProject(slug);
+      if (!project) {
+        await ctx.reply(`No project "${escapeHtml(slug)}". Try /projects.`, { parse_mode: 'HTML' });
+        return;
+      }
+      const entries = listJournalEntries(slug, 20).filter((e) => {
+        try {
+          const meta = JSON.parse(e.metadata ?? '{}');
+          return e.kind === 'note' && meta.source === 'code-dreams';
+        } catch { return false; }
+      });
+      if (entries.length === 0) {
+        await ctx.reply(`No Code Dreams observations yet for <b>${escapeHtml(project.display_name)}</b>. They generate on the nightly dream cycle.`, { parse_mode: 'HTML' });
+        return;
+      }
+      const lines: string[] = [`<b>🌙 Code Dreams · ${escapeHtml(project.display_name)}</b>\n`];
+      for (const e of entries.slice(0, 5)) {
+        const when = formatAge(Date.now() - new Date(e.created_at).getTime());
+        lines.push(`<i>${when} ago</i>`);
+        lines.push(escapeHtml(e.summary));
+        lines.push('');
+      }
+      await ctx.reply(truncateMessage(lines.join('\n')), { parse_mode: 'HTML' });
+      return;
+    }
+
+    // No arg — show latest dream per project (one per project, recent first)
+    const projects = listProjects({ limit: 10 });
+    if (projects.length === 0) {
+      await ctx.reply('No projects tracked yet.');
+      return;
+    }
+    const lines: string[] = ['<b>🌙 Recent Code Dreams</b>\n'];
+    let anyShown = false;
+    for (const p of projects) {
+      const entries = listJournalEntries(p.name, 20).filter((e) => {
+        try {
+          const meta = JSON.parse(e.metadata ?? '{}');
+          return e.kind === 'note' && meta.source === 'code-dreams';
+        } catch { return false; }
+      });
+      if (entries.length === 0) continue;
+      anyShown = true;
+      const latest = entries[0]!;
+      const when = formatAge(Date.now() - new Date(latest.created_at).getTime());
+      lines.push(`<b>${escapeHtml(p.display_name)}</b> <i>(${when} ago)</i>`);
+      lines.push(escapeHtml(latest.summary.slice(0, 250)));
+      lines.push('');
+    }
+    if (!anyShown) {
+      await ctx.reply('No Code Dreams yet. The first observations generate on the next nightly dream cycle.');
+      return;
+    }
+    lines.push('<i>Use /dreams &lt;project&gt; for that project\'s full history.</i>');
+    await ctx.reply(truncateMessage(lines.join('\n')), { parse_mode: 'HTML' });
+  } catch (err) {
+    log.error({ err }, 'Error in /dreams');
+    await ctx.reply('Failed to load Code Dreams.');
+  }
+}
+
+// ─── /thinking ───────────────────────────────────────────────────────
+// Surfaces NEXUS's current self-awareness: what it's doing, recent tools,
+// which projects it's been touching, and a rolling narrative.
+
+export async function handleThinking(ctx: Context, orchestrator: Orchestrator): Promise<void> {
+  try {
+    if (!orchestrator.introspection) {
+      await ctx.reply('Introspection is not active yet.');
+      return;
+    }
+    const snap = orchestrator.introspection.getSnapshot();
+    const narrative = orchestrator.introspection.getNarrative();
+
+    const lines: string[] = [];
+    lines.push('<b>💭 Current thinking</b>');
+    lines.push('');
+    lines.push(escapeHtml(narrative));
+
+    if (snap.recentTasks.length > 0) {
+      lines.push('');
+      lines.push('<b>Recent tasks:</b>');
+      for (const t of snap.recentTasks.slice(0, 3)) {
+        const ago = formatAge(Date.now() - t.at);
+        lines.push(`  ${t.success ? '✓' : '✗'} ${escapeHtml(t.title)} <i>(${ago} ago)</i>`);
+      }
+    }
+
+    if (snap.recentErrors.length > 0) {
+      lines.push('');
+      lines.push('<b>Recent errors:</b>');
+      for (const e of snap.recentErrors.slice(0, 3)) {
+        const ago = formatAge(Date.now() - e.at);
+        lines.push(`  <i>[${e.source}] ${escapeHtml(e.message.slice(0, 140))}</i> <i>(${ago} ago)</i>`);
+      }
+    }
+
+    await ctx.reply(truncateMessage(lines.join('\n')), { parse_mode: 'HTML' });
+  } catch (err) {
+    log.error({ err }, 'Error in /thinking');
+    await ctx.reply('Failed to introspect.');
+  }
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────
+
+function formatAge(ms: number): string {
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `just now`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ${min % 60}m`;
+  const d = Math.floor(hr / 24);
+  return `${d}d`;
+}
 
 function confidenceBar(confidence: number): string {
   const filled = Math.round(confidence * 5);

@@ -11,7 +11,7 @@
 
 ![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-339933?logo=nodedotjs&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)
-![Claude Sonnet 4.6](https://img.shields.io/badge/Claude-Sonnet%204.6-7C3AED?logo=anthropic&logoColor=white)
+![Claude 4.7+](https://img.shields.io/badge/Claude-4.7%2B%20tiered-7C3AED?logo=anthropic&logoColor=white)
 ![License MIT](https://img.shields.io/badge/License-MIT-yellow)
 ![macOS only](https://img.shields.io/badge/macOS-only-000000?logo=apple&logoColor=white)
 
@@ -179,7 +179,7 @@ pnpm lint          # Lint and format
 - **Node.js 22+**
 - **pnpm**
 - **Telegram account** with a bot token from [@BotFather](https://t.me/BotFather)
-- **Anthropic API key** (required — NEXUS runs on Claude Sonnet 4.6)
+- **Anthropic API key** (required — NEXUS runs on Claude 4.X with tiered routing: Opus 4.7 for planning, Sonnet 4.6 for execution, Haiku 4.5 for fast checks)
 
 ## License
 

@@ -7,7 +7,7 @@ import { createLogger } from './utils/logger.js';
 
 const log = createLogger('Config');
 
-const NEXUS_DIR = process.env.NEXUS_DATA_DIR?.replace('~', homedir()) ?? join(homedir(), '.nexus');
+const NEXUS_DIR = process.env.NEXUS_DATA_DIR?.replace(/^~(?=\/|$)/, homedir()) ?? join(homedir(), '.nexus');
 const CONFIG_PATH = join(NEXUS_DIR, 'config.yaml');
 
 export function ensureDataDir(): string {
@@ -31,7 +31,13 @@ export function loadConfig(): NexusConfig {
   }
 
   const raw = readFileSync(CONFIG_PATH, 'utf-8');
-  const parsed = parseYaml(raw) ?? {};
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = parseYaml(raw) ?? {};
+  } catch (err) {
+    log.error({ err, path: CONFIG_PATH }, 'Failed to parse config.yaml — using defaults. Please fix or delete the file.');
+    parsed = {};
+  }
 
   // Merge env vars into config
   if (process.env.TELEGRAM_BOT_TOKEN) {
@@ -50,6 +56,15 @@ export function loadConfig(): NexusConfig {
   }
   if (process.env.NEXUS_AI_MODEL) {
     parsed.ai = { ...parsed.ai, model: process.env.NEXUS_AI_MODEL };
+  }
+  if (process.env.NEXUS_AI_OPUS_MODEL) {
+    parsed.ai = { ...parsed.ai, opusModel: process.env.NEXUS_AI_OPUS_MODEL };
+  }
+  if (process.env.NEXUS_AI_FAST_MODEL) {
+    parsed.ai = { ...parsed.ai, fastModel: process.env.NEXUS_AI_FAST_MODEL };
+  }
+  if (process.env.NEXUS_AI_FALLBACK_MODEL) {
+    parsed.ai = { ...parsed.ai, fallbackModel: process.env.NEXUS_AI_FALLBACK_MODEL };
   }
 
   const config = NexusConfigSchema.parse(parsed);

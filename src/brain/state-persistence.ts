@@ -117,12 +117,17 @@ const DEBOUNCE_MS = 30_000; // max once per 30 seconds
  * within the window are dropped. This avoids hammering the disk on every message
  * while still ensuring the state is persisted promptly after changes.
  */
-export function createDebouncedSaver(): (state: BrainStateFile) => void {
+export interface DebouncedSaver {
+  (state: BrainStateFile): void;
+  flush(): void;
+}
+
+export function createDebouncedSaver(): DebouncedSaver {
   let lastSave = 0;
   let pending: ReturnType<typeof setTimeout> | null = null;
   let pendingState: BrainStateFile | null = null;
 
-  return function debouncedSave(state: BrainStateFile): void {
+  const debouncedSave = function(state: BrainStateFile): void {
     const now = Date.now();
     pendingState = state;
 
@@ -146,5 +151,19 @@ export function createDebouncedSaver(): (state: BrainStateFile) => void {
       }
       // Update pendingState so the trailing save uses the latest data
     }
+  } as DebouncedSaver;
+
+  // Flush any pending save immediately. Call on shutdown to avoid losing state.
+  debouncedSave.flush = function(): void {
+    if (pending !== null) {
+      clearTimeout(pending);
+      pending = null;
+    }
+    if (pendingState) {
+      saveBrainState(pendingState);
+      lastSave = Date.now();
+    }
   };
+
+  return debouncedSave;
 }

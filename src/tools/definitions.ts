@@ -41,6 +41,28 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
   {
+    name: 'run_background_command',
+    description:
+      'Start a long-running command in the background (e.g. dev servers, file watchers, builds). ' +
+      'Returns immediately with the PID and initial output. The process keeps running after this call returns. ' +
+      'Use for: npm run dev, python -m http.server, vite dev, next dev, cargo watch, etc. ' +
+      'Do NOT use for short commands that should finish — use run_terminal_command instead.',
+    parameters: {
+      type: 'object',
+      properties: {
+        command: {
+          type: 'string',
+          description: 'The shell command to run in the background',
+        },
+        cwd: {
+          type: 'string',
+          description: 'Working directory for the command (optional)',
+        },
+      },
+      required: ['command'],
+    },
+  },
+  {
     name: 'write_file',
     description:
       'Write content to a file on disk. Creates parent directories automatically. ' +
@@ -790,10 +812,19 @@ export const toolDefinitions: ToolDefinition[] = [
 
 /**
  * Convert our tool definitions to the OpenAI SDK tools format.
+ * Cached at module load — toolDefinitions is immutable, so the result
+ * never needs recomputation. Called on every tool-loop iteration, so
+ * caching avoids ~180KB JSON rebuild per iteration.
  */
+const OPENAI_TOOLS_CACHE: ReadonlyArray<{
+  type: 'function';
+  function: ToolDefinition;
+}> = Object.freeze(toolDefinitions.map((t) => ({ type: 'function' as const, function: t })));
+
 export function toOpenAITools(): Array<{
   type: 'function';
   function: ToolDefinition;
 }> {
-  return toolDefinitions.map((t) => ({ type: 'function' as const, function: t }));
+  // Return a shallow copy so callers can't mutate the cached array.
+  return OPENAI_TOOLS_CACHE.slice();
 }

@@ -18,8 +18,11 @@ export interface ThoughtContext {
 
 export class InnerMonologue {
   private thinkMode = false;
+  private model?: string;
 
-  constructor(private ai: AIManager) {}
+  constructor(private ai: AIManager, model?: string) {
+    this.model = model;
+  }
 
   /** Whether think mode is currently active. */
   isEnabled(): boolean {
@@ -57,6 +60,7 @@ export class InnerMonologue {
         : 'No prior context.';
 
       const response = await this.ai.complete({
+        model: this.model,
         messages: [
           {
             role: 'user',

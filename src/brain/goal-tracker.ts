@@ -7,7 +7,13 @@
 // user is working toward across sessions.
 
 import { createLogger } from '../utils/logger.js';
-import { getDatabase } from '../memory/database.js';
+import {
+  listActiveGoalContents,
+  listStaleGoalCandidates,
+  listActivityAfter,
+  getMemoryTags,
+  updateMemoryTags,
+} from '../data/episodic-queries.js';
 
 const log = createLogger('GoalTracker');
 
@@ -62,23 +68,7 @@ export class GoalTracker {
    * Retrieve active (unresolved) goals from the memory DB.
    */
   getActiveGoals(limit = 5): string[] {
-    try {
-      const db = getDatabase();
-      const rows = db
-        .prepare(
-          `SELECT content FROM memories
-           WHERE layer = 'episodic'
-             AND tags LIKE '%"goal"%'
-             AND tags LIKE '%"active"%'
-           ORDER BY importance DESC, created_at DESC
-           LIMIT ?`,
-        )
-        .all(limit) as Array<{ content: string }>;
-
-      return rows.map((r) => r.content.slice(0, 200));
-    } catch {
-      return [];
-    }
+    return listActiveGoalContents(limit).map((c) => c.slice(0, 200));
   }
 
   /**
@@ -92,39 +82,16 @@ export class GoalTracker {
    */
   pruneStaleGoals(): number {
     try {
-      const db = getDatabase();
       const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-
-      // Fetch goals older than 30 days that are still active
-      const staleGoalRows = db
-        .prepare(
-          `SELECT id, content, tags, created_at FROM memories
-           WHERE layer = 'episodic'
-             AND tags LIKE '%"goal"%'
-             AND tags LIKE '%"active"%'
-             AND created_at < ?`,
-        )
-        .all(cutoff) as Array<{ id: string; content: string; tags: string; created_at: string }>;
-
+      const staleGoalRows = listStaleGoalCandidates(cutoff);
       if (staleGoalRows.length === 0) return 0;
 
-      // For each old goal, check if any episodic memories were created after it
-      // that share keyword overlap with the goal content
       let pruned = 0;
       for (const goal of staleGoalRows) {
         const goalKeywords = extractKeywords(goal.content);
         if (goalKeywords.length === 0) continue;
 
-        // Look for any episodic memory created after this goal
-        const laterRows = db
-          .prepare(
-            `SELECT content FROM memories
-             WHERE layer = 'episodic'
-               AND created_at > ?
-             ORDER BY created_at DESC
-             LIMIT 100`,
-          )
-          .all(goal.created_at) as Array<{ content: string }>;
+        const laterRows = listActivityAfter(goal.created_at, 100);
 
         const hasRelatedActivity = laterRows.some((row) => {
           const rowKeywords = extractKeywords(row.content);
@@ -134,11 +101,14 @@ export class GoalTracker {
 
         if (!hasRelatedActivity) {
           // Swap 'active' → 'stale' in the tags array
-          const tags: string[] = JSON.parse(goal.tags);
-          const updated = tags.filter((t) => t !== 'active').concat('stale');
-          db.prepare('UPDATE memories SET tags = ? WHERE id = ?')
-            .run(JSON.stringify(updated), goal.id);
-          pruned++;
+          try {
+            const tags: string[] = JSON.parse(goal.tags);
+            const updated = tags.filter((t) => t !== 'active').concat('stale');
+            updateMemoryTags(goal.id, JSON.stringify(updated));
+            pruned++;
+          } catch (e) {
+            log.warn({ e, goalId: goal.id }, 'Malformed tags JSON — skipping');
+          }
         }
       }
 
@@ -157,18 +127,12 @@ export class GoalTracker {
    */
   resolveGoal(goalId: string): void {
     try {
-      const db = getDatabase();
-      const row = db
-        .prepare('SELECT tags FROM memories WHERE id = ?')
-        .get(goalId) as { tags: string } | undefined;
+      const tagsJson = getMemoryTags(goalId);
+      if (!tagsJson) return;
 
-      if (!row) return;
-
-      const tags: string[] = JSON.parse(row.tags);
+      const tags: string[] = JSON.parse(tagsJson);
       const updated = tags.filter((t) => t !== 'active').concat('resolved');
-
-      db.prepare('UPDATE memories SET tags = ? WHERE id = ?')
-        .run(JSON.stringify(updated), goalId);
+      updateMemoryTags(goalId, JSON.stringify(updated));
     } catch {
       // non-fatal
     }

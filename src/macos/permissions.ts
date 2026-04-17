@@ -40,7 +40,8 @@ async function checkScreenRecording(): Promise<boolean> {
   const testPath = join(tmpdir(), `nexus-perm-${Date.now()}.png`);
   try {
     await execFileAsync('/usr/sbin/screencapture', ['-x', testPath], { timeout: 5000 });
-    unlink(testPath).catch(() => {});
+    // Cleanup is best-effort; a leftover probe file is harmless
+    unlink(testPath).catch((e) => { logger.debug({ e, testPath }, 'Failed to clean up permission probe file'); });
     return true;
   } catch {
     return false;

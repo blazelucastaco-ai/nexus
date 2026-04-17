@@ -1,11 +1,13 @@
 // Task Journal — append-only JSONL log of every tool call + result.
-// Wired as an afterHook on the ToolExecutor so it captures all tool activity.
+// Subscribes to the NEXUS event bus ('tool.executed', 'tool.error') to capture
+// all tool activity. Backward-compat afterHook factory still exported.
 // View with: cat ~/.nexus/task-journal.jsonl | tail -20
 
 import { appendFile, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createLogger } from '../utils/logger.js';
+import { events } from '../core/events.js';
 
 const log = createLogger('TaskJournal');
 
@@ -26,7 +28,7 @@ function sanitizeParams(params: Record<string, unknown>): Record<string, unknown
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(params)) {
     const key = k.toLowerCase();
-    if (key.includes('token') || key.includes('secret') || key.includes('password') || key.includes('key')) {
+    if (key.includes('token') || key.includes('secret') || key.includes('password') || key.includes('key') || key.includes('auth') || key.includes('bearer')) {
       out[k] = '[REDACTED]';
     } else {
       out[k] = v;
@@ -71,13 +73,61 @@ export async function appendJournalEntry(
 }
 
 /**
- * Returns the afterHook function to pass to executor.addAfterHook().
- * Usage: executor.addAfterHook(makeJournalHook());
+ * Journal health tracking — if writes fail repeatedly (e.g. disk full,
+ * permission loss), we stop attempting and surface the failure once.
+ */
+let journalHealthy = true;
+let journalFailureCount = 0;
+const JOURNAL_FAILURE_THRESHOLD = 5;
+
+/**
+ * [DEPRECATED — kept for backward compat] Returns the afterHook function.
+ * Prefer subscribing via `subscribeJournalToEvents()` in subsystem init.
+ * This hook style required explicit wiring in orchestrator.init; the event
+ * bus version is declarative.
  */
 export function makeJournalHook() {
   return (toolName: string, params: Record<string, unknown>, result?: string) => {
-    appendJournalEntry(toolName, params, result ?? '').catch(() => {});
+    writeJournalEntryWithHealthTracking(toolName, params, result ?? '');
   };
+}
+
+/**
+ * Subscribe the journal to tool execution events on the NEXUS event bus.
+ * Call this once during system init — no need to wire afterHooks.
+ * Returns the subscription so it can be cleanly stopped on shutdown.
+ */
+export function subscribeJournalToEvents(): { unsubscribe(): void }[] {
+  const subs: { unsubscribe(): void }[] = [];
+
+  subs.push(events.on('tool.executed', (e) => {
+    writeJournalEntryWithHealthTracking(e.toolName, e.params ?? {}, `(ok, ${e.durationMs}ms, ${e.resultLen} chars)`);
+  }));
+  subs.push(events.on('tool.error', (e) => {
+    writeJournalEntryWithHealthTracking(e.toolName, e.params ?? {}, `Error: ${e.error}`);
+  }));
+
+  return subs;
+}
+
+function writeJournalEntryWithHealthTracking(toolName: string, params: Record<string, unknown>, result: string): void {
+  if (!journalHealthy) return;
+  appendJournalEntry(toolName, params, result).catch((err) => {
+    journalFailureCount++;
+    if (journalFailureCount === 1) {
+      log.error({ err, toolName }, 'Journal write failed — audit trail at risk');
+    }
+    if (journalFailureCount >= JOURNAL_FAILURE_THRESHOLD) {
+      journalHealthy = false;
+      log.error({ failureCount: journalFailureCount }, 'JOURNAL DISABLED — too many consecutive failures. Tool execution will no longer be audited until restart.');
+    }
+  });
+}
+
+/** Reset journal health tracking — for tests or manual recovery. */
+export function resetJournalHealth(): void {
+  journalHealthy = true;
+  journalFailureCount = 0;
 }
 
 /** Print recent journal entries to stdout (for `nexus journal` CLI). */

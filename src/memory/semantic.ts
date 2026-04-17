@@ -306,17 +306,20 @@ export class SemanticMemory {
 
     const conditions = terms.map(
       () =>
-        '(LOWER(key) LIKE ? OR LOWER(value) LIKE ? OR LOWER(category) LIKE ?)',
+        '(LOWER(key) LIKE ? ESCAPE \'\\\' OR LOWER(value) LIKE ? ESCAPE \'\\\' OR LOWER(category) LIKE ? ESCAPE \'\\\')',
     );
     const params: unknown[] = [];
     for (const term of terms) {
-      const pattern = `%${term}%`;
+      // Escape LIKE wildcards in user input to prevent substring pollution
+      const escaped = term.replace(/[%_\\]/g, '\\$&');
+      const pattern = `%${escaped}%`;
       params.push(pattern, pattern, pattern);
     }
 
+    // Match if ANY term matches (OR semantics) — AND was overly restrictive
     const sql = `
       SELECT * FROM user_facts
-      WHERE ${conditions.join(' AND ')}
+      WHERE ${conditions.join(' OR ')}
       ORDER BY confidence DESC
       LIMIT ?
     `;

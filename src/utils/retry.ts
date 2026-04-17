@@ -44,8 +44,9 @@ export async function retry<T>(
 
       onRetry?.(lastError, attempt + 1);
 
-      // Exponential backoff: baseDelay * 2^attempt, capped at maxDelay
-      const exponentialDelay = baseDelay * Math.pow(2, attempt);
+      // Exponential backoff: baseDelay * 2^attempt, capped at maxDelay.
+      // Cap the exponent at 20 to prevent overflow to Infinity on large attempt counts.
+      const exponentialDelay = baseDelay * Math.pow(2, Math.min(attempt, 20));
       const cappedDelay = Math.min(maxDelay, exponentialDelay);
       // Add jitter: random value between 50% and 100% of the computed delay
       const jitteredDelay = cappedDelay * (0.5 + Math.random() * 0.5);

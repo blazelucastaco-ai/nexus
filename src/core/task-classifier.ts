@@ -96,6 +96,19 @@ const OUTPUT_TYPES =
   'script|program|bot|api|server|cli|tool|plugin|dashboard|portfolio|game|service|library|package|module|' +
   'component|function|class|database|schema|backend|frontend|ui|interface|form|page|site)';
 
+// Pre-compiled regexes (hot-path: called on every message)
+const OUTPUT_TYPE_RE = new RegExp(`\\b${OUTPUT_TYPES}\\b`, 'i');
+const WORK_VERB_RE_LATE = new RegExp(`\\b${WORK_VERBS}\\b`, 'i');
+const PAST_TENSE_VERB_RE = /\b(?:built|created|made|developed|written|coded|implemented|programmed|generated|designed)\b/i;
+const NEED_INTENT_RE = /\b(?:need|want|would\s+like|looking\s+for)\s+(?:a|an|the|to\s+have)?\s*/i;
+const WITH_COLON_RE = /\bwith\s*:\s*\S/i;
+const INCLUDING_COLON_RE = /\bincluding\s*:\s*\S/i;
+const MODIFICATION_TARGET_RE = /\b(?:to\s+it|to\s+the\s+\w+|to\s+my\s+\w+)\b/i;
+const MODIFICATION_VERB_RE = /\b(?:add|remove|update|change|modify|rename|move|edit|insert|append|include)\b/i;
+const EXISTING_PROJECT_RE = /\b(?:i\s+(?:built|made|created|wrote|have)|(?:built|made|created)\s+earlier|already\s+(?:have|exists?|built|made))\b/i;
+const SIMPLE_FILE_OUTPUT_RE = /\b(?:note|reminder|reminders|checklist|list|file|txt|log|diary|journal)\b/i;
+const CREATE_VERB_RE = /\b(?:make|create|write|add|put|save|create)\b/i;
+
 /**
  * Signals that a request is for a *third party* — meaning requirements have not
  * been gathered from that person yet.
@@ -128,8 +141,14 @@ const HAS_CONTEXT_PATTERNS: RegExp[] = [
   /\b(?:with\s+(?:a|an|the)\s+\w+|including\s+(?:a|an)\s+\w+|pages?\s+for|sections?\s+for|features?\s+(?:like|including|such as))\b/i,
   // Describes the subject/purpose clearly: "about X", "for selling X", "focused on X"
   /\b(?:about|focused\s+on|centered\s+on|related\s+to|based\s+on|regarding)\s+\w+/i,
-  // Tech stack specified
+  // Tech stack specified — explicit framework or "using/built with"
   /\b(?:using|built\s+with|powered\s+by|in\s+(?:react|vue|svelte|next|nuxt|python|node|rails|django|flask|laravel))\b/i,
+  // Direct tech mention: "HTML, CSS", "HTML and JS", "just HTML" — clearly spec'd
+  /\b(?:html|css|javascript|typescript|python|sql|bash|shell|node(?:\.?js)?|react|vue|svelte)\b.*\b(?:html|css|javascript|typescript|python|sql|bash|shell|node(?:\.?js)?|react|vue|svelte)\b/i,
+  // Named project/folder: "called todo-app", "named my-project", "folder called X"
+  /\b(?:called|named)\s+[\w\-]+\b/i,
+  // "in one folder / in a folder / in a directory" — location specified
+  /\bin\s+(?:one|a|the|my)\s+(?:folder|directory|dir)\b/i,
   // Specific named entity (capitalized noun that isn't a person pronoun) after "for"
   /\bfor\s+[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?\b(?!\s+(?:friend|client|boss|colleague))/,
   // Describes the person's role/profession: "who is a photographer", "who works as a developer"
@@ -151,28 +170,46 @@ const HAS_CONTEXT_PATTERNS: RegExp[] = [
  * - Short vague request (< 160 chars) with a project-type keyword but no context signals → ask
  * - If the message has context signals (describes purpose, content, tech) → proceed
  */
+// Patterns that signal harmful intent targeting another person — let Claude refuse directly
+const HARMFUL_TARGETING_PATTERNS: RegExp[] = [
+  // Targeting someone else's system/account/files
+  /\b(?:someone(?:'s)?|another\s+person'?s?|other\s+people'?s?|their)\s+(?:computer|device|account|files?|wifi|network|phone|email|password|system)\b/i,
+  // Explicit attack verbs
+  /\b(?:hack\s+into|break\s+into|crack\s+(?:into|open)|gain\s+(?:unauthorized|illegal)\s+access)\b/i,
+  // Malware / destructive script intent
+  /\b(?:malware|ransomware|virus|trojan|keylogger|rootkit)\b/i,
+  // "Destroy/delete everything" at OS level
+  /\b(?:delete|wipe|destroy|erase)\s+(?:all\s+)?(?:files|everything|data)\s+(?:on\s+(?:someone|another|their|his|her)(?:'s)?\s+(?:computer|device|system|machine|drive|disk)|on\s+the\s+(?:computer|system|machine))\b/i,
+];
+
 export function detectMissingRequirements(text: string): string | null {
   const trimmed = text.trim();
+
+  // Harmful requests targeting other people — let Claude refuse, don't intercept with requirements gate
+  if (HARMFUL_TARGETING_PATTERNS.some((p) => p.test(trimmed))) return null;
 
   // Fix/debug verbs mean existing code — never ask for requirements
   if (FIX_VERBS.test(trimmed)) return null;
 
+  // Modification requests on existing things — "add X to it/to the Y", "built earlier", "already have"
+  if (MODIFICATION_TARGET_RE.test(trimmed) && MODIFICATION_VERB_RE.test(trimmed)) return null;
+  if (EXISTING_PROJECT_RE.test(trimmed)) return null;
+
   // Primary output is a simple file/note/list — any project-type words are content items, not the request target
-  if (/\b(?:note|reminder|reminders|checklist|list|file|txt|log|diary|journal)\b/i.test(trimmed) &&
-      /\b(?:make|create|write|add|put|save|create)\b/i.test(trimmed)) return null;
+  if (SIMPLE_FILE_OUTPUT_RE.test(trimmed) && CREATE_VERB_RE.test(trimmed)) return null;
 
   // "with:" or "including:" followed by list items — content specification, not a project build request
-  if (/\bwith\s*:\s*\S/i.test(trimmed) || /\bincluding\s*:\s*\S/i.test(trimmed)) return null;
+  if (WITH_COLON_RE.test(trimmed) || INCLUDING_COLON_RE.test(trimmed)) return null;
 
   // Already has enough context — don't block
   if (HAS_CONTEXT_PATTERNS.some((p) => p.test(trimmed))) return null;
 
-  const hasOutputType = new RegExp(`\\b${OUTPUT_TYPES}\\b`, 'i').test(trimmed);
+  const hasOutputType = OUTPUT_TYPE_RE.test(trimmed);
   const isForThirdParty = THIRD_PARTY_PATTERNS.some((p) => p.test(trimmed));
 
   // "for my friend / for a client" with no context — we know nothing about requirements
   if (isForThirdParty && hasOutputType) {
-    const match = trimmed.match(new RegExp(`\\b${OUTPUT_TYPES}\\b`, 'i'));
+    const match = trimmed.match(OUTPUT_TYPE_RE);
     const type = match ? match[0] : 'project';
     return (
       `Before I start, I need a few details so I can build exactly what's needed:\n\n` +
@@ -187,14 +224,14 @@ export function detectMissingRequirements(text: string): string | null {
   // Short vague request with a project type but no description of what it does
   if (hasOutputType && trimmed.length < 160) {
     // Detect implied build intent — present tense, past tense, or "need/want a X"
-    const hasWorkVerb = new RegExp(`\\b${WORK_VERBS}\\b`, 'i').test(trimmed);
-    const hasPastTenseVerb = /\b(?:built|created|made|developed|written|coded|implemented|programmed|generated|designed)\b/i.test(trimmed);
-    const hasNeedIntent = /\b(?:need|want|would\s+like|looking\s+for)\s+(?:a|an|the|to\s+have)?\s*/i.test(trimmed);
+    const hasWorkVerb = WORK_VERB_RE_LATE.test(trimmed);
+    const hasPastTenseVerb = PAST_TENSE_VERB_RE.test(trimmed);
+    const hasNeedIntent = NEED_INTENT_RE.test(trimmed);
     const isImpliedBuildRequest = hasWorkVerb || hasPastTenseVerb || hasNeedIntent;
 
     if (!isImpliedBuildRequest) return null; // just mentioning a project type, not requesting one
 
-    const match = trimmed.match(new RegExp(`\\b${OUTPUT_TYPES}\\b`, 'i'));
+    const match = trimmed.match(OUTPUT_TYPE_RE);
     const type = match ? match[0] : 'project';
     return (
       `I'd love to help, but I need more details before starting:\n\n` +
@@ -222,7 +259,7 @@ export function classifyMessage(text: string): MessageType {
   // Strong chat overrides always win — even when a work verb is present
   if (STRONG_CHAT_OVERRIDES.some((p) => p.test(trimmed))) return 'chat';
 
-  const hasWorkVerb = new RegExp(`\\b${WORK_VERBS}\\b`, 'i').test(trimmed);
+  const hasWorkVerb = WORK_VERB_RE_LATE.test(trimmed);
 
   if (!hasWorkVerb && CHAT_OVERRIDES.some((p) => p.test(trimmed))) return 'chat';
 

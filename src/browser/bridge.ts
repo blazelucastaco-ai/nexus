@@ -31,19 +31,25 @@ export class BrowserBridge {
   start(): void {
     if (this.wss) return;
 
-    this.wss = new WebSocketServer({ port: BRIDGE_PORT, host: '127.0.0.1' });
+    try {
+      this.wss = new WebSocketServer({ port: BRIDGE_PORT, host: '127.0.0.1' });
+    } catch (err) {
+      log.error({ err, port: BRIDGE_PORT }, `Failed to start browser bridge — port may be in use`);
+      throw err;
+    }
     log.info({ port: BRIDGE_PORT }, 'Browser bridge listening for Chrome extension');
 
     this.wss.on('connection', (ws) => {
-      // Only allow one client at a time
+      // Only allow one client at a time — check AND assign atomically
+      // (Node's event loop makes this synchronous block atomic)
       if (this.client && this.client.readyState === WebSocket.OPEN) {
         log.warn('Second extension tried to connect — rejecting');
         ws.close(1008, 'Only one client allowed');
         return;
       }
+      this.client = ws;
 
       log.info('Chrome extension connected');
-      this.client = ws;
       this._connectedAt = new Date();
       this.onConnectCb?.();
 

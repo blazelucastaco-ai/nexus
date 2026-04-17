@@ -129,15 +129,19 @@ export class ResearchAgent extends BaseAgent {
 
   private async deepResearch(params: Record<string, unknown>, start: number): Promise<AgentResult> {
     const topic = String(params.topic);
-    const urls = (params.urls as string[]) ?? [];
-    const queries = (params.queries as string[]) ?? [topic];
+    const MAX_QUERIES = 10;
+    const MAX_URLS = 10;
+    const urls = ((params.urls as string[]) ?? []).slice(0, MAX_URLS);
+    const queries = ((params.queries as string[]) ?? [topic]).slice(0, MAX_QUERIES);
 
     // Open search for each query
     const searchUrls: string[] = [];
     for (const query of queries) {
       const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
       searchUrls.push(searchUrl);
-      await execFileAsync('open', [searchUrl], { timeout: 5_000 }).catch(() => {});
+      await execFileAsync('open', [searchUrl], { timeout: 5_000 }).catch((e) => {
+        this.log.debug({ e, searchUrl }, 'Failed to open search URL in browser — continuing with summary');
+      });
     }
 
     // Fetch and summarize all provided URLs
@@ -148,11 +152,15 @@ export class ResearchAgent extends BaseAgent {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 10_000);
 
-        const response = await fetch(url, {
-          signal: controller.signal,
-          headers: { 'User-Agent': 'NEXUS-AI/1.0', Accept: 'text/html,*/*' },
-        });
-        clearTimeout(timeout);
+        let response: Response;
+        try {
+          response = await fetch(url, {
+            signal: controller.signal,
+            headers: { 'User-Agent': 'NEXUS-AI/1.0', Accept: 'text/html,*/*' },
+          });
+        } finally {
+          clearTimeout(timeout);
+        }
 
         if (response.ok) {
           const html = await response.text();

@@ -29,12 +29,31 @@ export interface SynthesisResult {
   usedMemoryIds: string[];  // Memory IDs included (for feedback loop)
 }
 
+const MAX_CACHE_ENTRIES = 200;
+
 export class MemorySynthesizer {
   private aiManager: AIManager;
   private cache = new Map<string, CacheEntry>();
+  private model?: string;
 
-  constructor(aiManager: AIManager) {
+  constructor(aiManager: AIManager, model?: string) {
     this.aiManager = aiManager;
+    this.model = model;
+  }
+
+  /** Drop the oldest/expired entries to keep cache bounded. */
+  private pruneCache(): void {
+    // First pass: drop expired entries
+    const now = Date.now();
+    for (const [key, entry] of this.cache) {
+      if (now >= entry.expiresAt) this.cache.delete(key);
+    }
+    // Second pass: if still over cap, drop oldest entries (Map preserves insertion order)
+    while (this.cache.size > MAX_CACHE_ENTRIES) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest === undefined) break;
+      this.cache.delete(oldest);
+    }
   }
 
   async synthesize(
@@ -62,8 +81,8 @@ export class MemorySynthesizer {
       return { synthesis: fallback, usedMemoryIds };
     }
 
-    // Build a cache key from the query + memory IDs (stable order)
-    const cacheKey = `${query.slice(0, 100)}:${usedMemoryIds.join(',')}`;
+    // Build a cache key from the full query + memory IDs (stable order)
+    const cacheKey = `${query}:${usedMemoryIds.join(',')}`;
     const cached = this.cache.get(cacheKey);
     if (cached && Date.now() < cached.expiresAt) {
       log.debug({ cacheKey: cacheKey.slice(0, 60) }, 'Memory synthesis cache hit');
@@ -84,6 +103,7 @@ export class MemorySynthesizer {
 
     try {
       const response = await this.aiManager.complete({
+        model: this.model,
         messages: [
           {
             role: 'user',
@@ -112,6 +132,7 @@ export class MemorySynthesizer {
 
       // Store in cache
       this.cache.set(cacheKey, { result, expiresAt: Date.now() + CACHE_TTL_MS });
+      this.pruneCache();
 
       return result;
     } catch (err) {

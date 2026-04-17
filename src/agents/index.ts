@@ -9,7 +9,6 @@ import { TerminalAgent } from './terminal.js';
 import { CodeAgent } from './code.js';
 import { ResearchAgent } from './research.js';
 import { SystemAgent } from './system.js';
-import { CreativeAgent } from './creative.js';
 import { CommsAgent } from './comms.js';
 import { SchedulerAgent } from './scheduler.js';
 
@@ -40,7 +39,6 @@ export class AgentManager {
       new CodeAgent(),
       new ResearchAgent(),
       new SystemAgent(),
-      new CreativeAgent(),
       new CommsAgent(),
       new SchedulerAgent(),
     ];
@@ -177,6 +175,5 @@ export { TerminalAgent } from './terminal.js';
 export { CodeAgent } from './code.js';
 export { ResearchAgent } from './research.js';
 export { SystemAgent } from './system.js';
-export { CreativeAgent } from './creative.js';
 export { CommsAgent } from './comms.js';
 export { SchedulerAgent } from './scheduler.js';

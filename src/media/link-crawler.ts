@@ -48,7 +48,17 @@ export async function crawlUrl(url: string): Promise<CrawlResult> {
     throw new Error(`Non-HTML content type: ${contentType}`);
   }
 
+  // Cap response size to prevent OOM on enormous HTML pages or misreported Content-Type
+  const MAX_HTML_BYTES = 10 * 1024 * 1024; // 10 MB
+  const contentLength = resp.headers.get('content-length');
+  if (contentLength && parseInt(contentLength, 10) > MAX_HTML_BYTES) {
+    throw new Error(`HTML response too large: ${contentLength} bytes (max ${MAX_HTML_BYTES})`);
+  }
+
   const html = await resp.text();
+  if (html.length > MAX_HTML_BYTES) {
+    throw new Error(`HTML response too large: ${html.length} bytes (max ${MAX_HTML_BYTES})`);
+  }
   const $ = cheerio.load(html);
 
   // Extract title

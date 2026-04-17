@@ -12,7 +12,7 @@ import { EmotionalEngine, EVENT_FORCES, type EmotionForce } from './emotions.js'
 import { OpinionEngine, type Evidence } from './opinions.js';
 import { StyleEngine, type StyleContext } from './style.js';
 import { HumorEngine, type HumorContext } from './humor.js';
-import { loadBrainState, saveBrainState, createDebouncedSaver, type BrainStateFile, type MoodHistoryEntry } from '../brain/state-persistence.js';
+import { loadBrainState, saveBrainState, createDebouncedSaver, type BrainStateFile, type DebouncedSaver, type MoodHistoryEntry } from '../brain/state-persistence.js';
 
 const log = createLogger('PersonalityEngine');
 
@@ -36,7 +36,7 @@ export class PersonalityEngine {
   private firstSeenTimestamp: string;
   private lastSeenTimestamp: string;
 
-  private readonly debouncedSave: (state: BrainStateFile) => void;
+  private readonly debouncedSave: DebouncedSaver;
 
   constructor(config: NexusConfig) {
     this.traits = config.personality.traits;
@@ -135,6 +135,16 @@ export class PersonalityEngine {
 
   private scheduleSave(): void {
     this.debouncedSave(this.buildStateFile());
+  }
+
+  /**
+   * Force the pending debounced save to flush immediately. Call on shutdown
+   * to ensure recent mood/opinion/emotion changes aren't lost.
+   */
+  flush(): void {
+    // Ensure the latest state is queued before flushing
+    this.debouncedSave(this.buildStateFile());
+    this.debouncedSave.flush();
   }
 
   /** Get the full personality state snapshot. */

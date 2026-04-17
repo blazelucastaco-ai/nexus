@@ -36,9 +36,11 @@ const EMPTY_TRACE: TraceOutput = {
 export class ReasoningTrace {
   private aiManager: AIManager;
   private enabled = true;
+  private model?: string;
 
-  constructor(aiManager: AIManager) {
+  constructor(aiManager: AIManager, model?: string) {
     this.aiManager = aiManager;
+    this.model = model;
   }
 
   setEnabled(enabled: boolean): void {
@@ -64,6 +66,7 @@ export class ReasoningTrace {
 
     try {
       const response = await this.aiManager.complete({
+        model: this.model,
         messages: [
           {
             role: 'user',

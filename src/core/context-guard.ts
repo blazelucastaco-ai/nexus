@@ -80,32 +80,62 @@ export function checkContextUsage(
 
 /**
  * Aggressively prune messages to reduce context size.
- * Keeps system prompt intact, drops oldest tool call results first,
- * then trims oldest messages.
+ * Strategy: compress tool results first (keep only summaries), then drop oldest.
+ * Preserves tool call/result pairs to avoid orphaned messages.
  */
 export function aggressiveCompact(messages: AIMessage[], targetTokenBudget: number): AIMessage[] {
   const targetChars = targetTokenBudget * CHARS_PER_TOKEN;
   let result = [...messages];
+  const getChars = () => result.reduce((acc, m) => acc + (typeof m.content === 'string' ? m.content.length : 100), 0);
 
-  // First pass: shorten tool result messages
+  // Phase 1: Compress large tool results (keep first 200 chars + error lines)
   result = result.map((msg) => {
-    if (msg.role === 'tool' && typeof msg.content === 'string' && msg.content.length > 500) {
-      return { ...msg, content: msg.content.slice(0, 500) + '\n[compacted]' };
+    if (msg.role === 'tool' && typeof msg.content === 'string' && msg.content.length > 300) {
+      const content = msg.content;
+      // Keep first line (usually shows what happened) + any error lines
+      const lines = content.split('\n');
+      const summary = lines[0]?.slice(0, 150) ?? '';
+      const errorLines = lines
+        .filter(l => /error|Error|failed|Failed|ENOENT|EACCES|exit code/i.test(l))
+        .slice(0, 3)
+        .map(l => l.slice(0, 150));
+      const compressed = errorLines.length > 0
+        ? `${summary}\n${errorLines.join('\n')}\n[compacted from ${content.length} chars]`
+        : `${summary} [compacted from ${content.length} chars]`;
+      return { ...msg, content: compressed };
     }
     return msg;
   });
 
-  // Second pass: drop oldest messages until we fit
-  const currentChars = result.reduce((acc, m) => acc + (typeof m.content === 'string' ? m.content.length : 100), 0);
-  if (currentChars <= targetChars) return result;
+  if (getChars() <= targetChars) return result;
 
-  // Keep the last N messages that fit
-  while (result.length > 4) {
-    result.splice(0, 1); // drop oldest
-    const chars = result.reduce((acc, m) => acc + (typeof m.content === 'string' ? m.content.length : 100), 0);
-    if (chars <= targetChars) break;
+  // Phase 2: Drop oldest messages, but never orphan tool_call/result pairs
+  // Protect: first user message + last 8 messages
+  const protectedTail = Math.min(8, result.length - 1);
+
+  while (result.length > protectedTail + 1 && getChars() > targetChars) {
+    // Find the oldest non-protected message to remove
+    // Skip index 0 (first user message) if it's a user message
+    const removeIdx = result[0]?.role === 'user' ? 1 : 0;
+    if (removeIdx >= result.length - protectedTail) break;
+
+    // Never orphan tool results: if we'd remove an assistant with tool_calls
+    // followed by tool results, remove them together (or stop).
+    const toRemove = result[removeIdx];
+    if (toRemove?.role === 'assistant' && toRemove.tool_calls && toRemove.tool_calls.length > 0) {
+      // Count how many consecutive tool messages follow
+      let toolCount = 0;
+      while (result[removeIdx + 1 + toolCount]?.role === 'tool') toolCount++;
+      if (removeIdx + 1 + toolCount >= result.length - protectedTail) break;
+      result.splice(removeIdx, 1 + toolCount);
+    } else if (toRemove?.role === 'tool') {
+      // Orphan tool result at the head — drop it (the matching assistant msg is already gone)
+      result.splice(removeIdx, 1);
+    } else {
+      result.splice(removeIdx, 1);
+    }
   }
 
-  log.info({ retained: result.length }, 'Aggressive compaction applied');
+  log.info({ retained: result.length, chars: getChars() }, 'Aggressive compaction applied');
   return result;
 }

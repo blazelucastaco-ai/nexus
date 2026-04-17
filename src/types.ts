@@ -108,7 +108,6 @@ export type AgentName =
   | 'code'
   | 'research'
   | 'system'
-  | 'creative'
   | 'comms'
   | 'scheduler';
 
@@ -238,10 +237,17 @@ export const NexusConfigSchema = z.object({
   ai: z
     .object({
       provider: z.enum(['anthropic', 'openai', 'ollama']).default('anthropic'),
+      // Tiered model routing:
+      // - opusModel:  heavy reasoning (task planning, CoWork, Ultra mode review)
+      // - model:      workhorse (chat, task execution, vision, self-eval)
+      // - fastModel:  lightweight classification (synthesis, reasoning trace, inner monologue, summaries)
+      opusModel: z.string().default('claude-opus-4-7'),
       model: z.string().default('claude-sonnet-4-6'),
+      fastModel: z.string().default('claude-haiku-4-5-20251001'),
       fallbackModel: z.string().default('claude-haiku-4-5-20251001'),
-      maxTokens: z.number().default(32768),
-      temperature: z.number().default(0.7),
+      maxTokens: z.number().int().min(256).max(200_000).default(32768),
+      temperature: z.number().min(0).max(2).default(0.4),
+      chatTemperature: z.number().min(0).max(2).default(0.7),
     })
     .default({}),
   telegram: z

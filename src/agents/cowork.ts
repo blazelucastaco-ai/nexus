@@ -1,7 +1,7 @@
 // ─── Co Work Agent ("Phone a Friend") ────────────────────────────────────────
 //
 // When NEXUS gets stuck on a failing step, it consults a parallel agent running
-// a more powerful model (claude-opus-4-6) for a second opinion and concrete fix.
+// Opus 4.7 for a second opinion and concrete fix.
 //
 // Flow:
 //   1. NEXUS exhausts standard retries on a step
@@ -18,7 +18,7 @@ import type { AIManager } from '../ai/index.js';
 const log = createLogger('CoWork');
 
 // Co Work always uses the strongest available model — that's the whole point
-const COWORK_MODEL = 'claude-opus-4-6';
+const COWORK_MODEL = 'claude-opus-4-7';
 const COWORK_MAX_TOKENS = 4096;
 
 // ─── Types ────────────────────────────────────────────────────────────────────

@@ -53,14 +53,14 @@ describe('CoWorkAgent', () => {
       expect(result.confidence).toBe(0.85);
     });
 
-    it('calls complete() with claude-opus-4-6 model', async () => {
+    it('calls complete() with claude-opus-4-7 model', async () => {
       const ai = makeAI(VALID_COWORK_JSON);
       const agent = new CoWorkAgent(ai);
       await agent.consult(makeRequest());
 
       expect(ai.complete).toHaveBeenCalledOnce();
       const call = ai.complete.mock.calls[0][0];
-      expect(call.model).toBe('claude-opus-4-6');
+      expect(call.model).toBe('claude-opus-4-7');
     });
 
     it('includes task context in the message', async () => {

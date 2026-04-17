@@ -37,6 +37,7 @@ import { checkApproval } from '../security/approval-gate.js';
 
 import type { AgentManager } from '../agents/index.js';
 import type { MemoryManager } from '../memory/index.js';
+import { events } from '../core/events.js';
 
 const log = createLogger('ToolExecutor');
 const execFileAsync = promisify(execFile);
@@ -47,12 +48,9 @@ const TOOL_RESULT_HEAD = 3_000;
 const TOOL_RESULT_TAIL = 3_000;
 
 /**
- * FIX 4: Head+tail truncation for tool results.
- * Keeps first 3000 chars (command echo, headers) and last 3000 chars (errors, summaries).
- * Ensures we never lose the tail where errors typically appear.
- *
- * JSON results are never truncated mid-string — if the result looks like valid JSON
- * we leave it intact so the LLM can parse it (e.g. screenshot base64, extract data).
+ * Smart truncation for tool results.
+ * Strategy: keep head, tail, AND any error lines from the middle.
+ * JSON results are never truncated.
  */
 function truncateToolResult(text: string): string {
   if (text.length <= TOOL_RESULT_MAX) return text;
@@ -64,7 +62,27 @@ function truncateToolResult(text: string): string {
   const total = text.length;
   const head = text.slice(0, TOOL_RESULT_HEAD);
   const tail = text.slice(total - TOOL_RESULT_TAIL);
-  return `${head}\n[Output truncated: showing first ${TOOL_RESULT_HEAD} and last ${TOOL_RESULT_TAIL} of ${total} total characters]\n${tail}`;
+
+  // Extract error-relevant lines from the middle section
+  const middle = text.slice(TOOL_RESULT_HEAD, total - TOOL_RESULT_TAIL);
+  const errorPatterns = /^.*(error|Error|ERROR|warning|Warning|WARN|failed|Failed|FAILED|cannot|Cannot|ENOENT|EACCES|EPERM|not found|TypeError|SyntaxError|ReferenceError|Module not found|Could not resolve|✗|✘|FATAL).*$/gm;
+  const errorLines: string[] = [];
+  let match: RegExpExecArray | null;
+  let errorChars = 0;
+  const MAX_ERROR_CHARS = 1500;
+  while ((match = errorPatterns.exec(middle)) !== null) {
+    const line = match[0].trim();
+    if (line.length > 0 && errorChars + line.length < MAX_ERROR_CHARS) {
+      errorLines.push(line);
+      errorChars += line.length;
+    }
+  }
+
+  const errorSection = errorLines.length > 0
+    ? `\n[${errorLines.length} error/warning lines from middle section:]\n${errorLines.join('\n')}\n`
+    : '';
+
+  return `${head}\n[Output truncated: showing first ${TOOL_RESULT_HEAD} and last ${TOOL_RESULT_TAIL} of ${total} total chars]${errorSection}\n${tail}`;
 }
 
 // Risk tiers for tool execution:
@@ -84,6 +102,7 @@ const TOOL_RISK: Record<string, 'AUTO' | 'LOGGED' | 'CONFIRM'> = {
   check_injection:     'AUTO',
   write_file:          'LOGGED',
   run_terminal_command:'LOGGED',
+  run_background_command:'LOGGED',
   remember:            'LOGGED',
   take_screenshot:     'CONFIRM',
   toggle_think_mode:   'AUTO',
@@ -185,10 +204,13 @@ async function checkSyntax(filePath: string, content: string): Promise<string | 
   const ext = extname(filePath).toLowerCase();
   try {
     if (ext === '.ts' || ext === '.tsx') {
-      // TypeScript: use tsc --noEmit if available, fall back to node syntax check
+      // TypeScript: use tsc --noEmit. Pass filePath via argv to avoid shell injection.
       const { stderr } = await execFileAsync(
-        '/bin/zsh', ['-l', '-c', `npx --yes tsc --noEmit --allowJs --checkJs false --strict false --skipLibCheck --target ES2022 --moduleResolution node ${filePath} 2>&1 | head -20`],
-        { timeout: 15_000, maxBuffer: 1_000_000, env: { ...process.env, PATH: `/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${process.env.PATH ?? ''}` } },
+        'npx', ['--yes', 'tsc', '--noEmit', '--allowJs', '--checkJs', 'false',
+          '--strict', 'false', '--skipLibCheck', '--target', 'ES2022',
+          '--moduleResolution', 'node', filePath],
+        { timeout: 15_000, maxBuffer: 1_000_000,
+          env: { ...process.env, PATH: `/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${process.env.PATH ?? ''}` } },
       ).catch((e: unknown) => ({ stderr: e instanceof Error ? e.message : String(e), stdout: '' }));
       if (stderr && stderr.includes('error TS')) {
         return stderr.split('\n').filter((l: string) => l.includes('error TS')).slice(0, 3).join('; ');
@@ -322,6 +344,15 @@ export class ToolExecutor {
 
     log.info({ toolName, duration, resultLen: result.length }, 'Tool executed');
 
+    // Emit structured event so subscribers (journal, metrics, proactive) can react
+    // without needing hook registration in orchestrator.init.
+    const success = !result.startsWith('Error:') && !result.startsWith('Command rejected');
+    if (success) {
+      events.emit({ type: 'tool.executed', toolName, success, durationMs: duration, resultLen: result.length, params: args });
+    } else {
+      events.emit({ type: 'tool.error', toolName, error: result.slice(0, 200), params: args });
+    }
+
     // FIX 3: Call after-hooks with result
     for (const hook of this.afterHooks) {
       try { hook(toolName, args, result); } catch { /* hooks must not crash execution */ }
@@ -333,6 +364,7 @@ export class ToolExecutor {
   private async runTool(toolName: string, args: Record<string, unknown>): Promise<string> {
     switch (toolName) {
       case 'run_terminal_command': return this.runTerminalCommand(args);
+      case 'run_background_command': return this.runBackgroundCommand(args);
       case 'write_file':          return this.writeFile(args);
       case 'read_file':           return this.readFile(args);
       case 'list_directory':      return this.listDirectory(args);
@@ -400,7 +432,7 @@ export class ToolExecutor {
 
   private async runTerminalCommand(args: Record<string, unknown>): Promise<string> {
     const command = String(args.command ?? '');
-    const timeoutMs = Number(args.timeout ?? 30_000);
+    const timeoutMs = Math.max(1_000, Math.min(300_000, Number(args.timeout ?? 30_000)));
     const cwd = args.cwd ? expandPath(String(args.cwd)) : undefined;
     const confirmed = args.confirmed === true || args.confirmed === 'true';
 
@@ -511,7 +543,113 @@ export class ToolExecutor {
     return '(command completed with no output)';
   }
 
+  // ── run_background_command ──────────────────────────────────────────
+  // Starts a command in the background (e.g. dev servers, watchers).
+  // Returns immediately with PID. Captures initial output (first 3s).
+
+  private backgroundProcesses = new Map<number, { command: string; startedAt: string }>();
+
+  private async runBackgroundCommand(args: Record<string, unknown>): Promise<string> {
+    const { spawn } = await import('node:child_process');
+    const command = String(args.command ?? '');
+    const cwd = args.cwd ? expandPath(String(args.cwd)) : undefined;
+
+    if (!command) return 'Error: No command provided';
+
+    if (DANGEROUS_PATTERNS.some((p) => p.test(command))) {
+      return `Command rejected as dangerous: ${command}`;
+    }
+
+    const wrappedCommand = `source ~/.zshrc 2>/dev/null; source ~/.zprofile 2>/dev/null; ${command}`;
+
+    const child = spawn('/bin/zsh', ['-l', '-c', wrappedCommand], {
+      cwd,
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        PATH: `/usr/local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:${process.env.PATH ?? ''}`,
+        TERM: 'xterm-256color',
+      },
+    });
+
+    child.unref();
+    const pid = child.pid ?? 0;
+
+    // Capture initial output (first 3 seconds) to detect startup errors
+    let initialOutput = '';
+    let initialError = '';
+    const captureTimeout = 3000;
+
+    const outputPromise = new Promise<string>((resolve) => {
+      const timer = setTimeout(() => resolve('started'), captureTimeout);
+
+      child.stdout?.on('data', (chunk: Buffer) => {
+        initialOutput += chunk.toString();
+        if (initialOutput.length > 2000) initialOutput = initialOutput.slice(0, 2000);
+      });
+      child.stderr?.on('data', (chunk: Buffer) => {
+        initialError += chunk.toString();
+        if (initialError.length > 2000) initialError = initialError.slice(0, 2000);
+      });
+      child.on('exit', (code) => {
+        clearTimeout(timer);
+        resolve(code === 0 ? 'exited-ok' : `exited-${code}`);
+      });
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        resolve(`error: ${err.message}`);
+      });
+    });
+
+    const status = await outputPromise;
+
+    this.backgroundProcesses.set(pid, { command, startedAt: new Date().toISOString() });
+
+    const parts = [`Background process started (PID: ${pid})`];
+    if (status.startsWith('exited')) {
+      parts[0] = `Process exited immediately (${status})`;
+    }
+    if (initialOutput.trim()) parts.push(`Initial output:\n${initialOutput.trim()}`);
+    if (initialError.trim()) parts.push(`Initial stderr:\n${initialError.trim()}`);
+
+    return parts.join('\n\n');
+  }
+
   // ── write_file ─────────────────────────────────────────────────────
+
+  // Undo stack: snapshots of the last N files we wrote/modified.
+  // Each entry: { path, previousContent (null if file didn't exist), timestamp }
+  private undoStack: Array<{ path: string; previousContent: string | null; timestamp: number }> = [];
+  private static readonly MAX_UNDO_ENTRIES = 50;
+
+  /** Return a copy of the undo stack (newest last). */
+  getUndoStack(): Array<{ path: string; hadPrevious: boolean; timestamp: number }> {
+    return this.undoStack.map((e) => ({ path: e.path, hadPrevious: e.previousContent !== null, timestamp: e.timestamp }));
+  }
+
+  /**
+   * Restore the most recent file change. Returns a human-readable result.
+   * If the file was newly created, deletes it. If modified, restores previous content.
+   */
+  async undoLastWrite(): Promise<string> {
+    const entry = this.undoStack.pop();
+    if (!entry) return 'Nothing to undo.';
+
+    try {
+      if (entry.previousContent === null) {
+        // File was newly created — delete it
+        const { unlink } = await import('node:fs/promises');
+        await unlink(entry.path);
+        return `Undid: deleted ${entry.path} (was newly created)`;
+      }
+      // File was modified — restore previous content
+      await fsWriteFile(entry.path, entry.previousContent, 'utf-8');
+      return `Undid: restored previous content of ${entry.path} (${entry.previousContent.length} bytes)`;
+    } catch (err) {
+      return `Undo failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
 
   private async writeFile(args: Record<string, unknown>): Promise<string> {
     const rawPath = String(args.path ?? '');
@@ -542,6 +680,20 @@ export class ToolExecutor {
     // ALWAYS create parent directories first — prevents ENOENT permanently
     await mkdir(dirname(filePath), { recursive: true });
 
+    // Snapshot previous content for /undo. Read-before-write is cheap for small files
+    // and prevents data loss. Null means the file didn't exist (undo = delete).
+    // Cap snapshot size to 1 MB — larger files are skipped for /undo purposes.
+    let previousContent: string | null = null;
+    try {
+      const { stat, readFile } = await import('node:fs/promises');
+      const s = await stat(filePath);
+      if (s.size <= 1_000_000) {
+        previousContent = await readFile(filePath, 'utf-8');
+      }
+    } catch {
+      // File didn't exist — previousContent stays null, undo will delete
+    }
+
     // Atomic write: write to temp file, then rename. Prevents partial writes corrupting files.
     const tmpPath = `${filePath}.nexus-tmp-${Date.now()}`;
     try {
@@ -562,6 +714,10 @@ export class ToolExecutor {
     const sizeKB = (info.size / 1024).toFixed(1);
     const lineCount = content.split('\n').length;
     log.info({ path: filePath, size: info.size }, 'File written via tool');
+
+    // Push snapshot to undo stack (FIFO, capped)
+    this.undoStack.push({ path: filePath, previousContent, timestamp: Date.now() });
+    if (this.undoStack.length > ToolExecutor.MAX_UNDO_ENTRIES) this.undoStack.shift();
 
     // Post-write syntax check for common code file types
     const syntaxWarning = await checkSyntax(filePath, content);
@@ -1132,7 +1288,7 @@ export class ToolExecutor {
   }
 
   private async cleanupSessions(args: Record<string, unknown>): Promise<string> {
-    const olderThanDays = Number(args.days ?? 7);
+    const olderThanDays = Math.max(0, Number(args.days ?? 7));
     const { homedir } = await import('node:os');
     const { unlink } = await import('node:fs/promises');
     const sessDir = join(homedir(), '.nexus', 'sessions');
@@ -1159,8 +1315,15 @@ export class ToolExecutor {
     if (!id) return 'Error: No session id provided';
 
     const { homedir } = await import('node:os');
+    const { resolve: resolvePath } = await import('node:path');
     const sessDir = join(homedir(), '.nexus', 'sessions');
-    const sessFile = join(sessDir, id.endsWith('.json') ? id : `${id}.json`);
+    const candidate = join(sessDir, id.endsWith('.json') ? id : `${id}.json`);
+    // Prevent path traversal — session file must stay inside sessDir
+    if (!resolvePath(candidate).startsWith(resolvePath(sessDir) + '/') &&
+        resolvePath(candidate) !== resolvePath(sessDir)) {
+      return 'Error: Invalid session id';
+    }
+    const sessFile = candidate;
 
     try {
       const raw = await fsReadFile(sessFile, 'utf-8');
@@ -1191,11 +1354,16 @@ export class ToolExecutor {
       let imageSource = source;
       let isBase64 = false;
 
+      let mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' = 'image/jpeg';
       if (source.startsWith('http://') || source.startsWith('https://')) {
         isBase64 = false;
       } else if (source.startsWith('/') || source.startsWith('~')) {
         // Local file — read and pass as base64
         const filePath = expandPath(source);
+        const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
+        if (ext === 'png') mimeType = 'image/png';
+        else if (ext === 'gif') mimeType = 'image/gif';
+        else if (ext === 'webp') mimeType = 'image/webp';
         const fileBuffer = await fsReadFile(filePath);
         imageSource = fileBuffer.toString('base64');
         isBase64 = true;
@@ -1204,7 +1372,7 @@ export class ToolExecutor {
         isBase64 = true;
       }
 
-      const result = await analyzeImage({ source: imageSource, isBase64, question });
+      const result = await analyzeImage({ source: imageSource, isBase64, mimeType, question });
       return question
         ? `Image analysis — Answer: ${result.answer ?? result.description}`
         : `Image description:\n\n${result.description}`;

@@ -289,7 +289,7 @@ async function setupAI(): Promise<AIConfig> {
       chalk.bold.cyan("Anthropic (Claude)") +
         chalk.dim(" is the only supported provider.\n") +
         chalk.dim(
-          "Claude Sonnet 4.6 produces the best results for agentic tasks.\n" +
+          "Uses Opus 4.7 for planning, Sonnet 4.6 for execution, Haiku 4.5 for fast checks.\n" +
             "Get your key at console.anthropic.com"
         ),
       {
@@ -858,10 +858,13 @@ async function writeConfiguration(opts: {
     },
     ai: {
       provider: "anthropic",
+      // Tiered routing: opus for planning/CoWork, sonnet for execution, haiku for lightweight
+      opusModel: "claude-opus-4-7",
       model: "claude-sonnet-4-6",
+      fastModel: "claude-haiku-4-5-20251001",
       fallbackModel: "claude-haiku-4-5-20251001",
-      maxTokens: 16384,
-      temperature: 0.7,
+      maxTokens: 32768,
+      temperature: 0.4,
       providers: ["anthropic"],
     },
     telegram: {
@@ -896,6 +899,8 @@ async function writeConfiguration(opts: {
     `ANTHROPIC_API_KEY=${opts.ai.anthropicKey}`,
     `NEXUS_AI_PROVIDER=anthropic`,
     `NEXUS_AI_MODEL=claude-sonnet-4-6`,
+    `NEXUS_AI_OPUS_MODEL=claude-opus-4-7`,
+    `NEXUS_AI_FAST_MODEL=claude-haiku-4-5-20251001`,
     "",
     "# System",
     `NEXUS_DATA_DIR=${NEXUS_DIR}`,

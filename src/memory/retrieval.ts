@@ -237,9 +237,11 @@ export class MemoryRetrieval {
     const stmt = this.db.prepare(
       'UPDATE memories SET last_accessed = ?, access_count = access_count + 1 WHERE id = ?',
     );
-    for (const id of ids) {
-      stmt.run(now, id);
-    }
+    // Wrap batch updates in a transaction for atomicity + speed
+    const tx = this.db.transaction((idList: string[]) => {
+      for (const id of idList) stmt.run(now, id);
+    });
+    tx(ids);
   }
 }
 

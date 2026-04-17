@@ -8,6 +8,24 @@ import { createLogger } from '../utils/logger.js';
 const log = createLogger('TelegramMedia');
 
 const DOWNLOADS_DIR = join(homedir(), '.nexus', 'downloads');
+const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024; // 100 MB — prevent OOM on huge files
+
+async function downloadBounded(url: string, destPath: string): Promise<Buffer> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to download file: ${response.status} ${response.statusText}`);
+  }
+  const contentLength = response.headers.get('content-length');
+  if (contentLength && parseInt(contentLength, 10) > MAX_DOWNLOAD_BYTES) {
+    throw new Error(`File too large: ${contentLength} bytes (max ${MAX_DOWNLOAD_BYTES})`);
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.length > MAX_DOWNLOAD_BYTES) {
+    throw new Error(`File too large: ${buffer.length} bytes (max ${MAX_DOWNLOAD_BYTES})`);
+  }
+  await writeFile(destPath, buffer);
+  return buffer;
+}
 
 // ─── Ensure Download Directory ───────────────────────────────────────
 
@@ -39,14 +57,7 @@ export async function downloadFile(
   const token = (bot.api as any).token ?? '';
   const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
 
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    throw new Error(`Failed to download file: ${response.status} ${response.statusText}`);
-  }
-
-  const buffer = Buffer.from(await response.arrayBuffer());
-  await writeFile(destPath, buffer);
+  const buffer = await downloadBounded(url, destPath);
 
   log.info({ fileId, destPath, size: buffer.length }, 'File downloaded');
   return destPath;
@@ -85,14 +96,7 @@ export async function handlePhoto(
 
   const token = extractToken(ctx);
   const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    throw new Error(`Failed to download photo: ${response.status} ${response.statusText}`);
-  }
-
-  const buffer = Buffer.from(await response.arrayBuffer());
-  await writeFile(destPath, buffer);
+  await downloadBounded(url, destPath);
 
   log.info({ fileId, filePath: destPath }, 'Photo downloaded');
   return { fileId, filePath: destPath };
@@ -128,9 +132,7 @@ export async function handleDocument(
 
   const token = extractToken(ctx);
   const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-  const response = await fetch(url);
-  const buffer = Buffer.from(await response.arrayBuffer());
-  await writeFile(destPath, buffer);
+  await downloadBounded(url, destPath);
 
   log.info({ fileId, filePath: destPath, fileName }, 'Document downloaded');
   return { fileId, filePath: destPath, fileName };
@@ -167,9 +169,7 @@ export async function handleVoice(
 
   const token = extractToken(ctx);
   const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-  const response = await fetch(url);
-  const buffer = Buffer.from(await response.arrayBuffer());
-  await writeFile(destPath, buffer);
+  await downloadBounded(url, destPath);
 
   log.info({ fileId, filePath: destPath, duration }, 'Voice message downloaded');
   return { fileId, filePath: destPath, duration };

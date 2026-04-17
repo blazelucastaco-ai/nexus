@@ -15,15 +15,27 @@ export interface ImageAnalysisResult {
 /**
  * Fetch a remote image and convert to base64.
  */
+const MAX_IMAGE_BYTES = 50 * 1024 * 1024; // 50 MB
+
 async function fetchImageAsBase64(url: string): Promise<{ data: string; mimeType: Anthropic.Base64ImageSource['media_type'] }> {
   const resp = await fetch(url, { signal: AbortSignal.timeout(15_000) });
   if (!resp.ok) throw new Error(`Failed to fetch image: HTTP ${resp.status}`);
+
+  // Reject oversized images before buffering to prevent OOM
+  const contentLength = resp.headers.get('content-length');
+  if (contentLength && parseInt(contentLength, 10) > MAX_IMAGE_BYTES) {
+    throw new Error(`Image too large: ${contentLength} bytes (max ${MAX_IMAGE_BYTES})`);
+  }
+
   const contentType = resp.headers.get('content-type') ?? 'image/jpeg';
   const rawMime = contentType.split(';')[0]?.trim() ?? 'image/jpeg';
   // Anthropic only accepts these four MIME types
   const allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] as const;
   const mimeType = (allowed.includes(rawMime as any) ? rawMime : 'image/jpeg') as Anthropic.Base64ImageSource['media_type'];
   const buffer = await resp.arrayBuffer();
+  if (buffer.byteLength > MAX_IMAGE_BYTES) {
+    throw new Error(`Image too large: ${buffer.byteLength} bytes (max ${MAX_IMAGE_BYTES})`);
+  }
   const data = Buffer.from(buffer).toString('base64');
   return { data, mimeType };
 }
@@ -35,13 +47,14 @@ async function fetchImageAsBase64(url: string): Promise<{ data: string; mimeType
 export async function analyzeImage(params: {
   source: string;       // URL or base64 string
   isBase64?: boolean;
+  mimeType?: Anthropic.Base64ImageSource['media_type'];
   question?: string;    // Optional question about the image
   // Legacy params kept for backward compat — ignored, uses ANTHROPIC_API_KEY
   apiBaseUrl?: string;
   apiKey?: string;
   model?: string;
 }): Promise<ImageAnalysisResult> {
-  const { source, isBase64 = false, question } = params;
+  const { source, isBase64 = false, mimeType: callerMimeType, question } = params;
 
   const anthropicKey = process.env.ANTHROPIC_API_KEY ?? '';
   if (!anthropicKey) {
@@ -65,7 +78,7 @@ export async function analyzeImage(params: {
   } else {
     // Base64 — need media type
     let imageData = source;
-    let mimeType: Anthropic.Base64ImageSource['media_type'] = 'image/jpeg';
+    let mimeType: Anthropic.Base64ImageSource['media_type'] = callerMimeType ?? 'image/jpeg';
 
     if (!isBase64) {
       // It's a local file that was already read into base64 by the caller
@@ -83,7 +96,7 @@ export async function analyzeImage(params: {
   }
 
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: params.model ?? 'claude-sonnet-4-6',
     max_tokens: 1024,
     messages: [
       {

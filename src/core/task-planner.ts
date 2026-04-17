@@ -13,6 +13,8 @@ export interface TaskStep {
   id: number;
   title: string;       // Short action label: "Write index.html"
   description: string; // What to do and how: "Create semantic HTML5 with..."
+  files?: string[];    // Files this step will create (relative to projectDir)
+  dependsOn?: number[]; // Step IDs this step depends on
   agent?: string;      // Coordinator mode: preferred agent type (research|file|terminal|browser|code|vision)
 }
 
@@ -32,22 +34,49 @@ Respond ONLY with a JSON object — no markdown, no explanation, just the JSON:
   "title": "Short descriptive title (max 5 words)",
   "projectDir": "~/nexus-workspace/project-name-in-kebab-case",
   "steps": [
-    { "id": 1, "title": "Action-oriented step title", "description": "Specific instructions for what to do and how" },
-    { "id": 2, "title": "...", "description": "..." }
+    { "id": 1, "title": "Action-oriented step title", "description": "Specific instructions", "files": ["file1.ext", "file2.ext"], "dependsOn": [] },
+    { "id": 2, "title": "...", "description": "...", "files": ["file3.ext"], "dependsOn": [1] }
   ]
 }
 
 Rules:
-- 3 to 7 steps. Don't over-split simple tasks.
-- Each step must be independently executable with clear output.
-- Step titles must be short and action-oriented: "Write HTML", "Install dependencies", "Configure Nginx".
-- Descriptions must be specific: what files to create, what commands to run, what to verify.
-- The final step is ALWAYS verification: re-read the key output files, run the app if possible, confirm everything works.
-- For diagnostic tasks: final step is "Report findings" — summarize what was discovered.
-- For fix tasks: final step is "Verify fix" — confirm the bug is resolved.
-- For research tasks: final step is "Synthesize findings" — write a summary file.
-- projectDir: always ~/nexus-workspace/<name> for new projects. For system tasks use ~/nexus-workspace/reports.
+- 2 to 7 steps. Don't over-split simple tasks. A simple website is 2-3 steps, not 7.
+- Each step must list the FILES it will create (relative to projectDir).
+- Each step must list dependsOn — which prior step IDs it needs output from. Empty array if independent.
+- Step descriptions must be SPECIFIC: exact file names, exact structure, exact libraries. Not "add styling" but "create styles.css using Tailwind CDN with custom color palette #1a1a2e/#16213e/#0f3460/#e94560, responsive grid layout for hero/features/CTA sections".
+- For web projects, step 1 should create ALL files in one step (HTML + CSS + JS). Only split if genuinely complex (backend + frontend, database + API + UI).
+- The final step is ALWAYS verification: run the app if possible, confirm everything works.
+- For diagnostic/survey tasks: final step answers the user directly in chat, not a report file.
+- projectDir: ~/nexus-workspace/<name> for projects. ~/Desktop for personal files. "~" for survey tasks.
 - If the user specified a path, use that path instead.`;
+
+/**
+ * Extract the first balanced JSON object from a string.
+ * Handles LLM responses that contain prose before/after the JSON.
+ * Respects strings (won't count braces inside quoted strings).
+ */
+function extractFirstJsonObject(text: string): string | null {
+  const start = text.indexOf('{');
+  if (start < 0) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) { escape = false; continue; }
+    if (ch === '\\') { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
 
 // ─── Planner Function ─────────────────────────────────────────────────────────
 
@@ -96,14 +125,14 @@ export async function planTask(
       return null;
     }
 
-    // Extract JSON even if the model wrapped it in prose
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
+    // Extract first balanced JSON object — handles LLMs that emit prose before/after
+    const jsonStr = extractFirstJsonObject(raw);
+    if (!jsonStr) {
       log.warn({ raw: raw.slice(0, 200) }, 'Planner response contained no JSON');
       return null;
     }
 
-    const plan = JSON.parse(jsonMatch[0]) as TaskPlan;
+    const plan = JSON.parse(jsonStr) as TaskPlan;
 
     // Validate structure
     if (

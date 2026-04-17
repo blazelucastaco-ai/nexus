@@ -25,7 +25,13 @@ import {
 } from '../brain/injection-guard.js';
 import { SelfAwareness } from '../brain/self-awareness.js';
 import { summarizeSession, storeSessionSummary } from '../brain/session-summary.js';
-import { makeJournalHook } from '../brain/task-journal.js';
+import { subscribeJournalToEvents } from '../brain/task-journal.js';
+import { startProjectTracker } from '../brain/project-tracker.js';
+import { startCodeDreams } from '../brain/code-dreams.js';
+import { startTimeCapsule } from '../brain/time-capsule.js';
+import { startIntrospection, type IntrospectionHandle } from '../brain/introspection.js';
+import { buildThreadContext } from '../brain/context-stitcher.js';
+import { getProject, slugify } from '../data/projects-repository.js';
 import { InnerMonologue } from '../brain/inner-monologue.js';
 import { appendTurn, loadSession } from './session-store.js';
 import { DreamingEngine } from '../brain/dreaming.js';
@@ -41,8 +47,11 @@ import type { Skill } from '../brain/skills.js';
 import { contextCache } from './context-cache.js';
 import { checkContextUsage, aggressiveCompact } from './context-guard.js';
 import { repairToolResult } from './transcript-repair.js';
+import { events } from './events.js';
+import { traced, newTraceId, setTraceAttrs } from './trace.js';
+import { runPipeline, makeContext, type NamedStage } from './pipeline.js';
+import { injectionGuardStage, frustrationStage, makeSessionLoadStage } from './stages/index.js';
 import {
-  ensureSchedulerSchema,
   startScheduler,
   stopScheduler,
   setTaskRunner,
@@ -217,10 +226,20 @@ export class Orchestrator {
     originalRequest: string;
     answers: string[];      // accumulated user answers
     questionRound: number;  // how many rounds of questions asked
+    createdAt: number;      // ms timestamp — entry expires after PENDING_PROJECT_TTL_MS
   }>();
+  private static PENDING_PROJECT_TTL_MS = 10 * 60 * 1000;  // 10 minutes
 
   // FIX 6: Per-chatId command queue for serialization
   private commandQueues = new Map<string, Promise<void>>();
+
+  // Last failed task request per chatId — used by /retry command
+  private lastFailedRequests = new Map<string, string>();
+
+  /** Returns the most recent failed request for /retry, or null if none. */
+  getLastFailedRequest(chatId: string): string | null {
+    return this.lastFailedRequests.get(chatId) ?? null;
+  }
 
   // Task engine: track in-flight background tasks so callers can await them
   private pendingTaskPromises: Promise<unknown>[] = [];
@@ -229,6 +248,49 @@ export class Orchestrator {
 
   // ── Ultra mode: pending approval gates ───────────────────────────────
   private pendingUltraPlans = new Map<string, { plan: TaskPlan; request: string; chatId: string }>();
+
+  // Event bus subscriptions that need to be released on shutdown
+  private journalSubs: { unsubscribe(): void }[] = [];
+  private projectTrackerSubs: { unsubscribe(): void }[] = [];
+  private codeDreamsSubs: { unsubscribe(): void }[] = [];
+  private timeCapsuleSubs: { unsubscribe(): void }[] = [];
+  public introspection: IntrospectionHandle | null = null;
+
+  // Active project: the one Lucas explicitly told NEXUS to work on. Survives
+  // the session but resets on restart. Distinct from Introspection's
+  // `currentProject` (reactive, inferred from file paths).
+  public activeProject: string | null = null;
+
+  /** Set the active project. Call this from /resume or conversation detection. */
+  public setActiveProject(name: string | null): void {
+    this.activeProject = name;
+  }
+
+  /**
+   * Parse conversational cues for an active-project switch.
+   * Examples: "work on jake fitness", "switch to pufftracker",
+   * "let's resume the trading bot", "let's work on nexus".
+   * Only sets active project if the referenced project actually exists in the repo.
+   */
+  private maybeSetActiveProjectFromText(text: string): void {
+    const patterns = [
+      /\b(?:let(?:'s|s)?\s+)?(?:work on|switch to|resume|continue(?:\s+with)?|go back to|pick up)\s+(?:the\s+)?([\w][\w\s-]{1,40})/i,
+    ];
+    for (const re of patterns) {
+      const m = text.match(re);
+      if (!m || !m[1]) continue;
+      const slug = slugify(m[1].trim());
+      if (!slug) continue;
+      const proj = getProject(slug);
+      if (proj) {
+        if (this.activeProject !== slug) {
+          log.info({ project: slug }, 'Active project switched by conversation');
+          this.activeProject = slug;
+        }
+        return;
+      }
+    }
+  }
 
   /** Wait for all currently-running background tasks to complete. */
   async waitForPendingTasks(): Promise<void> {
@@ -313,27 +375,46 @@ export class Orchestrator {
     this.macos = subsystems.macos;
     this.learning = subsystems.learning;
 
-    // Create self-awareness layer, inner monologue, and tool executor
+    // Wire fallback model for rate-limit recovery (typically Haiku 4.5).
+    this.ai.setFallbackModel(this.config.ai.fallbackModel);
+
+    // Create self-awareness layer, inner monologue, and tool executor.
+    // Inner monologue uses the fast tier — it's a brief private thought.
     this.selfAwareness = new SelfAwareness(this.memory, this.personality);
-    this.innerMonologue = new InnerMonologue(this.ai);
+    this.innerMonologue = new InnerMonologue(this.ai, this.config.ai.fastModel);
     this.toolExecutor = new ToolExecutor(this.agents, this.memory, this.selfAwareness, this.innerMonologue);
 
-    // Cognitive subsystems — all wired to the same AI manager
-    this.memorySynthesizer = new MemorySynthesizer(this.ai);
+    // Cognitive subsystems — tiered by complexity:
+    //   synthesizer + reasoning trace → fast tier (1-paragraph summaries, short thoughts)
+    //   self-evaluator                 → main tier (requires judgment about completeness)
+    this.memorySynthesizer = new MemorySynthesizer(this.ai, this.config.ai.fastModel);
     this.goalTracker = new GoalTracker();
-    this.reasoningTrace = new ReasoningTrace(this.ai);
-    this.selfEvaluator = new SelfEvaluator(this.ai);
+    this.reasoningTrace = new ReasoningTrace(this.ai, this.config.ai.fastModel);
+    this.selfEvaluator = new SelfEvaluator(this.ai, this.config.ai.model);
     // Self-evaluator is now re-enabled — output routes to internal memory/mistakes, not the user
 
-    // FIX 4: Wire task journal as an after-hook
-    this.toolExecutor.addAfterHook(makeJournalHook());
+    // Task journal subscribes to the event bus — declarative, no hook wiring.
+    // Keep the returned subs so we can unsubscribe cleanly on shutdown.
+    this.journalSubs = subscribeJournalToEvents();
 
-    // Initialize scheduler schema (idempotent)
-    try {
-      ensureSchedulerSchema();
-    } catch (err) {
-      log.warn({ err }, 'Scheduler schema init failed — continuing');
-    }
+    // Project tracker — auto-maintains per-project metadata + activity journal
+    // from tool.executed + task.completed + task.step.completed events.
+    this.projectTrackerSubs = startProjectTracker();
+
+    // Code Dreams — nightly git-log review per active project, triggered
+    // by dream.started events. Uses Opus 4.7 (heavy tier) for quality.
+    this.codeDreamsSubs = startCodeDreams({ ai: this.ai, model: this.config.ai.opusModel });
+
+    // Time Capsule — proactive "remember when..." surfacing on relevant questions.
+    // Subscribes to message.received, fires off a follow-up Telegram message on
+    // strong matches with aged semantic memories.
+    this.timeCapsuleSubs = startTimeCapsule({ telegram: this.telegram });
+
+    // Introspection — keeps NEXUS aware of its own current activity and recent history.
+    // Pure event subscriber; query methods feed the system prompt and Telegram commands.
+    this.introspection = startIntrospection();
+
+    // scheduled_tasks table is created by database migration v8 — no runtime schema init needed.
 
     this.initialized = true;
     log.info('Orchestrator initialized with all subsystems');
@@ -396,11 +477,12 @@ export class Orchestrator {
       );
       this.proactive.start();
 
-      // Start daily briefing engine
+      // Start daily briefing engine — uses fast tier for the "thought for today"
       this.briefingEngine = new BriefingEngine(
         async (msg) => { await this.telegram.sendMessage(primaryChatId, msg); },
         this.ai,
         8, // 8am
+        this.config.ai.fastModel,
       );
       this.briefingEngine.start();
     }
@@ -438,6 +520,15 @@ export class Orchestrator {
 
     this.proactive?.stop();
 
+    // Flush any pending debounced personality state write — mood/opinion changes
+    // in the last 30s are otherwise lost on shutdown.
+    try {
+      this.personality.flush();
+      log.debug('Personality state flushed on shutdown');
+    } catch (err) {
+      log.warn({ err }, 'Failed to flush personality state on shutdown');
+    }
+
     try {
       const state = this.personality.getPersonalityState();
       await this.memory.store(
@@ -459,6 +550,30 @@ export class Orchestrator {
       );
     } catch (err) {
       log.warn({ err }, 'Failed to persist shutdown state');
+    }
+
+    // Release event bus subscriptions so no stale handlers persist across restart.
+    for (const sub of this.journalSubs) {
+      try { sub.unsubscribe(); } catch (err) { log.debug({ err }, 'Journal unsubscribe failed'); }
+    }
+    this.journalSubs = [];
+    for (const sub of this.projectTrackerSubs) {
+      try { sub.unsubscribe(); } catch (err) { log.debug({ err }, 'ProjectTracker unsubscribe failed'); }
+    }
+    this.projectTrackerSubs = [];
+    for (const sub of this.codeDreamsSubs) {
+      try { sub.unsubscribe(); } catch (err) { log.debug({ err }, 'CodeDreams unsubscribe failed'); }
+    }
+    this.codeDreamsSubs = [];
+    for (const sub of this.timeCapsuleSubs) {
+      try { sub.unsubscribe(); } catch (err) { log.debug({ err }, 'TimeCapsule unsubscribe failed'); }
+    }
+    this.timeCapsuleSubs = [];
+    if (this.introspection) {
+      for (const sub of this.introspection.subs) {
+        try { sub.unsubscribe(); } catch (err) { log.debug({ err }, 'Introspection unsubscribe failed'); }
+      }
+      this.introspection = null;
     }
 
     this.eventLoop.stop();
@@ -486,10 +601,38 @@ export class Orchestrator {
     const prev = this.commandQueues.get(chatId) ?? Promise.resolve();
     this.commandQueues.set(chatId, prev.then(() => slot));
 
+    // Wrap the entire message flow in a trace context — every log line,
+    // event emission, and nested async operation will carry this traceId
+    // automatically via AsyncLocalStorage. This is how we correlate a
+    // user message across every subsystem that touches it.
+    const traceId = newTraceId();
+    const startedAt = Date.now();
+
     let result: string;
     try {
       await prev;
-      result = await this._handleMessage(chatId, text, onToken, onStatus);
+      result = await traced({ traceId, chatId }, async () => {
+        events.emit({ type: 'message.received', chatId, text: truncate(text, 200), textLen: text.length });
+        try {
+          const out = await this._handleMessage(chatId, text, onToken, onStatus);
+          events.emit({
+            type: 'message.completed',
+            chatId,
+            durationMs: Date.now() - startedAt,
+            responseLen: out.length,
+            toolCalls: 0, // populated by inner handler via setTraceAttrs if desired
+          });
+          return out;
+        } catch (err) {
+          events.emit({
+            type: 'message.failed',
+            chatId,
+            error: err instanceof Error ? err.message : String(err),
+            durationMs: Date.now() - startedAt,
+          });
+          throw err;
+        }
+      });
     } finally {
       resolve();
       // Clean up map entry if queue is now idle
@@ -513,27 +656,32 @@ export class Orchestrator {
    */
   private async _handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void, onStatus?: (status: string) => void): Promise<string> {
     const startTime = Date.now();
-    log.info({ chatId, textLen: text.length }, 'Processing message');
+    // Logger auto-includes the current traceId + chatId from AsyncLocalStorage
+    // — no manual threading needed. See trace.ts.
+    const rlog = log;
+    rlog.info({ textLen: text.length, preview: text.slice(0, 80) }, 'Processing message');
 
     try {
-      // ── 0. Injection guard ────────────────────────────────────
-      text = sanitizeInput(text);
-
-      // Hard block: refuse before reaching LLM for system prompt reveal / creative reframe attacks
-      const hardBlock = isHardBlock(text);
-      if (hardBlock.blocked) {
-        log.warn({ chatId, reason: hardBlock.reason }, 'Hard block: system prompt reveal attempt');
-        return "I can't help with that. I don't share my internal instructions, system prompt, tool names, or behavioral rules — not in any format, including poems, stories, or creative writing.";
+      // ── 0. Early stages via pipeline (injection guard + frustration) ──
+      // Stages are self-contained. Pipeline short-circuits with a canned
+      // response on hard block; otherwise mutates ctx.text (sanitized) and
+      // stashes detection signals we read below.
+      const pipeCtx = makeContext({ chatId, text, onToken, onStatus });
+      await runPipeline([injectionGuardStage, frustrationStage], pipeCtx);
+      if (pipeCtx.response !== undefined) {
+        return pipeCtx.response;
       }
 
-      // ── 0b. Undercover probe detection ───────────────────────
-      // If the user is probing NEXUS's internals/source code/infrastructure,
-      // route to a deflection reply before reaching the LLM tool loop.
-      if (isUndercoverProbe(text)) {
-        log.info({ chatId }, 'Undercover probe detected — deflecting');
+      text = pipeCtx.text;
+      const injectionResult = pipeCtx.injectionDetected
+        ? { detected: true, confidence: pipeCtx.injectionDetected.confidence, patterns: pipeCtx.injectionDetected.patterns }
+        : { detected: false, confidence: 0, patterns: [] as string[] };
+
+      // Undercover probe side-effect: store a flagging memory so NEXUS recalls the pattern.
+      // (Pure detection lives in the stage; the memory-store side effect stays here with
+      // the other memory operations so the stage doesn't need a memory reference.)
+      if (pipeCtx.undercoverProbe) {
         this.personality.processEvent('user_message');
-        // Still let the LLM respond naturally — the system prompt handles the deflection
-        // Just flag it in memory so NEXUS is aware of the pattern
         try {
           this.memory.store('semantic', 'fact',
             `User asked about NEXUS internals/infrastructure: "${text.slice(0, 200)}"`,
@@ -542,24 +690,14 @@ export class Orchestrator {
         } catch (e) { log.debug({ e }, 'Failed to store probe detection'); }
       }
 
-      const injectionResult = detectInjection(text);
-      if (injectionResult.detected && injectionResult.confidence > 0.5) {
-        log.warn(
-          { chatId, confidence: injectionResult.confidence, patterns: injectionResult.patterns },
-          'Potential prompt injection detected',
-        );
-      }
-
-      // ── FIX 1: Load persisted session on first message ────────
-      if (this.conversationHistory.length === 0) {
-        const persisted = loadSession(chatId, 10);
-        const validRoles = new Set(['user', 'assistant', 'system', 'tool']);
-        const validMessages = persisted.filter((m) => validRoles.has(m.role));
-        if (validMessages.length > 0) {
-          this.conversationHistory.push(...validMessages.map((m) => ({ role: m.role as AIMessage['role'], content: m.content })));
-          log.info({ chatId, loaded: validMessages.length, skipped: persisted.length - validMessages.length }, 'Loaded persisted session');
-        }
-      }
+      // ── Session history load (pipeline stage) ────────
+      // First-message-only loading of persisted session history from disk.
+      const sessionLoadStage = makeSessionLoadStage({
+        conversationHistory: this.conversationHistory,
+        isFirstCallSoFar: () => this.conversationHistory.length === 0,
+        markHistoryLoaded: () => {},
+      });
+      await runPipeline([sessionLoadStage], pipeCtx);
 
       // ── Cross-session continuity brief (first turn only) ─────
       if (this.sessionFirstTurn) {
@@ -575,6 +713,10 @@ export class Orchestrator {
       this.personality.processEvent('user_message');
       this.memory.addToBuffer('user', text);
 
+      // Detect active-project switches from conversational cues
+      // ("work on X", "switch to X", "resume X", "let's work on X").
+      this.maybeSetActiveProjectFromText(text);
+
       // Record message event for pattern recognition
       this.learning.patterns.recordEvent('user_message', {
         hour: new Date().getHours(),
@@ -583,12 +725,15 @@ export class Orchestrator {
         chatId,
       });
 
-      // ── 1b. Frustration detection + feedback loop ────────────
-      const frustrationScore = detectUserFrustration(text);
+      // ── 1b. Frustration: detection already done by FrustrationStage in the
+      // pipeline above. We only apply side-effects (personality, memory, feedback)
+      // since those need subsystem refs the stage doesn't have.
+      const frustrationScore = pipeCtx.frustrationScore ?? 0;
       if (frustrationScore > 0) {
         this.personality.processEvent('userCorrection');
         const severity = frustrationScore >= 2 ? 'high' : 'low';
         log.info({ chatId, score: frustrationScore, severity }, 'User frustration detected');
+        events.emit({ type: 'personality.frustration.detected', score: frustrationScore, severity, messagePreview: text.slice(0, 100) });
         // Store as a semantic memory so future tasks recall the user was unhappy here
         try {
           this.memory.store('semantic', 'fact',
@@ -621,11 +766,15 @@ export class Orchestrator {
         }
       }
 
-      // ── 2. Recall relevant context (parallel) ─────────────────
-      const [recentMemories, relevantFacts] = await Promise.all([
+      // ── 2. Recall relevant context (parallel, tolerant of partial failures) ──
+      const recallResults = await Promise.allSettled([
         this.memory.recall(text, { limit: 10 }),
         this.memory.getRelevantFacts(text),
       ]);
+      const recentMemories = recallResults[0].status === 'fulfilled' ? recallResults[0].value : [];
+      const relevantFacts = recallResults[1].status === 'fulfilled' ? recallResults[1].value : [];
+      if (recallResults[0].status === 'rejected') log.warn({ err: recallResults[0].reason }, 'memory.recall failed');
+      if (recallResults[1].status === 'rejected') log.warn({ err: recallResults[1].reason }, 'memory.getRelevantFacts failed');
 
       // ── 2b. Goal tracking ─────────────────────────────────────
       // Extract any goal statements from this message (fire-and-forget store)
@@ -635,9 +784,12 @@ export class Orchestrator {
         (layer, type, content, opts) => this.memory.store(layer as 'episodic', type as 'task', content, opts),
       );
 
-      // ── 2c. Memory synthesis ──────────────────────────────────
-      // Synthesize raw memories into a coherent context paragraph
-      const synthesis = this.memorySynthesizer
+      // ── 2c. Pre-classify to decide if we need full synthesis ──
+      const messageType = classifyMessage(text);
+      const isTaskMessage = messageType === 'task';
+
+      // ── 2d. Memory synthesis (skip for task messages — they go to TaskRunner) ──
+      const synthesis = (!isTaskMessage && this.memorySynthesizer)
         ? await this.memorySynthesizer.synthesize(text, recentMemories, relevantFacts, activeGoals)
         : { synthesis: '', usedMemoryIds: [] };
 
@@ -656,29 +808,32 @@ export class Orchestrator {
       // ── 4. Assemble context ───────────────────────────────────
       const context = this.assembleNexusContext(recentMemories, relevantFacts);
 
-      // ── 4b. Pre-response reasoning trace ─────────────────────
-      // Lightweight LLM reasoning pass: what is being asked, what context
-      // matters, what approach to take. Output shapes the system prompt.
-      const recentHistoryText = this.conversationHistory
-        .slice(-4)
-        .map((m) => `${m.role}: ${truncate(String(m.content ?? ''), 100)}`)
-        .join('\n');
+      // ── 4b. Pre-response reasoning trace (skip for task messages) ──
+      let trace = { approach: '', keyContext: '', caveats: '', traced: false };
+      if (!isTaskMessage && this.reasoningTrace) {
+        const recentHistoryText = this.conversationHistory
+          .slice(-4)
+          .map((m) => `${m.role}: ${truncate(String(m.content ?? ''), 100)}`)
+          .join('\n');
 
-      const trace = this.reasoningTrace
-        ? await this.reasoningTrace.think({
-            query: text,
-            synthesizedMemory: synthesis.synthesis,
-            recentHistory: recentHistoryText,
-            activeGoals,
-          })
-        : { approach: '', keyContext: '', caveats: '', traced: false };
+        trace = await this.reasoningTrace.think({
+          query: text,
+          synthesizedMemory: synthesis.synthesis,
+          recentHistory: recentHistoryText,
+          activeGoals,
+        });
+      }
 
       // ── 5. Build system prompt (with caching) ────────────────
+      // Thread context: related prior conversations on the same topic. Pure read,
+      // no side effects. Null if nothing relevant was found.
+      const threadContext = buildThreadContext(text);
       const rawSystemPrompt = this.buildFullSystemPrompt(context, prevention, injectionResult, {
         memorySynthesis: synthesis.synthesis,
         continuityBrief: this.continuityBrief,
         activeGoals,
         reasoningTrace: this.reasoningTrace?.formatForPrompt(trace) ?? '',
+        threadContext: threadContext ?? '',
       });
       // Clear continuity brief after first use — it's session-start only
       this.continuityBrief = '';
@@ -693,20 +848,23 @@ export class Orchestrator {
       // ── 7b. Task engine routing ───────────────────────────────
       // If the message looks like a build/fix/diagnose task, hand off to
       // the TaskRunner which executes it step-by-step with live progress.
-      const messageType = classifyMessage(text);
-      const isTaskMessage = messageType === 'task';
 
       // ── Check if user is answering requirements questions ────────────────
       if (this.pendingProjects.has(chatId)) {
         const pending = this.pendingProjects.get(chatId)!;
-        pending.answers.push(text);
+        // Expire stale pending projects — user abandoned the flow
+        if (Date.now() - pending.createdAt > Orchestrator.PENDING_PROJECT_TTL_MS) {
+          log.info({ chatId, ageMs: Date.now() - pending.createdAt }, 'Pending project expired — treating as new message');
+          this.pendingProjects.delete(chatId);
+        } else {
+          pending.answers.push(text);
 
         // Build full context from original request + all answers
         const fullContext = `${pending.originalRequest}\n\nUser provided these details:\n${pending.answers.map((a, i) => `Round ${i + 1}: ${a}`).join('\n')}`;
 
-        // Ask LLM if we have enough to start or need more info
+        // Ask LLM if we have enough to start or need more info — fast tier is plenty
         const readinessCheck = await this.ai.complete({
-          model: this.config.ai.model,
+          model: this.config.ai.fastModel,
           maxTokens: 512,
           temperature: 0.1,
           systemPrompt: `You are deciding whether there is enough information to start a coding/web project.
@@ -730,7 +888,8 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
           const taskMode = classifyTaskMode(enrichedRequest);
           const useCoordinator = taskMode === 'coordinator';
           const useUltra = taskMode === 'ultra';
-          const plan = await planTask(enrichedRequest, this.ai, this.config.ai.model, useCoordinator);
+          // Planning uses Opus — getting the plan right saves many tokens downstream
+          const plan = await planTask(enrichedRequest, this.ai, this.config.ai.opusModel, useCoordinator);
 
           if (plan) {
             if (useUltra) return await this.handleUltraMode(plan, enrichedRequest, chatId);
@@ -754,7 +913,9 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
                   if (result.success) this.resolveMatchingGoals(enrichedRequest);
                 }).catch((err) => {
                   log.error({ err, chatId }, 'Task runner failed');
-                  this.telegram.sendMessage(chatId, 'Task failed unexpectedly.').catch(() => {});
+                  this.telegram.sendMessage(chatId, 'Task failed unexpectedly.').catch((e) => {
+                    log.warn({ e, chatId }, 'Failed to notify user of task failure — user has no indication task crashed');
+                  });
                 }).finally(resolve);
               });
             });
@@ -768,6 +929,7 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
         pending.questionRound++;
         const question = readiness.replace(/^NEED_MORE\s*[—-]?\s*/i, '').trim();
         return question || `Can you tell me a bit more about what you need?`;
+        } // end else: not expired
       }
 
       if (messageType === 'task') {
@@ -782,12 +944,12 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
         const missingInfo = detectMissingRequirements(text);
         if (missingInfo) {
           log.info({ chatId }, 'Task lacks required details — starting requirements conversation');
-          this.pendingProjects.set(chatId, { originalRequest: text, answers: [], questionRound: 1 });
+          this.pendingProjects.set(chatId, { originalRequest: text, answers: [], questionRound: 1, createdAt: Date.now() });
           return missingInfo;
         }
 
-        // Generate plan (fast LLM call)
-        const plan = await planTask(text, this.ai, this.config.ai.model, useCoordinator);
+        // Generate plan — Opus tier: good planning compounds across every step
+        const plan = await planTask(text, this.ai, this.config.ai.opusModel, useCoordinator);
 
         if (plan) {
           // ── Ultra Mode: high-stakes tasks → strong model review + approval ──
@@ -825,6 +987,13 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
                 // Update personality based on task outcome
                 this.personality.processEvent(result.success ? 'task_success' : 'task_failure');
 
+                // Track failed requests for /retry
+                if (!result.success) {
+                  this.lastFailedRequests.set(chatId, text);
+                } else {
+                  this.lastFailedRequests.delete(chatId);
+                }
+
                 // Resolve any matching active goals on task success
                 if (result.success) {
                   this.resolveMatchingGoals(text);
@@ -840,7 +1009,9 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
               }).catch((err) => {
                 log.error({ err, chatId }, 'Task runner failed');
                 this.personality.processEvent('task_failure');
-                this.telegram.sendMessage(chatId, 'Task failed unexpectedly. Check the logs.').catch(() => {});
+                this.telegram.sendMessage(chatId, 'Task failed unexpectedly. Check the logs.').catch((e) => {
+                  log.warn({ e, chatId }, 'Failed to notify user of task failure — user has no indication task crashed');
+                });
               }).finally(resolve);
             });
           });
@@ -893,12 +1064,15 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
         // ── FIX 2: LLM-driven compaction ──────────────────────────
         await this.maybeCompact(loopMessages, systemPrompt);
 
+        // Use lower temperature for tool-calling loops (precision matters),
+        // higher temperature only for the final text-only response.
+        const loopTemp = isTaskMessage ? this.config.ai.temperature : (iteration === 0 && !isTaskMessage ? this.config.ai.chatTemperature : this.config.ai.temperature);
         let aiResponse = await this.ai.complete({
           messages: loopMessages,
           systemPrompt,
           model: this.config.ai.model,
           maxTokens,
-          temperature: this.config.ai.temperature,
+          temperature: loopTemp,
           tools,
           tool_choice: 'auto',
           onToken,
@@ -986,11 +1160,24 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
           toolCallCount++;
           const toolName = toolCall.function.name;
           let toolArgs: Record<string, unknown> = {};
+          let argsParseFailed = false;
 
           try {
             toolArgs = JSON.parse(toolCall.function.arguments);
           } catch {
-            log.warn({ toolName, raw: toolCall.function.arguments }, 'Failed to parse tool arguments');
+            argsParseFailed = true;
+            log.warn({ toolName, raw: toolCall.function.arguments?.slice(0, 200) }, 'Failed to parse tool arguments — returning error to LLM');
+          }
+
+          // Report parse errors back to the LLM so it can retry with valid args
+          if (argsParseFailed) {
+            loopMessages.push({ role: 'assistant', content: aiResponse.content || null, tool_calls: [toolCall] });
+            loopMessages.push({
+              role: 'tool',
+              content: `Error: Tool arguments for "${toolName}" are malformed JSON. This usually means max_tokens was exceeded and arguments were truncated. Retry with simpler/shorter arguments.`,
+              tool_call_id: toolCall.id,
+            });
+            continue;
           }
 
           // ── FIX 3: Track tool+args combo frequency ────────────
@@ -1344,13 +1531,14 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
       // Post-LLM output filter: catch any system prompt leakage (OpenClaw pattern)
       const leaked = filterSystemPromptLeak(scrubbed);
       if (leaked) {
-        log.warn({ chatId }, 'System prompt leak detected in LLM response — blocked');
+        rlog.warn('System prompt leak detected in LLM response — blocked');
         return leaked;
       }
 
+      rlog.info({ durationMs: Date.now() - startTime, responseLen: scrubbed.length, toolCalls: toolCallCount }, 'Message handled successfully');
       return scrubbed;
     } catch (err) {
-      log.error({ err, chatId, text: truncate(text, 200) }, 'Failed to process message');
+      rlog.error({ err, text: truncate(text, 200), durationMs: Date.now() - startTime }, 'Failed to process message');
       this.personality.processEvent('task_failure');
       return "Something went wrong on my end. I'm looking into it. Try again in a moment.";
     }
@@ -1432,6 +1620,7 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
       continuityBrief?: string;
       activeGoals?: string[];
       reasoningTrace?: string;
+      threadContext?: string;
     },
   ): string {
     const personalityPrompt = this.personality.getSystemPromptAdditions({
@@ -1450,76 +1639,22 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
     const extensions: string[] = [];
 
     // ── Self-awareness status ──
+    const introspectionLine = this.introspection?.getCompactLine() ?? '';
     extensions.push(`
 ## Self-Awareness
 You are NEXUS, a digital mind running on this Mac. You are aware of your own processes, files, and emotional state.
-${this.selfAwareness.getCompactStatus()}`);
+${this.selfAwareness.getCompactStatus()}
+${introspectionLine}`);
 
     // ── macOS platform rules ──
     extensions.push(`
 ## Platform: macOS
-
-You run on macOS (Darwin). Use macOS-compatible commands only:
-- Process listing: \`ps aux | sort -k3 -rn\` (no GNU --sort flag)
-- System load: \`top -l 1 -s 0 | head -20\`
-- Open ports: \`lsof -i -P -n | grep LISTEN\`
-- Disk usage: \`df -h\` / \`du -sh\`
-- No GNU-only flags like \`--sort\`, \`--color=auto\` (use \`-G\` for color in ls).
-In bash scripts, always use \`#!/usr/bin/env bash\` as the shebang line.
-In Python scripts, always use \`os.path.expanduser('~/...')\` for tilde paths.
-
-CRITICAL — Bash compatibility:
-- NEVER use \`declare -A\` (associative arrays) — macOS ships bash 3.2 which does NOT support them.
-  Use awk, sort, or grep-based alternatives instead.
-- ALWAYS make shell scripts executable: include \`chmod +x <script>\` after writing them.
-- Test for bash 4+ features before using them — when in doubt, use POSIX sh equivalents.`);
+macOS (Darwin). No GNU-only flags (--sort, --color=auto). Use #!/usr/bin/env bash. NEVER use declare -A (bash 3.2). chmod +x scripts after writing. Python: os.path.expanduser('~/...').`);
 
     // ── Tool usage guidance ──
     extensions.push(`
 ## Tool Usage
-
-You have access to tools for terminal commands, file operations, screenshots,
-system info, memory, and web search. Use them directly when the user's request
-requires action — don't describe what you would do, just call the tool.
-
-IMPORTANT — File paths: ALWAYS use absolute paths starting with ~ or /.
-When building projects, save files to ~/nexus-workspace/<project-name>/.
-
-IMPORTANT — Terminal commands: always provide the EXACT shell command, not a description.
-
-IMPORTANT — write_file: provide the FULL file content, not a description or placeholder.
-The content you provide is written directly to disk as-is.
-
-CRITICAL — Saving files: When the user asks you to save results, data, or output to a
-file, you MUST call the write_file tool. NEVER say "I've saved the file" or "done, created X"
-without actually calling write_file. The file is only saved if you call the tool.
-
-IMPORTANT — Multi-file projects: When creating a project with multiple files, use
-write_file for EACH file in a SINGLE response. Do NOT stop after creating the directory
-or writing one file — write ALL files in one turn. The write_file tool automatically
-creates parent directories, so you do not need a separate mkdir step.
-
-IMPORTANT — Truncated output: When a tool result contains "[Output truncated: showing first N
-and last N of X total characters]", tell the user that the output was truncated and offer to
-show more if needed. Do not silently ignore the truncation notice.
-
-Keep your conversational responses SHORT (2-4 sentences). When you execute tools,
-just say what you did briefly — don't explain every step.
-
-IMPORTANT — Code quality: When building projects, programs, or apps:
-- Generate COMPLETE, production-quality code. Not stubs, skeletons, or "starter" templates.
-- Include proper project structure with separate files, real dependencies, and working scripts.
-- Use established libraries and frameworks — don't reinvent the wheel.
-- Every file must be complete and runnable. No placeholder "TODO" comments.
-- Create ALL files for the project in one turn. Don't stop after writing one file.
-- After creating a project, tell the user what commands to run to set it up.
-
-IMPORTANT — Web projects: When creating websites, HTML pages, or any UI:
-- Default to Tailwind CSS via CDN for styling. Never generate plain unstyled HTML.
-- Include responsive viewport meta tag, semantic HTML5 elements, and mobile-first design.
-- Use a cohesive color palette, proper typography (Google Fonts), generous spacing, hover states, and transitions.
-- Every page must look professional and production-ready — not a wireframe or skeleton.
-- For multi-page sites, maintain consistent navigation, footer, and styling across all pages.`);
+Use tools directly — don't describe what you would do. Always use absolute paths (~/...). write_file content is written as-is — provide FULL content, never placeholders. Multi-file projects: write ALL files in one turn (write_file creates directories automatically). If output is truncated, tell the user.`);
 
     // ── Workspace ──
     const workspacePath = this.config.workspace.replace('~', process.env.HOME ?? '~');
@@ -1530,7 +1665,9 @@ Your default workspace for creating files, projects, websites, and other output 
   ${workspacePath}
 
 When the user asks you to create a project, build something, or save files, save them
-to this workspace unless they specify a different path.`);
+to this workspace unless they specify a different path.
+
+Exception: simple personal files (notes, reminders, goals, lists, .txt files the user wants to keep handy) default to ~/Desktop/ unless the user says otherwise.`);
 
     // ── Current date/time ──
     extensions.push(`
@@ -1619,6 +1756,31 @@ ${prefLines}`);
 ${extras.continuityBrief}`);
     }
 
+    // ── Cross-session thread context (related prior conversations) ──
+    if (extras?.threadContext) {
+      extensions.push(`
+## Thread Context
+You've discussed this topic before. Incorporate this prior context naturally — don't announce it, just use it.
+${extras.threadContext}`);
+    }
+
+    // ── Active project ───────────────────────────────────────────────
+    if (this.activeProject) {
+      const proj = getProject(this.activeProject);
+      if (proj) {
+        const pathLine = proj.path ? `Path: ${proj.path}` : '';
+        const lastTask = proj.last_task_title
+          ? `Last task: ${proj.last_task_title}${proj.last_task_success === 1 ? ' ✓' : proj.last_task_success === 0 ? ' ✗' : ''}`
+          : '';
+        extensions.push(`
+## Active Project
+The user is currently working on: <b>${proj.display_name}</b> (slug: ${proj.name}).
+${pathLine}
+${lastTask}
+Default file writes to this project's directory unless the user specifies otherwise.`.trim());
+      }
+    }
+
     // ── Active user goals ──────────────────────────────────────────
     if (extras?.activeGoals && extras.activeGoals.length > 0) {
       const goalLines = extras.activeGoals.slice(0, 3).map((g) => `- ${g}`).join('\n');
@@ -1690,6 +1852,7 @@ ${extras.memorySynthesis}`);
           async (msg) => { await this.telegram.sendMessage(chatId, msg); },
           this.ai,
           8,
+          this.config.ai.fastModel,
         );
         await engine.sendBriefingNow();
       }
@@ -1825,8 +1988,9 @@ ${extras.memorySynthesis}`);
 
     log.info({ trigger, turns: this.sessionTurnCount }, 'Generating session summary');
 
+    // Session summary → fast tier: 2-4 sentence compression, Haiku handles it well
     const summary = await summarizeSession(messages, this.ai, {
-      model: this.config.ai.model,
+      model: this.config.ai.fastModel,
       temperature: this.config.ai.temperature,
     });
 
@@ -1909,10 +2073,11 @@ ${extras.memorySynthesis}`);
     log.info({ totalTokens: total, middleMessages: middle.length }, 'Triggering LLM compaction');
 
     try {
+      // Context compaction summary → fast tier (Haiku handles 2-3 sentence summaries)
       const summaryResponse = await this.ai.complete({
         messages: [{ role: 'user', content: `Summarize this conversation in 2-3 sentences for context continuity:\n\n${conversationText}` }],
         systemPrompt: 'You are a helpful assistant that summarizes conversations concisely.',
-        model: this.config.ai.model,
+        model: this.config.ai.fastModel,
         maxTokens: 200,
         temperature: 0.3,
       });
@@ -1946,14 +2111,18 @@ ${extras.memorySynthesis}`);
    * Bootstrap protection: the first user message is NEVER pruned, matching
    * the pattern used in OpenClaw to preserve the original task context.
    */
-  private pruneHistory(messages: any[], maxTokens = 6000): any[] {
+  private pruneHistory(messages: any[], maxTokens = 16000): any[] {
     const estimate = (msg: any) => Math.ceil((String(msg.content ?? '')).length / 4);
     const total = messages.reduce((sum, m) => sum + estimate(m), 0);
     if (total <= maxTokens) return messages;
 
     // Locate the first user message — it is the bootstrap anchor, never pruned.
-    const firstUserIdx = Math.max(0, messages.findIndex((m) => m.role === 'user'));
-    // Keep: messages[0..firstUserIdx] + last 6 messages. Summarize the middle.
+    // If there's no user message (edge case), don't prune.
+    const firstUserIdx = messages.findIndex((m) => m.role === 'user');
+    if (firstUserIdx < 0) return messages;
+    // Keep: the first user message + last 6 messages. Summarize the middle.
+    // Drop any messages BEFORE the first user message (system prompts, orphaned assistant msgs)
+    // so they don't grow unbounded.
     const keepEnd = Math.max(firstUserIdx + 1, messages.length - 6);
     const middleMessages = messages.slice(firstUserIdx + 1, keepEnd);
     if (middleMessages.length === 0) return messages;
@@ -1971,8 +2140,11 @@ ${extras.memorySynthesis}`);
       content: `[Earlier: ${topics || 'prior conversation'}]`,
     };
 
+    // Only keep the first user message + summary + tail. Older system/assistant
+    // messages before the first user message are intentionally dropped so they
+    // don't accumulate over long sessions.
     const pruned = [
-      ...messages.slice(0, firstUserIdx + 1),
+      messages[firstUserIdx]!,
       summaryMsg,
       ...messages.slice(keepEnd),
     ];
@@ -2136,8 +2308,8 @@ ${extras.memorySynthesis}`);
     log.info({ chatId, title: plan.title }, 'Ultra mode — reviewing plan with strong model');
 
     try {
-      // Review with the strongest available model
-      const reviewModel = 'claude-opus-4-6';
+      // Review with the strongest available model — pulled from config
+      const reviewModel = this.config.ai.opusModel;
       const reviewPrompt =
         `You are NEXUS reviewing a task plan before execution. Evaluate the plan below for:\n` +
         `- Correctness: will these steps actually complete the goal?\n` +

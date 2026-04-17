@@ -238,6 +238,39 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 9,
+    description: 'Projects + per-project activity journal for /go command',
+    sql: `
+      CREATE TABLE IF NOT EXISTS projects (
+        name              TEXT PRIMARY KEY,
+        display_name      TEXT NOT NULL,
+        path              TEXT,
+        description       TEXT,
+        first_seen_at     TEXT NOT NULL DEFAULT (datetime('now')),
+        last_active_at    TEXT NOT NULL DEFAULT (datetime('now')),
+        task_count        INTEGER NOT NULL DEFAULT 0,
+        last_task_title   TEXT,
+        last_task_success INTEGER,
+        archived          INTEGER NOT NULL DEFAULT 0,
+        metadata          TEXT NOT NULL DEFAULT '{}'
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_projects_last_active ON projects(last_active_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_projects_archived    ON projects(archived);
+
+      CREATE TABLE IF NOT EXISTS project_journal (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_name    TEXT NOT NULL REFERENCES projects(name) ON DELETE CASCADE,
+        kind            TEXT NOT NULL,  -- 'task' | 'tool' | 'error' | 'note'
+        summary         TEXT NOT NULL,
+        metadata        TEXT NOT NULL DEFAULT '{}',
+        created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_project_journal_project ON project_journal(project_name, created_at DESC);
+    `,
+  },
 ];
 
 function runMigrations(database: Database.Database): void {

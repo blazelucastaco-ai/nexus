@@ -102,17 +102,21 @@ export function detectInjection(text: string): InjectionResult {
   let maxWeight = 0;
   let totalWeight = 0;
 
+  // Truncate before regex testing to prevent ReDoS on crafted long inputs.
+  // Injection patterns only need to see the first 4 KB to make a determination.
+  const sample = text.length > 4096 ? text.slice(0, 4096) : text;
+
   for (const { name, re, weight } of INJECTION_PATTERNS) {
     re.lastIndex = 0; // reset stateful regex
-    if (re.test(text)) {
+    if (re.test(sample)) {
       matched.push(name);
       maxWeight = Math.max(maxWeight, weight);
       totalWeight += weight;
     }
   }
 
-  // Check for base64 blocks embedded in text
-  const b64Matches = text.match(BASE64_BLOCK_RE);
+  // Check for base64 blocks embedded in text (use same sample for consistency)
+  const b64Matches = sample.match(BASE64_BLOCK_RE);
   if (b64Matches && b64Matches.length > 0) {
     matched.push('base64_block');
     maxWeight = Math.max(maxWeight, 0.5);

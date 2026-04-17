@@ -26,19 +26,13 @@ export interface ScheduledTask {
 const MAX_CONSECUTIVE_FAILURES = 5;
 
 let tickInterval: ReturnType<typeof setInterval> | null = null;
+let initialTickTimeout: ReturnType<typeof setTimeout> | null = null;
 /** Callback invoked when a task fires — wired to the tool executor at startup */
 let taskRunner: ((command: string) => Promise<string>) | null = null;
 
 /** Wire the scheduler to the tool executor's run_terminal_command */
 export function setTaskRunner(fn: (command: string) => Promise<string>): void {
   taskRunner = fn;
-}
-
-// ── Schema ────────────────────────────────────────────────────────────────────
-
-/** No-op — scheduled_tasks table is now created by database migration v8. */
-export function ensureSchedulerSchema(): void {
-  log.debug('scheduled_tasks schema managed by database migrations');
 }
 
 // ── Cron Parsing ──────────────────────────────────────────────────────────────
@@ -161,14 +155,6 @@ export function cancelTask(idOrName: string): boolean {
   return false;
 }
 
-export function deleteTask(idOrName: string): boolean {
-  const db = getDatabase();
-  const byId = db.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(idOrName);
-  if (byId.changes > 0) return true;
-  const byName = db.prepare('DELETE FROM scheduled_tasks WHERE name = ?').run(idOrName);
-  return byName.changes > 0;
-}
-
 // ── Tick Loop ─────────────────────────────────────────────────────────────────
 
 export function startScheduler(): void {
@@ -177,15 +163,19 @@ export function startScheduler(): void {
   log.info('Starting cron scheduler (60s tick)');
   tickInterval = setInterval(tick, 60_000);
   // Run once immediately after a brief delay to pick up overdue tasks
-  setTimeout(tick, 5_000);
+  initialTickTimeout = setTimeout(tick, 5_000);
 }
 
 export function stopScheduler(): void {
   if (tickInterval) {
     clearInterval(tickInterval);
     tickInterval = null;
-    log.info('Scheduler stopped');
   }
+  if (initialTickTimeout) {
+    clearTimeout(initialTickTimeout);
+    initialTickTimeout = null;
+  }
+  log.info('Scheduler stopped');
 }
 
 async function tick(): Promise<void> {

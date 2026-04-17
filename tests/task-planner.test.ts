@@ -31,7 +31,7 @@ const TWO_STEP_PLAN_JSON = JSON.stringify({
 describe('planTask', () => {
   it('should return a valid plan for a parseable AI response', async () => {
     const ai = makeMockAI(VALID_PLAN_JSON);
-    const plan = await planTask('Build a login page with HTML, CSS, and JavaScript', ai, 'claude-sonnet-4-6');
+    const plan = await planTask('Build a login page with HTML, CSS, and JavaScript', ai, 'claude-opus-4-7');
     expect(plan).not.toBeNull();
     expect(plan!.title).toBe('Build a Login Page');
     expect(plan!.steps.length).toBeGreaterThanOrEqual(2);
@@ -39,7 +39,7 @@ describe('planTask', () => {
 
   it('should return a plan with the right step structure', async () => {
     const ai = makeMockAI(VALID_PLAN_JSON);
-    const plan = await planTask('Build a login page with authentication', ai, 'claude-sonnet-4-6');
+    const plan = await planTask('Build a login page with authentication', ai, 'claude-opus-4-7');
     expect(plan).not.toBeNull();
     for (const step of plan!.steps) {
       expect(typeof step.id).toBe('number');
@@ -57,7 +57,7 @@ describe('planTask', () => {
       ],
     });
     const ai = makeMockAI(shortPlan);
-    const plan = await planTask('do something tiny', ai, 'claude-sonnet-4-6');
+    const plan = await planTask('do something tiny', ai, 'claude-opus-4-7');
     expect(plan).toBeNull();
   });
 
@@ -72,13 +72,13 @@ describe('planTask', () => {
       })),
     });
     const ai = makeMockAI(bigPlan);
-    const plan = await planTask('do something huge with many steps involved', ai, 'claude-sonnet-4-6');
+    const plan = await planTask('do something huge with many steps involved', ai, 'claude-opus-4-7');
     expect(plan).toBeNull();
   });
 
   it('should return null when AI response is not valid JSON', async () => {
     const ai = makeMockAI('I cannot plan this task, please try again with more details.');
-    const plan = await planTask('do something', ai, 'claude-sonnet-4-6');
+    const plan = await planTask('do something', ai, 'claude-opus-4-7');
     expect(plan).toBeNull();
   });
 
@@ -86,21 +86,21 @@ describe('planTask', () => {
     const ai = {
       complete: vi.fn().mockRejectedValue(new Error('API error')),
     } as unknown as AIManager;
-    const plan = await planTask('build something', ai, 'claude-sonnet-4-6');
+    const plan = await planTask('build something', ai, 'claude-opus-4-7');
     expect(plan).toBeNull();
   });
 
   it('should extract JSON from markdown code blocks', async () => {
     const aiResponse = `Here is my plan:\n\`\`\`json\n${VALID_PLAN_JSON}\n\`\`\`\n`;
     const ai = makeMockAI(aiResponse);
-    const plan = await planTask('Build a login page with all features', ai, 'claude-sonnet-4-6');
+    const plan = await planTask('Build a login page with all features', ai, 'claude-opus-4-7');
     expect(plan).not.toBeNull();
     expect(plan!.title).toBe('Build a Login Page');
   });
 
   it('should accept a 2-step plan (minimum valid)', async () => {
     const ai = makeMockAI(TWO_STEP_PLAN_JSON);
-    const plan = await planTask('do a simple task', ai, 'claude-sonnet-4-6');
+    const plan = await planTask('do a simple task', ai, 'claude-opus-4-7');
     expect(plan).not.toBeNull();
     expect(plan!.steps.length).toBe(2);
   });
@@ -114,7 +114,7 @@ describe('planTask', () => {
       ],
     });
     const ai = makeMockAI(noDirPlan);
-    const plan = await planTask('some task request here please', ai, 'claude-sonnet-4-6');
+    const plan = await planTask('some task request here please', ai, 'claude-opus-4-7');
     expect(plan).toBeNull();
   });
 
@@ -130,7 +130,7 @@ describe('planTask', () => {
       ],
     });
     const ai = makeMockAI(mixedPlan);
-    const plan = await planTask('build something with mixed step quality', ai, 'claude-sonnet-4-6');
+    const plan = await planTask('build something with mixed step quality', ai, 'claude-opus-4-7');
     if (plan) {
       // All remaining steps should be valid
       for (const step of plan.steps) {
