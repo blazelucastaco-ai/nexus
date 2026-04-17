@@ -9,9 +9,9 @@
 // The source directory is resolved once at startup (expensive, involves fs walks)
 // and cached. All callers use the cached value.
 
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 
 const HOME = homedir();
 
@@ -60,8 +60,43 @@ export function __setNexusSourceDirForTests(dir: string | null): void {
 // ─── L3: path guard ─────────────────────────────────────────────────────────
 
 /**
+ * Canonicalize a path by dereferencing symlinks. If the target path doesn't
+ * exist yet, walk up the ancestors until we find one that does, realpath
+ * that, and re-append the unresolved tail. This defeats symlink attacks:
+ *   ~/link → /Users/.../nexus/src  →  realpathSync returns the real target.
+ *   (plain `resolve()` would NOT dereference and would miss the match.)
+ */
+function canonicalize(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    // Target doesn't exist (yet) — walk up to the first existing ancestor,
+    // realpath that, and re-append the unresolved suffix. This prevents
+    // "resolve /foo/bar/new when /foo is a symlink to source" attacks.
+    let cur = resolve(path);
+    const tail: string[] = [];
+    while (cur !== dirname(cur)) {
+      if (existsSync(cur)) {
+        try {
+          const real = realpathSync(cur);
+          return tail.length > 0 ? join(real, ...tail.reverse()) : real;
+        } catch {
+          break;
+        }
+      }
+      tail.push(cur.slice(dirname(cur).length + 1));
+      cur = dirname(cur);
+    }
+    // Nothing in the path exists — fall back to plain resolve (no symlink
+    // ever existed to exploit).
+    return resolve(path);
+  }
+}
+
+/**
  * True if `path` resolves to a location *inside* the NEXUS source tree.
- * Excludes nexus-workspace (user's project workspace, not NEXUS source).
+ * Uses realpath to defeat symlink-traversal bypass (CRIT-2). Excludes
+ * nexus-workspace (user's project workspace, not NEXUS source).
  */
 export function isNexusSourcePath(path: string): boolean {
   if (!path) return false;
@@ -70,13 +105,21 @@ export function isNexusSourcePath(path: string): boolean {
 
   let resolved: string;
   try {
-    resolved = resolve(path.replace(/^~/, HOME));
+    resolved = canonicalize(path.replace(/^~/, HOME));
   } catch {
     return false;
   }
 
-  // Must be inside source dir
-  if (!resolved.startsWith(sourceDir + sep) && resolved !== sourceDir) return false;
+  // Also canonicalize the source dir once (it always exists at runtime).
+  let canonicalSource: string;
+  try {
+    canonicalSource = realpathSync(sourceDir);
+  } catch {
+    canonicalSource = sourceDir;
+  }
+
+  // Must be inside source dir (real path check — defeats symlink bypass)
+  if (!resolved.startsWith(canonicalSource + sep) && resolved !== canonicalSource) return false;
 
   // Allow the user's workspace (nexus-workspace, which lives BESIDE ~/nexus,
   // not inside — but just in case someone has ~/nexus/nexus-workspace).

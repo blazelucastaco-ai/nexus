@@ -39,6 +39,7 @@ import type { AgentManager } from '../agents/index.js';
 import type { MemoryManager } from '../memory/index.js';
 import { events } from '../core/events.js';
 import { isNexusSourcePath, SELF_PROTECTION_ERROR, getNexusSourceDir } from '../core/self-protection.js';
+import { extractCommandHeads } from '../security/shell-parser.js';
 
 const log = createLogger('ToolExecutor');
 const execFileAsync = promisify(execFile);
@@ -213,7 +214,9 @@ function commandTargetsNexusSource(command: string): boolean {
 }
 
 /** Validate that a file path is within allowed boundaries (home dir or /tmp),
- *  AND is not inside the NEXUS source tree (self-protection, L3). */
+ *  AND is not inside the NEXUS source tree (self-protection, L3).
+ *  Uses realpath-canonicalized parent-dir check to defeat symlink-traversal
+ *  attacks where ~/link → /etc and a write would land outside home. */
 function validateFilePath(filePath: string): string | null {
   const resolved = resolve(filePath);
   const home = homedir();
@@ -221,10 +224,34 @@ function validateFilePath(filePath: string): string | null {
     log.warn({ filePath: resolved }, 'Self-protection: blocked access to NEXUS source');
     return SELF_PROTECTION_ERROR;
   }
-  if (resolved.startsWith(home) || resolved.startsWith('/tmp/') || resolved.startsWith('/tmp')) {
-    return null; // safe
+  // Canonicalize the PARENT dir. If the parent is a symlink pointing outside
+  // home/tmp, we need to detect that before allowing the write.
+  let canonicalParent = dirname(resolved);
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { realpathSync } = require('node:fs') as typeof import('node:fs');
+    canonicalParent = realpathSync(canonicalParent);
+  } catch {
+    // Parent doesn't exist yet (recursive mkdir will create it). In that case,
+    // we fall back to the resolved parent; the normal home/tmp check below
+    // still applies.
   }
-  return `Error: Path "${resolved}" is outside allowed directories (home directory or /tmp). Refusing to write.`;
+  const canonicalTarget = join(canonicalParent, resolved.slice(dirname(resolved).length + 1));
+  if (isNexusSourcePath(canonicalTarget)) {
+    log.warn({ filePath: canonicalTarget }, 'Self-protection: blocked symlink-traversal into NEXUS source');
+    return SELF_PROTECTION_ERROR;
+  }
+  const allowed =
+    canonicalTarget.startsWith(home) ||
+    canonicalTarget.startsWith('/tmp/') ||
+    canonicalTarget === '/tmp' ||
+    resolved.startsWith(home) ||
+    resolved.startsWith('/tmp/') ||
+    resolved === '/tmp';
+  if (!allowed) {
+    return `Error: Path "${resolved}" is outside allowed directories (home directory or /tmp). Refusing to write.`;
+  }
+  return null;
 }
 
 /**
@@ -500,29 +527,41 @@ export class ToolExecutor {
       return approvalDecision.message ?? `Command not allowed: ${approvalDecision.reason}`;
     }
 
-    // Legacy approval gate (belt-and-suspenders for patterns not yet in approval-policy)
-    if (!confirmed) {
+    // Legacy approval gate (belt-and-suspenders for patterns not yet in approval-policy).
+    // Intentionally does NOT honor `confirmed` — that flag is LLM-settable and
+    // would let a prompt-injection bypass this gate. If the command matches a
+    // legacy-approval pattern, we return a message that tells the LLM to ask
+    // the user; the user can either run it manually or add an allowlist entry.
+    {
       const needsApproval = APPROVAL_REQUIRED_COMMANDS.some((pattern) =>
         command.toLowerCase().includes(pattern.toLowerCase()),
       );
       if (needsApproval) {
         log.warn({ command }, 'Command requires approval (legacy gate)');
         return (
-          `⚠️ This command requires approval. Please confirm:\n\n\`${command}\`\n\n` +
-          `Reply with: run_terminal_command with confirmed=true to proceed, or cancel.`
+          `⚠️ This command matches a high-risk pattern and cannot be run automatically:\n\n\`${command}\`\n\n` +
+          `Explain the risk to the user and let them decide. If they want this to run, they can execute it manually in their own terminal, or add it to ~/.nexus/allowlist.json and ask you to try again.`
         );
       }
     }
 
-    // FIX 2: argv-level safety checks
+    // FIX 2: argv-level safety checks — validate EVERY command head in the
+    // chain (`;`, `&&`, `||`, `|`, `&`, `$(...)`, backticks), not just the
+    // first token. Previously we only checked argv[0]; `echo ok; shutdown -h`
+    // passed the check because argv[0] was "echo". See CRIT-1 / shell-parser.ts.
+    const heads = extractCommandHeads(command);
+    for (const head of heads) {
+      if (ARGV_BLOCKLIST.has(head)) {
+        log.warn({ command: command.slice(0, 200), head }, 'Argv blocklist rejected a chained head');
+        return `Command rejected as dangerous: "${head}" is in the command blocklist`;
+      }
+    }
     const argv = command.split(/\s+/).filter(Boolean);
     const cmd = argv[0] ?? '';
 
-    if (ARGV_BLOCKLIST.has(cmd)) {
-      return `Command rejected as dangerous: "${cmd}" is in the command blocklist`;
-    }
-
-    // Detect inline code execution — flag as elevated risk but allow
+    // Detect inline code execution — flag as elevated risk but allow.
+    // Inline-exec detection still looks at the outer command only, since the
+    // argv blocklist already defends against chained interpreters.
     const inlineFlags = INLINE_EXEC_FLAGS[cmd];
     if (inlineFlags && argv.some((p) => inlineFlags.includes(p))) {
       log.warn({ command, argv }, 'Elevated-risk: inline code execution via interpreter flag (-c/-e)');

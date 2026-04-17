@@ -39,7 +39,22 @@ export class BrowserBridge {
     }
     log.info({ port: BRIDGE_PORT }, 'Browser bridge listening for Chrome extension');
 
-    this.wss.on('connection', (ws) => {
+    this.wss.on('connection', (ws, req) => {
+      // Origin check: only accept connections from the NEXUS Chrome extension
+      // (chrome-extension://...) or from a tool explicitly identifying itself
+      // via a user-agent match. Reject browser tabs / other origins — a malicious
+      // page running JS could otherwise open ws://127.0.0.1:9338 and drive the
+      // bridge (SSRF-adjacent attack on an in-process service).
+      const origin = req.headers['origin'];
+      const userAgent = String(req.headers['user-agent'] ?? '');
+      const isExtension = typeof origin === 'string' && origin.startsWith('chrome-extension://');
+      const isLoopbackTool = !origin && /nexus|node|curl|ws-cli/i.test(userAgent);
+      if (!isExtension && !isLoopbackTool) {
+        log.warn({ origin, userAgent: userAgent.slice(0, 80) }, 'Bridge: rejecting connection with unrecognized origin');
+        ws.close(1008, 'Origin not allowed');
+        return;
+      }
+
       // Only allow one client at a time — check AND assign atomically
       // (Node's event loop makes this synchronous block atomic)
       if (this.client && this.client.readyState === WebSocket.OPEN) {
@@ -113,6 +128,16 @@ export class BrowserBridge {
     if (!this.isConnected) {
       return Promise.reject(
         new Error('Chrome extension not connected. Install the NEXUS Bridge extension in Chrome.'),
+      );
+    }
+
+    // Cap the pending map so a misbehaving extension or flood of commands
+    // can't exhaust memory. In practice there should be at most a handful
+    // of commands in flight at once.
+    const MAX_PENDING = 256;
+    if (this.pending.size >= MAX_PENDING) {
+      return Promise.reject(
+        new Error(`Bridge: too many commands in flight (${this.pending.size} >= ${MAX_PENDING})`),
       );
     }
 

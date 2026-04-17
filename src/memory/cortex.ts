@@ -246,36 +246,43 @@ export class MemoryCortex {
       .run(importance, id);
   }
 
-  /** Create a typed link between two memories. */
+  /**
+   * Create a typed link between two memories. Wrapped in a transaction so the
+   * link row + both `related_memories` updates commit atomically — otherwise a
+   * crash between the two per-side updates leaves the memory graph with a
+   * one-directional link (source knows about target, but target doesn't know
+   * about source, or vice versa).
+   */
   linkMemories(sourceId: string, targetId: string, linkType: string): void {
     const now = nowISO();
 
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO memory_links (source_id, target_id, link_type, strength, created_at)
-        VALUES (?, ?, ?, ?, ?)`,
-      )
-      .run(sourceId, targetId, linkType, 1.0, now);
+    const insertLink = this.db.prepare(
+      `INSERT OR REPLACE INTO memory_links (source_id, target_id, link_type, strength, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    const selectRelated = this.db.prepare(
+      'SELECT related_memories FROM memories WHERE id = ?',
+    );
+    const updateRelated = this.db.prepare(
+      'UPDATE memories SET related_memories = ? WHERE id = ?',
+    );
 
-    // Also update related_memories arrays on both sides
-    for (const [selfId, otherId] of [
-      [sourceId, targetId],
-      [targetId, sourceId],
-    ]) {
-      const row = this.db
-        .prepare('SELECT related_memories FROM memories WHERE id = ?')
-        .get(selfId) as { related_memories: string } | undefined;
-
-      if (row) {
+    const tx = this.db.transaction(() => {
+      insertLink.run(sourceId, targetId, linkType, 1.0, now);
+      for (const [selfId, otherId] of [
+        [sourceId, targetId],
+        [targetId, sourceId],
+      ]) {
+        const row = selectRelated.get(selfId) as { related_memories: string } | undefined;
+        if (!row) continue;
         const related: string[] = safeJsonParse<string[]>(row.related_memories, []);
         if (!related.includes(otherId)) {
           related.push(otherId);
-          this.db
-            .prepare('UPDATE memories SET related_memories = ? WHERE id = ?')
-            .run(JSON.stringify(related), selfId);
+          updateRelated.run(JSON.stringify(related), selfId);
         }
       }
-    }
+    });
+    tx();
 
     log.debug({ sourceId, targetId, linkType }, 'Memories linked');
   }

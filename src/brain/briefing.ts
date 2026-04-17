@@ -11,6 +11,8 @@ import { join } from 'node:path';
 import { createLogger } from '../utils/logger.js';
 import { getDatabase } from '../memory/database.js';
 import { listRecentDreamIdeas, getLatestDreamJournal } from '../data/episodic-queries.js';
+import { filterSystemPromptLeak, sanitizeEnvVars } from './injection-guard.js';
+import { redactSelfDisclosure } from '../core/self-protection.js';
 import type { AIManager } from '../ai/index.js';
 
 const STATE_PATH = join(homedir(), '.nexus', 'briefing-state.json');
@@ -365,7 +367,13 @@ export class BriefingEngine {
         temperature: 1.0,
       });
 
-      const thought = response.content.trim();
+      // Filter: LLM-generated text that embeds raw memory content can
+      // inadvertently (a) echo a prompt-injection payload the user's memory
+      // stored, or (b) leak NEXUS self-disclosure (commit hashes, paths) if
+      // the LLM picked those up from context. Sanitize before surfacing.
+      const raw = response.content.trim();
+      const promptLeakSafe = filterSystemPromptLeak(raw) ?? raw;
+      const thought = redactSelfDisclosure(sanitizeEnvVars(promptLeakSafe));
       return thought.length > 10 ? thought : null;
     } catch (err) {
       log.warn({ err }, 'Failed to generate daily thought');

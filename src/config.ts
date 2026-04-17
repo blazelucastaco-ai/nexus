@@ -39,33 +39,26 @@ export function loadConfig(): NexusConfig {
     parsed = {};
   }
 
-  // Merge env vars into config
+  // Merge env vars into config. Ensure sub-objects exist before spreading —
+  // otherwise TS (correctly) complains that we might be spreading `undefined`,
+  // and at runtime Zod's schema validator would silently lose the env override.
+  const p = parsed as Record<string, Record<string, unknown>>;
+  p.telegram = p.telegram ?? {};
+  p.ai = p.ai ?? {};
+
   if (process.env.TELEGRAM_BOT_TOKEN) {
-    parsed.telegram = { ...parsed.telegram, botToken: process.env.TELEGRAM_BOT_TOKEN };
+    p.telegram.botToken = process.env.TELEGRAM_BOT_TOKEN;
   }
   const chatIdFromEnv = process.env.NEXUS_CHAT_ID ?? process.env.TELEGRAM_CHAT_ID ?? '';
   if (chatIdFromEnv) {
-    parsed.telegram = {
-      ...parsed.telegram,
-      chatId: chatIdFromEnv,
-      allowedUsers: [chatIdFromEnv],
-    };
+    p.telegram.chatId = chatIdFromEnv;
+    p.telegram.allowedUsers = [chatIdFromEnv];
   }
-  if (process.env.NEXUS_AI_PROVIDER) {
-    parsed.ai = { ...parsed.ai, provider: process.env.NEXUS_AI_PROVIDER };
-  }
-  if (process.env.NEXUS_AI_MODEL) {
-    parsed.ai = { ...parsed.ai, model: process.env.NEXUS_AI_MODEL };
-  }
-  if (process.env.NEXUS_AI_OPUS_MODEL) {
-    parsed.ai = { ...parsed.ai, opusModel: process.env.NEXUS_AI_OPUS_MODEL };
-  }
-  if (process.env.NEXUS_AI_FAST_MODEL) {
-    parsed.ai = { ...parsed.ai, fastModel: process.env.NEXUS_AI_FAST_MODEL };
-  }
-  if (process.env.NEXUS_AI_FALLBACK_MODEL) {
-    parsed.ai = { ...parsed.ai, fallbackModel: process.env.NEXUS_AI_FALLBACK_MODEL };
-  }
+  if (process.env.NEXUS_AI_PROVIDER) p.ai.provider = process.env.NEXUS_AI_PROVIDER;
+  if (process.env.NEXUS_AI_MODEL) p.ai.model = process.env.NEXUS_AI_MODEL;
+  if (process.env.NEXUS_AI_OPUS_MODEL) p.ai.opusModel = process.env.NEXUS_AI_OPUS_MODEL;
+  if (process.env.NEXUS_AI_FAST_MODEL) p.ai.fastModel = process.env.NEXUS_AI_FAST_MODEL;
+  if (process.env.NEXUS_AI_FALLBACK_MODEL) p.ai.fallbackModel = process.env.NEXUS_AI_FALLBACK_MODEL;
 
   const config = NexusConfigSchema.parse(parsed);
 

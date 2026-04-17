@@ -460,8 +460,12 @@ export class TelegramGateway {
     // ── Ultra mode approval ────────────────────────────────────────
     this.bot.command('approve', async (ctx) => {
       if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
-      const chatId = String(ctx.chat.id);
-      const args = ctx.message.text.split(' ');
+      // Grammy command handlers fire on :message updates, but ctx.message is
+      // still typed as possibly-undefined. Guard to avoid a crash and to keep
+      // the type-checker quiet.
+      const text = ctx.message?.text ?? ctx.channelPost?.text;
+      if (!text) return ctx.reply('Usage: /approve <plan_id>');
+      const args = text.split(' ');
       const planId = args[1]?.trim();
       if (!planId) return ctx.reply('Usage: /approve <plan_id>');
       const ok = await this.orchestrator.approveUltraPlan(planId);
@@ -474,7 +478,9 @@ export class TelegramGateway {
 
     this.bot.command('reject', async (ctx) => {
       if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
-      const args = ctx.message.text.split(' ');
+      const text = ctx.message?.text ?? ctx.channelPost?.text;
+      if (!text) return ctx.reply('Usage: /reject <plan_id>');
+      const args = text.split(' ');
       const planId = args[1]?.trim();
       if (!planId) return ctx.reply('Usage: /reject <plan_id>');
       const ok = this.orchestrator.rejectUltraPlan(planId);

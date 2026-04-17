@@ -18,11 +18,18 @@ export interface ApprovalDecision {
 /**
  * Check whether a command is allowed to run.
  * - BLOCKED: always refused
- * - DANGEROUS: refused unless allowlisted; response includes approval note
+ * - DANGEROUS: refused unless allowlisted. We INTENTIONALLY do NOT honor the
+ *   LLM-provided `confirmed` flag here — the LLM controls its own tool args,
+ *   so trusting `confirmed=true` is equivalent to no gate at all (CRIT-3).
+ *   The only legitimate bypass is the on-disk allowlist, which the user edits.
  * - MODERATE: allowed with logging
  * - SAFE: allowed silently
+ *
+ * The `confirmed` parameter is kept in the signature for backwards compatibility
+ * but is now only consulted for historical-legacy paths; it has NO effect on
+ * DANGEROUS commands.
  */
-export async function checkApproval(command: string, confirmed = false): Promise<ApprovalDecision> {
+export async function checkApproval(command: string, _confirmed = false): Promise<ApprovalDecision> {
   const classification: TierResult = classifyCommand(command);
 
   // Check allowlist first (overrides DANGEROUS tier)
@@ -46,20 +53,16 @@ export async function checkApproval(command: string, confirmed = false): Promise
       };
 
     case 'DANGEROUS':
-      if (confirmed) {
-        log.warn({ command: command.slice(0, 80) }, 'DANGEROUS command confirmed by user');
-        return { allowed: true, tier: 'DANGEROUS', reason: classification.reason, requiresApproval: false };
-      }
-      log.warn({ command: command.slice(0, 80), reason: classification.reason }, 'DANGEROUS command requires approval');
+      log.warn({ command: command.slice(0, 80), reason: classification.reason }, 'DANGEROUS command refused (allowlist only)');
       return {
         allowed: false,
         tier: 'DANGEROUS',
         reason: classification.reason,
         requiresApproval: true,
         message:
-          `⚠️ [REQUIRES APPROVAL] This command is classified as DANGEROUS:\n\n\`${command}\`\n\n` +
+          `⚠️ This command is classified as DANGEROUS and cannot be run automatically:\n\n\`${command}\`\n\n` +
           `Reason: ${classification.reason}\n\n` +
-          `To proceed: re-run with confirmed=true, or add this command to ~/.nexus/allowlist.json`,
+          `If the user explicitly wants to run this, they can either (a) run it manually in their own terminal, or (b) add an exact match or prefix to \`~/.nexus/allowlist.json\` and retry. You, the assistant, do NOT have a way to self-confirm this — please explain the risk to the user and wait for them to decide.`,
       };
 
     case 'MODERATE':

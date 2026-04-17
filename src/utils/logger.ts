@@ -3,6 +3,47 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import pino, { type Logger } from 'pino';
 
+// PII / secret redaction. Applied to string values in the first (merging)
+// object of every log call. Patterns are narrow-on-purpose — broad matches
+// would dilute logs and destroy debuggability. Add new patterns here if a
+// real-world leak shows up.
+const SENSITIVE_PATTERNS: { re: RegExp; replace: string }[] = [
+  // Explicit "password"/"passwd"/"secret"/"token"/"api_key" key=value forms,
+  // both JSON-style and form-style.
+  { re: /(["']?(?:password|passwd|secret|token|api[_-]?key|auth[_-]?token|access[_-]?token)["']?\s*[:=]\s*["']?)[^"'\s,}]+/gi, replace: '$1[redacted]' },
+  // Common API-key prefixes (Stripe sk_/pk_, GitHub ghp_ ghs_ github_pat_, OpenAI sk-)
+  { re: /\bsk-[A-Za-z0-9_-]{16,}/g, replace: '[redacted-sk]' },
+  { re: /\b(?:ghp|ghs|gho|ghu|ghr)_[A-Za-z0-9_-]{16,}/g, replace: '[redacted-gh]' },
+  { re: /\bgithub_pat_[A-Za-z0-9_-]{16,}/g, replace: '[redacted-ghpat]' },
+  { re: /\b(?:sk_live|sk_test|pk_live|pk_test)_[A-Za-z0-9_-]{16,}/g, replace: '[redacted-stripe]' },
+  { re: /\bxox[baprs]-[A-Za-z0-9-]{10,}/g, replace: '[redacted-slack]' },
+  // Bearer tokens
+  { re: /\bBearer\s+[A-Za-z0-9._-]{16,}/g, replace: 'Bearer [redacted]' },
+];
+
+function redactString(s: string): string {
+  if (!s || typeof s !== 'string') return s;
+  let out = s;
+  for (const { re, replace } of SENSITIVE_PATTERNS) {
+    out = out.replace(re, replace);
+  }
+  return out;
+}
+
+function redactValue(v: unknown, depth = 0): unknown {
+  if (depth > 4) return v; // don't recurse deeply into logged objects
+  if (typeof v === 'string') return redactString(v);
+  if (Array.isArray(v)) return v.map((x) => redactValue(x, depth + 1));
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      out[k] = redactValue(val, depth + 1);
+    }
+    return out;
+  }
+  return v;
+}
+
 const NEXUS_DIR = join(homedir(), '.nexus');
 const LOG_DIR = join(NEXUS_DIR, 'logs');
 
@@ -89,6 +130,15 @@ function wrapWithTrace(logger: Logger): Logger {
   for (const method of methods) {
     wrapped[method] = function (...args: unknown[]) {
       const ctx = resolveTrace();
+      // Redact PII / secrets in the merging object and string message.
+      // Applied before any other processing to minimize the chance a secret
+      // ever hits disk.
+      if (args[0] && typeof args[0] === 'object' && !Array.isArray(args[0])) {
+        args[0] = redactValue(args[0]);
+        if (typeof args[1] === 'string') args[1] = redactString(args[1]);
+      } else if (typeof args[0] === 'string') {
+        args[0] = redactString(args[0]);
+      }
       if (ctx && (ctx.traceId || ctx.chatId)) {
         // If first arg is an object (pino's "mergingObject"), merge trace fields in.
         if (args[0] && typeof args[0] === 'object' && !Array.isArray(args[0])) {

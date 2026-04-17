@@ -50,6 +50,10 @@ export class DreamingEngine {
   private aiManager: AIManager | null;
   private sendFn: SendFn | null;
   private goalTracker: GoalTracker;
+  // In-process mutex to close the concurrent-entry race on the cooldown check.
+  // Two callers hitting runDreamCycle before saveDreamState fires would each
+  // see the stale timestamp and both proceed. This flag makes the entry CAS.
+  private dreamRunning = false;
 
   constructor(aiManager?: AIManager, sendFn?: SendFn) {
     this.aiManager = aiManager ?? null;
@@ -85,21 +89,35 @@ export class DreamingEngine {
   async runDreamCycle(): Promise<DreamReport> {
     const start = Date.now();
 
-    // Double-run guard — reject runs within 30 minutes of the last one
-    const state = this.loadDreamState();
-    const THIRTY_MIN = 30 * 60 * 1000;
-    if (state.lastDreamAt > 0 && start - state.lastDreamAt < THIRTY_MIN) {
-      const waitSec = Math.ceil((THIRTY_MIN - (start - state.lastDreamAt)) / 1000);
-      log.warn({ waitSec }, 'Dream cycle rejected — too soon since last run');
+    // In-process CAS: if a cycle is already running in this process, refuse.
+    // This closes the race where two callers both read a stale lastDreamAt
+    // and both pass the cooldown check.
+    if (this.dreamRunning) {
+      log.warn('Dream cycle already running in this process — rejecting concurrent call');
       return {
         consolidated: 0, decayed: 0, garbageCollected: 0, contradictions: 0,
         staleGoalsPruned: 0, reflections: [], ideas: [], insights: [],
-        durationMs: Date.now() - start, skipped: true,
+        durationMs: 0, skipped: true,
       };
     }
+    this.dreamRunning = true;
 
-    // Stamp immediately so concurrent callers see it
-    this.saveDreamState({ ...state, lastDreamAt: start });
+    try {
+      // Double-run guard — reject runs within 30 minutes of the last one
+      const state = this.loadDreamState();
+      const THIRTY_MIN = 30 * 60 * 1000;
+      if (state.lastDreamAt > 0 && start - state.lastDreamAt < THIRTY_MIN) {
+        const waitSec = Math.ceil((THIRTY_MIN - (start - state.lastDreamAt)) / 1000);
+        log.warn({ waitSec }, 'Dream cycle rejected — too soon since last run');
+        return {
+          consolidated: 0, decayed: 0, garbageCollected: 0, contradictions: 0,
+          staleGoalsPruned: 0, reflections: [], ideas: [], insights: [],
+          durationMs: Date.now() - start, skipped: true,
+        };
+      }
+
+      // Stamp immediately so concurrent callers see it
+      this.saveDreamState({ ...state, lastDreamAt: start });
     log.info('Dream cycle starting…');
     // Notify subscribers (Code Dreams, telemetry, etc.) — the bus is the only
     // mechanism for tying side cycles to the dream run.
@@ -165,16 +183,19 @@ export class DreamingEngine {
       durationMs: report.durationMs,
     });
 
-    // Notify via Telegram if there's anything interesting to share
-    if (this.sendFn && (reflections.length > 0 || insights.length > 0 || ideas.length > 0)) {
-      try {
-        await this.sendFn(this.formatTelegramMessage(report));
-      } catch (err) {
-        log.warn({ err }, 'Dream cycle Telegram notification failed');
+      // Notify via Telegram if there's anything interesting to share
+      if (this.sendFn && (reflections.length > 0 || insights.length > 0 || ideas.length > 0)) {
+        try {
+          await this.sendFn(this.formatTelegramMessage(report));
+        } catch (err) {
+          log.warn({ err }, 'Dream cycle Telegram notification failed');
+        }
       }
-    }
 
-    return report;
+      return report;
+    } finally {
+      this.dreamRunning = false;
+    }
   }
 
   // ── Phase 1: Consolidate high-access episodic → semantic (batched) ──────────

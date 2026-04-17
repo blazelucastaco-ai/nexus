@@ -262,11 +262,13 @@ export class ProceduralMemory {
 
     const conditions = terms.map(
       () =>
-        '(LOWER(tags) LIKE ? OR LOWER(content) LIKE ? OR LOWER(summary) LIKE ?)',
+        "(LOWER(tags) LIKE ? ESCAPE '\\' OR LOWER(content) LIKE ? ESCAPE '\\' OR LOWER(summary) LIKE ? ESCAPE '\\')",
     );
     const params: unknown[] = [];
     for (const term of terms) {
-      const pattern = `%${term}%`;
+      // Escape LIKE wildcards in user input so `%` and `_` are matched literally.
+      const escaped = term.replace(/[%_\\]/g, '\\$&');
+      const pattern = `%${escaped}%`;
       params.push(pattern, pattern, pattern);
     }
 
@@ -466,14 +468,16 @@ export class ProceduralMemory {
    * Search mistakes by keyword.
    */
   searchMistakes(query: string, limit = 20): Mistake[] {
-    const pattern = `%${query}%`;
+    // Escape LIKE wildcards so `%` / `_` in user input are matched literally.
+    const escaped = query.replace(/[%_\\]/g, '\\$&');
+    const pattern = `%${escaped}%`;
     const rows = this.db
       .prepare(
         `SELECT * FROM mistakes
-        WHERE description LIKE ?
-          OR what_happened LIKE ?
-          OR root_cause LIKE ?
-          OR prevention_strategy LIKE ?
+        WHERE description LIKE ? ESCAPE '\\'
+          OR what_happened LIKE ? ESCAPE '\\'
+          OR root_cause LIKE ? ESCAPE '\\'
+          OR prevention_strategy LIKE ? ESCAPE '\\'
         ORDER BY created_at DESC
         LIMIT ?`,
       )

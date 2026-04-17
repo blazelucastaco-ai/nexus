@@ -25,6 +25,11 @@ const MAX_RECENT_TOOLS = 20;
 const MAX_RECENT_TASKS = 10;
 const MAX_RECENT_ERRORS = 5;
 const PROJECT_WINDOW_MS = 60 * 60 * 1000; // "Touched in the last hour"
+// Cap projectTouches so a long-running process can't accumulate tens of
+// thousands of entries over months. Older entries are trimmed after every
+// tool event; anything beyond MAX_PROJECT_TOUCHES or older than the window
+// is dropped.
+const MAX_PROJECT_TOUCHES = 500;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -152,6 +157,16 @@ export function startIntrospection(): IntrospectionHandle {
       if (inferred) {
         state.currentProject = inferred.name;
         state.projectTouches.unshift({ project: inferred.name, at: Date.now() });
+        // Drop entries older than the window or beyond the size cap. This
+        // keeps the array from growing unboundedly in a multi-day process.
+        const cutoff = Date.now() - PROJECT_WINDOW_MS;
+        while (
+          state.projectTouches.length > 0 &&
+          (state.projectTouches.length > MAX_PROJECT_TOUCHES ||
+            state.projectTouches[state.projectTouches.length - 1]!.at < cutoff)
+        ) {
+          state.projectTouches.pop();
+        }
       }
     }
     touch();

@@ -13,7 +13,7 @@ import { EventLoop } from './event-loop.js';
 import { toOpenAITools } from '../tools/definitions.js';
 import { ToolExecutor } from '../tools/executor.js';
 import { classifyMessage, classifyTaskMode, isUndercoverProbe, detectMissingRequirements } from './task-classifier.js';
-import { planTask } from './task-planner.js';
+import { planTask, type TaskPlan } from './task-planner.js';
 import { runTask } from './task-runner.js';
 import {
   sanitizeInput,

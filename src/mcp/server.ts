@@ -5,8 +5,17 @@
 //
 // Implements MCP over stdio (JSON-RPC 2.0). Compatible with Claude Desktop/Code.
 // Spec: https://modelcontextprotocol.io/specification
+//
+// SECURITY (CRIT-4):
+// - stdio mode: trust boundary is the parent process (Claude Desktop spawns us).
+//   No auth needed — the stdio channel itself is the authentication.
+// - HTTP mode: disabled by default. To enable, set NEXUS_MCP_HTTP=1 and provide
+//   NEXUS_MCP_TOKEN=<token> in the environment. Clients MUST send
+//   `Authorization: Bearer <token>` on every request. Without the env var HTTP
+//   mode refuses to start, so a local attacker can't silently bind the port.
 
 import { createInterface } from 'node:readline';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createLogger } from '../utils/logger.js';
 import { toolDefinitions } from '../tools/definitions.js';
 
@@ -198,10 +207,48 @@ async function handleRequest(req: JsonRpcRequest): Promise<JsonRpcResponse | nul
   }
 }
 
-// ── HTTP mode (optional) ───────────────────────────────────────────────────
+// ── HTTP mode (optional, opt-in, authenticated) ────────────────────────────
+// Disabled unless the env var NEXUS_MCP_HTTP=1 is set. Requires bearer token
+// via NEXUS_MCP_TOKEN (if unset, we generate a random one and print it to
+// stderr for the user to copy). Binds to 127.0.0.1 only (never 0.0.0.0).
+
+function timingSafeTokenMatch(expected: string, provided: string | undefined): boolean {
+  if (!provided) return false;
+  try {
+    const a = Buffer.from(expected);
+    const b = Buffer.from(provided);
+    if (a.length !== b.length) return false;
+    return timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
 
 export async function startMcpHttpServer(port = 3333): Promise<void> {
-  log.info({ port }, 'Starting NEXUS MCP HTTP server');
+  // Opt-in guard — HTTP is a network exposure and must be explicitly enabled.
+  if (process.env.NEXUS_MCP_HTTP !== '1') {
+    log.warn(
+      'MCP HTTP mode is disabled. Set NEXUS_MCP_HTTP=1 to enable. Refusing to bind the port.',
+    );
+    throw new Error(
+      'NEXUS MCP HTTP mode is disabled. Set NEXUS_MCP_HTTP=1 (and NEXUS_MCP_TOKEN=<secret>) to enable.',
+    );
+  }
+
+  const token =
+    process.env.NEXUS_MCP_TOKEN ??
+    (() => {
+      const generated = randomBytes(24).toString('hex');
+      // Write to stderr so it doesn't pollute a caller's stdout-parsing.
+      process.stderr.write(
+        `[nexus-mcp] No NEXUS_MCP_TOKEN set. Generated token for this session:\n` +
+          `  ${generated}\n` +
+          `Use it as: Authorization: Bearer ${generated}\n`,
+      );
+      return generated;
+    })();
+
+  log.info({ port }, 'Starting NEXUS MCP HTTP server (auth enabled, 127.0.0.1 only)');
 
   const { createServer } = await import('node:http');
 
@@ -209,6 +256,18 @@ export async function startMcpHttpServer(port = 3333): Promise<void> {
     if (req.method !== 'POST') {
       res.writeHead(405, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Method not allowed' }));
+      return;
+    }
+
+    // AuthN: require bearer token on every request. Use timing-safe compare.
+    const auth = req.headers['authorization'];
+    const provided = typeof auth === 'string' && auth.startsWith('Bearer ')
+      ? auth.slice('Bearer '.length).trim()
+      : undefined;
+    if (!timingSafeTokenMatch(token, provided)) {
+      log.warn({ remote: req.socket.remoteAddress }, 'MCP HTTP: unauthenticated request rejected');
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized' }));
       return;
     }
 
@@ -227,14 +286,17 @@ export async function startMcpHttpServer(port = 3333): Promise<void> {
       const response = await handleRequest(request);
       res.writeHead(200, {
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
+        // No wildcard CORS — localhost only, no cross-origin browsers should be
+        // reaching this endpoint at all. If they are, it's an attack.
+        'Cache-Control': 'no-store',
       });
       res.end(JSON.stringify(response ?? { jsonrpc: '2.0', id: request.id, result: {} }));
     });
   });
 
-  server.listen(port, () => {
-    log.info({ port }, 'MCP HTTP server listening');
-    console.log(`NEXUS MCP server running at http://localhost:${port}`);
+  // Bind to loopback explicitly — we never want this on a non-local interface.
+  server.listen(port, '127.0.0.1', () => {
+    log.info({ port }, 'MCP HTTP server listening on 127.0.0.1');
+    process.stderr.write(`[nexus-mcp] Listening on http://127.0.0.1:${port} (auth required)\n`);
   });
 }
