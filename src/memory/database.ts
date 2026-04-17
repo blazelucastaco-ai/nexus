@@ -271,6 +271,18 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_project_journal_project ON project_journal(project_name, created_at DESC);
     `,
   },
+  {
+    version: 10,
+    description: 'Composite indexes for memory recall hot paths (FIND-PRF-06)',
+    sql: `
+      -- Recall filters WHERE layer = ? AND importance >= ? ORDER BY created_at DESC.
+      -- Single-column indexes were forcing a layer-scan + in-memory filter.
+      CREATE INDEX IF NOT EXISTS idx_memories_layer_importance
+        ON memories(layer, importance DESC);
+      CREATE INDEX IF NOT EXISTS idx_memories_layer_created_at
+        ON memories(layer, created_at DESC);
+    `,
+  },
 ];
 
 function runMigrations(database: Database.Database): void {

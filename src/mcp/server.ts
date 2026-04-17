@@ -271,9 +271,23 @@ export async function startMcpHttpServer(port = 3333): Promise<void> {
       return;
     }
 
+    // Cap request body size so a hostile client can't OOM us by streaming
+    // gigabytes (FIND-SEC-01). 1 MB is ample for JSON-RPC requests.
+    const MAX_BODY_BYTES = 1_000_000;
     let body = '';
-    req.on('data', (chunk) => { body += chunk; });
+    let rejected = false;
+    req.on('data', (chunk) => {
+      if (rejected) return;
+      body += chunk;
+      if (body.length > MAX_BODY_BYTES) {
+        rejected = true;
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Request body too large' }));
+        req.destroy();
+      }
+    });
     req.on('end', async () => {
+      if (rejected) return;
       let request: JsonRpcRequest;
       try {
         request = JSON.parse(body) as JsonRpcRequest;

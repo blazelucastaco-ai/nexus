@@ -7,14 +7,35 @@ const logger = createLogger('AppleScript');
 
 /**
  * Escape a string for safe embedding in AppleScript double-quoted strings.
- * Handles backslashes, double quotes, and tabs/newlines.
+ * Handles backslashes, double quotes, and control characters. Newlines MUST
+ * be escaped — a literal `\n` inside a double-quoted AppleScript string can
+ * terminate the string context on some parsers and enable command injection
+ * into a following statement (FIND-SEC-02).
  */
 function escapeAS(str: string): string {
   return str
     .replace(/\\/g, '\\\\')
     .replace(/"/g, '\\"')
-    .replace(/\t/g, '\\t')
-    .replace(/\r/g, '\\r');
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t');
+}
+
+/**
+ * Reject strings that look structured enough to be dangerous when interpolated
+ * into AppleScript. Defense-in-depth on top of escapeAS(): even if future
+ * escape logic has a hole, untrusted inputs with control chars / multiline
+ * content are thrown out at the call site.
+ */
+function assertSafeAppleScriptArg(name: string, value: string): void {
+  if (value.length > 512) {
+    throw new Error(`AppleScript ${name} too long (max 512 chars)`);
+  }
+  // Reject any control character that isn't common whitespace.
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u0008\u000B-\u001F\u007F]/.test(value)) {
+    throw new Error(`AppleScript ${name} contains rejected control characters`);
+  }
 }
 
 /**
@@ -77,6 +98,7 @@ export async function openApp(appName: string): Promise<void> {
  * @param appName - Name of the application
  */
 export async function quitApp(appName: string): Promise<void> {
+  assertSafeAppleScriptArg('appName', appName);
   const escaped = escapeAS(appName);
   try {
     await runAppleScript(`tell application "${escaped}" to quit`);
@@ -101,6 +123,12 @@ export async function getClipboard(): Promise<string> {
  * @param text - The text to place on the clipboard
  */
 export async function setClipboard(text: string): Promise<void> {
+  // Allow clipboard text up to larger size, but still reject control chars.
+  if (text.length > 100_000) throw new Error('Clipboard text too large');
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u0008\u000B-\u000C\u000E-\u001F\u007F]/.test(text)) {
+    throw new Error('Clipboard text contains rejected control characters');
+  }
   const escaped = escapeAS(text);
   await runAppleScript(`set the clipboard to "${escaped}"`);
   logger.debug({ length: text.length }, 'Clipboard set');
@@ -119,6 +147,10 @@ export async function showNotification(
   subtitle?: string,
   sound?: string,
 ): Promise<void> {
+  assertSafeAppleScriptArg('title', title);
+  assertSafeAppleScriptArg('message', message);
+  if (subtitle) assertSafeAppleScriptArg('subtitle', subtitle);
+  if (sound) assertSafeAppleScriptArg('sound', sound);
   const titleEsc = escapeAS(title);
   const msgEsc = escapeAS(message);
 
@@ -148,6 +180,10 @@ export async function showDialog(
   defaultButton?: string | number,
   title?: string,
 ): Promise<string> {
+  assertSafeAppleScriptArg('message', message);
+  if (title) assertSafeAppleScriptArg('title', title);
+  for (const b of buttons) assertSafeAppleScriptArg('button', b);
+  if (typeof defaultButton === 'string') assertSafeAppleScriptArg('defaultButton', defaultButton);
   const msgEsc = escapeAS(message);
   const btnList = buttons.map((b) => `"${escapeAS(b)}"`).join(', ');
 

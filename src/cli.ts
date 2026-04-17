@@ -147,7 +147,7 @@ function isRunning(): boolean {
   try {
     const result = execSync(
       `launchctl print gui/$(id -u)/${PLIST_LABEL} 2>/dev/null`,
-      { shell: true, stdio: 'pipe' },
+      { stdio: 'pipe' },
     ).toString();
     return result.includes('state = running');
   } catch {
@@ -189,7 +189,7 @@ function getMemUsage(pid: string): string {
 
 function startDaemon() {
   if (existsSync(PLIST_PATH)) {
-    execSync(`launchctl bootstrap gui/$(id -u) "${PLIST_PATH}"`, { shell: true, stdio: 'pipe' });
+    execSync(`launchctl bootstrap gui/$(id -u) "${PLIST_PATH}"`, { stdio: 'pipe' });
     return { via: 'launchd' };
   }
   const child = spawn('node', [join(PROJECT_DIR, 'dist', 'index.js')], {
@@ -204,11 +204,11 @@ function startDaemon() {
 function stopDaemon() {
   if (existsSync(PLIST_PATH)) {
     execSync(`launchctl bootout gui/$(id -u)/${PLIST_LABEL} 2>/dev/null || true`, {
-      shell: true,
+      
       stdio: 'pipe',
     });
   } else {
-    execSync(`pkill -f "dist/index.js" 2>/dev/null || true`, { shell: true, stdio: 'pipe' });
+    execSync(`pkill -f "dist/index.js" 2>/dev/null || true`, { stdio: 'pipe' });
   }
 }
 
@@ -350,7 +350,7 @@ program
     try {
       execSync(`cd "${PROJECT_DIR}" && pnpm exec tsx scripts/setup.ts`, {
         stdio: 'inherit',
-        shell: true,
+        
       });
     } catch {
       // setup wizard exits non-zero on cancel — that's fine
@@ -621,7 +621,7 @@ program
         try {
           const countStr = execSync(
             `sqlite3 "${DB_PATH}" "${sql};" 2>/dev/null`,
-            { stdio: 'pipe', shell: true },
+            { stdio: 'pipe' },
           ).toString().trim();
           const count = parseInt(countStr, 10);
           const bar = count > 0 ? VIOLET('▪'.repeat(Math.min(Math.ceil(count / 20), 30))) : chalk.dim('▪');
@@ -770,19 +770,19 @@ program
     console.log('');
 
     try {
-      execSync(`pkill -f "dist/index.js" 2>/dev/null || true`, { shell: true });
+      execSync(`pkill -f "dist/index.js" 2>/dev/null || true`, {  });
     } catch {}
 
     if (existsSync(PLIST_PATH)) {
       try {
-        execSync(`launchctl bootout gui/$(id -u)/${PLIST_LABEL} 2>/dev/null || true`, { shell: true });
-        execSync(`rm -f "${PLIST_PATH}"`, { shell: true });
+        execSync(`launchctl bootout gui/$(id -u)/${PLIST_LABEL} 2>/dev/null || true`, {  });
+        execSync(`rm -f "${PLIST_PATH}"`, {  });
         console.log(`${PAD}${EMERALD('✓')}  launchd plist removed`);
       } catch {}
     }
 
     if (existsSync(NEXUS_DIR)) {
-      execSync(`rm -rf "${NEXUS_DIR}"`, { shell: true });
+      execSync(`rm -rf "${NEXUS_DIR}"`, {  });
       console.log(`${PAD}${EMERALD('✓')}  ${NEXUS_DIR} removed`);
     }
 
@@ -806,7 +806,7 @@ program
     const devChat = spawn(
       'pnpm',
       ['exec', 'tsx', join(PROJECT_DIR, 'scripts', 'dev-chat.ts'), '--interactive'],
-      { stdio: 'inherit', shell: true },
+      { stdio: 'inherit' },
     );
 
     devChat.on('exit', (code) => {

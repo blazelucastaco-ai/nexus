@@ -169,7 +169,7 @@ nexus uninstall    # Remove NEXUS from this system
 ```bash
 pnpm dev           # Development mode with hot reload
 pnpm build         # Production build
-pnpm test          # Run test suite (479 tests)
+pnpm test          # Run test suite (747 tests)
 pnpm lint          # Lint and format
 ```
 

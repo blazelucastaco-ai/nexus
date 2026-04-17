@@ -104,7 +104,7 @@ function toAnthropicMessages(
 
     if (msg.role === 'assistant') {
       // Build content blocks — text + tool_use blocks
-      const contentBlocks: Anthropic.ContentBlock[] = [];
+      const contentBlocks: Anthropic.ContentBlockParam[] = [];
 
       if (msg.content) {
         contentBlocks.push({ type: 'text', text: String(msg.content) });

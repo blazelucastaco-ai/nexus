@@ -69,14 +69,24 @@ function buildStepSystemPrompt(
 
   // Build a file content snapshot from prior steps so this step can reference them
   // without needing to call read_file. Cap total to ~12K chars to avoid bloating the prompt.
+  // Previous implementation had an accounting bug (FIND-BUG-01): the truncation-notice
+  // line was appended but not counted toward snapshotChars, so subsequent iterations
+  // could push the buffer well past MAX_SNAPSHOT_CHARS. Fix: account for notice bytes
+  // AND stop adding entries once the budget is spent.
   let fileSnapshot = '';
   const MAX_SNAPSHOT_CHARS = 12_000;
   let snapshotChars = 0;
-  for (const ctx of previousContext) {
+  outer: for (const ctx of previousContext) {
     for (const [filePath, content] of Object.entries(ctx.fileContents)) {
       const entry = `\n--- ${filePath} ---\n${content}\n`;
       if (snapshotChars + entry.length > MAX_SNAPSHOT_CHARS) {
-        fileSnapshot += `\n--- ${filePath} --- [truncated, use read_file to see full content]\n`;
+        const notice = `\n--- ${filePath} --- [truncated, use read_file to see full content]\n`;
+        if (snapshotChars + notice.length > MAX_SNAPSHOT_CHARS) {
+          // No room even for the notice — bail out of both loops.
+          break outer;
+        }
+        fileSnapshot += notice;
+        snapshotChars += notice.length;
         continue;
       }
       fileSnapshot += entry;
@@ -742,8 +752,19 @@ export async function runTask(opts: {
 
       await updateProgress(`Starting: ${step.title}`, step.id);
 
+      // Emit task.step.started so Introspection + other subscribers can
+      // observe per-step progress (FIND-CMP-01).
+      events.emit({
+        type: 'task.step.started',
+        planTitle: plan.title,
+        stepId: step.id,
+        stepTitle: step.title,
+      });
+
       let stepSuccess = false;
       let stepSummary = '';
+      let stepAttempts = 0;
+      let stepLastError = '';
 
       // Check per-task deadline
       if (Date.now() - startTime > TASK_TIMEOUT_MS) {
@@ -789,6 +810,7 @@ export async function runTask(opts: {
 
       try {
       for (let attempt = 0; attempt <= MAX_STEP_RETRIES; attempt++) {
+        stepAttempts = attempt + 1;
         try {
           const result = await withTimeout(
             executeStep(step, plan, originalRequest, previousContext, ai, toolExecutor, model, maxTokens, onDetail, undefined, undefined, skillsContext),
@@ -806,10 +828,29 @@ export async function runTask(opts: {
 
           // Completed but verification failed — record for Co Work
           lastErrorContext = result.rawOutput.slice(0, 800) || 'Step completed but verification failed — output was empty, incomplete, or contained errors.';
+          stepLastError = lastErrorContext;
+
+          // Emit a task.step.failed for this attempt so observers see retries.
+          events.emit({
+            type: 'task.step.failed',
+            planTitle: plan.title,
+            stepId: step.id,
+            error: lastErrorContext,
+            attempt: stepAttempts,
+          });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.warn({ err: msg, stepId: step.id, attempt }, 'Step execution error');
           lastErrorContext = msg;
+          stepLastError = msg;
+
+          events.emit({
+            type: 'task.step.failed',
+            planTitle: plan.title,
+            stepId: step.id,
+            error: msg,
+            attempt: stepAttempts,
+          });
 
           if (attempt < MAX_STEP_RETRIES) {
             await updateProgress(`Retrying step ${step.id} (attempt ${attempt + 2})...`, step.id);
@@ -952,6 +993,22 @@ export async function runTask(opts: {
       completedIds.add(step.id);
       stepTimings.set(step.id, stepDuration);
       stepResults.push({ step, success: stepSuccess, summary: stepSummary });
+
+      // Emit completion event. (task.step.failed may have already fired for
+      // individual retry attempts above — this event signals the STEP-level
+      // outcome, regardless of attempts.)
+      if (stepSuccess) {
+        events.emit({
+          type: 'task.step.completed',
+          planTitle: plan.title,
+          stepId: step.id,
+          success: true,
+          durationMs: stepDuration,
+          filesWritten: lastFilesWritten,
+        });
+      }
+      // Mark variable as used — silences strict lint; kept for observability plumbing.
+      void stepLastError;
 
       log.info({ stepId: step.id, durationMs: stepDuration, success: stepSuccess }, 'Step complete');
 

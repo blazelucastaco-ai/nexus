@@ -21,7 +21,7 @@ import { ProceduralMemory } from './procedural.js';
 import { SemanticMemory } from './semantic.js';
 import { ShortTermMemory, type BufferEntry } from './short-term.js';
 import { EmbeddingProvider, cosineSimilarity } from '../providers/embeddings.js';
-import { containsSelfDisclosure } from '../core/self-protection.js';
+import { containsSelfDisclosure, redactSelfDisclosure } from '../core/self-protection.js';
 
 const log = createLogger('MemoryManager');
 
@@ -307,7 +307,15 @@ export class MemoryManager {
 
     // Sort by score descending and return top-K
     deduped.sort((a, b) => b.score - a.score);
-    return deduped.slice(0, limit).map((s) => s.memory);
+    // L6 on recall (FIND-SEC-07): even though containsSelfDisclosure blocks
+    // new self-referential memories at store time, pre-existing rows from
+    // before the filter existed can still surface. Scrub recalled content
+    // through `redactSelfDisclosure` before it enters LLM context.
+    return deduped.slice(0, limit).map((s) => ({
+      ...s.memory,
+      content: redactSelfDisclosure(s.memory.content),
+      summary: s.memory.summary ? redactSelfDisclosure(s.memory.summary) : s.memory.summary,
+    }));
   }
 
   // ─── Context Assembly ─────────────────────────────────────────────

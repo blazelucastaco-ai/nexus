@@ -32,7 +32,14 @@ export class BrowserBridge {
     if (this.wss) return;
 
     try {
-      this.wss = new WebSocketServer({ port: BRIDGE_PORT, host: '127.0.0.1' });
+      // maxPayload caps incoming frames at 1 MB — prevents a hostile /
+      // misbehaving extension from memory-exhausting us with a giant frame.
+      // 1 MB is ample for all real bridge commands + responses (FIND-SEC-05).
+      this.wss = new WebSocketServer({
+        port: BRIDGE_PORT,
+        host: '127.0.0.1',
+        maxPayload: 1_000_000,
+      });
     } catch (err) {
       log.error({ err, port: BRIDGE_PORT }, `Failed to start browser bridge — port may be in use`);
       throw err;

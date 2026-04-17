@@ -19,6 +19,10 @@ const SENSITIVE_PATTERNS: { re: RegExp; replace: string }[] = [
   { re: /\bxox[baprs]-[A-Za-z0-9-]{10,}/g, replace: '[redacted-slack]' },
   // Bearer tokens
   { re: /\bBearer\s+[A-Za-z0-9._-]{16,}/g, replace: 'Bearer [redacted]' },
+  // Phone numbers (narrow: 10-11 digits with common separators)
+  { re: /(?:\+?1[\s.-]?)?\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g, replace: '[redacted-phone]' },
+  // Email addresses
+  { re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, replace: '[redacted-email]' },
 ];
 
 function redactString(s: string): string {

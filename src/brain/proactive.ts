@@ -173,16 +173,23 @@ export class ProactiveEngine {
   // ── System checks ─────────────────────────────────────────────────
 
   private checkDisk(): string | null {
-    const output = execSync('df -h / | tail -1', { encoding: 'utf8', timeout: 5000 });
-    const useMatch = output.match(/(\d+)%/);
+    // Use `df --output=avail,pcent` on Linux; macOS `df` doesn't support
+    // --output, so fall back to parsing the percent column and treating the
+    // usage % as the signal. "Avail" column index varies by locale/flags;
+    // parse the header row to locate it instead of assuming parts[3] (FIND-BUG-02).
+    const full = execSync('df -h /', { encoding: 'utf8', timeout: 5000 });
+    const lines = full.trim().split('\n');
+    if (lines.length < 2) return null;
+    const header = lines[0]!.split(/\s+/);
+    const row = lines[lines.length - 1]!.split(/\s+/);
+    const useMatch = lines[lines.length - 1]!.match(/(\d+)%/);
     if (!useMatch) return null;
-
     const usePct = parseInt(useMatch[1]!, 10);
     if (usePct < 90) return null;
-
-    const parts = output.trim().split(/\s+/);
-    const avail = parts[3] ?? '?';
-    return `⚠️ <b>Low disk space</b> — ${usePct}% used, ${avail} available\n\n<code>${output.trim()}</code>`;
+    // Find the column labeled something like "Avail" / "Available" (any case).
+    const availIdx = header.findIndex((h) => /^avail/i.test(h));
+    const avail = availIdx >= 0 && row[availIdx] ? row[availIdx] : '?';
+    return `⚠️ <b>Low disk space</b> — ${usePct}% used, ${avail} available\n\n<code>${lines[lines.length - 1]!.trim()}</code>`;
   }
 
   private checkCPU(): string | null {

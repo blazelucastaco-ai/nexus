@@ -140,9 +140,9 @@ export class DreamingEngine {
         if (recentContext.trim().length > 20) {
           await this.reflect(recentContext, reflections);
           if (reflections.length > 0) {
-            // Update reflection timestamp before ideation
-            const newState: DreamState = { lastDreamAt: start, lastReflectedAt: Date.now() };
-            this.saveDreamState(newState);
+            // Update reflection timestamp before ideation.
+            // Spread the existing state so any future fields survive (FIND-BUG-03).
+            this.saveDreamState({ ...state, lastDreamAt: start, lastReflectedAt: Date.now() });
 
             await this.ideate(reflections, ideas);
             // Store ideas as episodic memories so they surface in future sessions

@@ -49,6 +49,13 @@ const TOOL_RESULT_MAX = 8_000;
 const TOOL_RESULT_HEAD = 3_000;
 const TOOL_RESULT_TAIL = 3_000;
 
+// Hoisted to module scope (FIND-PRF-02): was being rebuilt per call inside
+// truncateToolResult, which runs once per tool result (3–5× per request).
+// Reset .lastIndex before each use.
+const TOOL_RESULT_ERROR_PATTERNS =
+  /^.*(error|Error|ERROR|warning|Warning|WARN|failed|Failed|FAILED|cannot|Cannot|ENOENT|EACCES|EPERM|not found|TypeError|SyntaxError|ReferenceError|Module not found|Could not resolve|✗|✘|FATAL).*$/gm;
+const MAX_ERROR_CHARS = 1500;
+
 /**
  * Smart truncation for tool results.
  * Strategy: keep head, tail, AND any error lines from the middle.
@@ -67,12 +74,11 @@ function truncateToolResult(text: string): string {
 
   // Extract error-relevant lines from the middle section
   const middle = text.slice(TOOL_RESULT_HEAD, total - TOOL_RESULT_TAIL);
-  const errorPatterns = /^.*(error|Error|ERROR|warning|Warning|WARN|failed|Failed|FAILED|cannot|Cannot|ENOENT|EACCES|EPERM|not found|TypeError|SyntaxError|ReferenceError|Module not found|Could not resolve|✗|✘|FATAL).*$/gm;
+  TOOL_RESULT_ERROR_PATTERNS.lastIndex = 0;
   const errorLines: string[] = [];
   let match: RegExpExecArray | null;
   let errorChars = 0;
-  const MAX_ERROR_CHARS = 1500;
-  while ((match = errorPatterns.exec(middle)) !== null) {
+  while ((match = TOOL_RESULT_ERROR_PATTERNS.exec(middle)) !== null) {
     const line = match[0].trim();
     if (line.length > 0 && errorChars + line.length < MAX_ERROR_CHARS) {
       errorLines.push(line);
@@ -374,7 +380,7 @@ export class ToolExecutor {
 
     // FIX 3: Call before-hooks
     for (const hook of this.beforeHooks) {
-      try { hook(toolName, args); } catch { /* hooks must not crash execution */ }
+      try { hook(toolName, args); } catch (e) { log.warn({ err: e, toolName }, 'Before-hook threw; ignored'); }
     }
 
     let result: string;
@@ -414,7 +420,7 @@ export class ToolExecutor {
 
     // FIX 3: Call after-hooks with result
     for (const hook of this.afterHooks) {
-      try { hook(toolName, args, result); } catch { /* hooks must not crash execution */ }
+      try { hook(toolName, args, result); } catch (e) { log.warn({ err: e, toolName }, 'After-hook threw; ignored'); }
     }
 
     return result;

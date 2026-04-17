@@ -234,14 +234,14 @@ export class MemoryRetrieval {
   private touchAccessed(ids: string[]): void {
     if (ids.length === 0) return;
     const now = new Date().toISOString();
+    // Single batched UPDATE via IN (…) — previously this was N individual
+    // prepared-statement runs wrapped in a transaction (FIND-PRF-04). One
+    // statement is simpler and measurably faster on typical 20-result recalls.
+    const placeholders = ids.map(() => '?').join(',');
     const stmt = this.db.prepare(
-      'UPDATE memories SET last_accessed = ?, access_count = access_count + 1 WHERE id = ?',
+      `UPDATE memories SET last_accessed = ?, access_count = access_count + 1 WHERE id IN (${placeholders})`,
     );
-    // Wrap batch updates in a transaction for atomicity + speed
-    const tx = this.db.transaction((idList: string[]) => {
-      for (const id of idList) stmt.run(now, id);
-    });
-    tx(ids);
+    stmt.run(now, ...ids);
   }
 }
 

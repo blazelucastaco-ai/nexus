@@ -186,6 +186,17 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 export class Orchestrator {
   private config: NexusConfig;
   private eventLoop: EventLoop;
+
+  /**
+   * Classify a tool result string as an error. Previously duplicated between
+   * the parallel and sequential tool-execution branches (FIND-QLT-02).
+   */
+  private isToolErrorResult(result: string): boolean {
+    return result.startsWith('Error:')
+      || result.startsWith('Command rejected')
+      || result.startsWith('STDERR:\n')
+      || /\b(ENOENT|EACCES|EPERM|ENODIR|ETIMEDOUT|ECONNREFUSED)\b/.test(result);
+  }
   private conversationHistory: AIMessage[] = [];
   private activeTasks: AgentTask[] = [];
   private startTime = Date.now();
@@ -659,8 +670,7 @@ export class Orchestrator {
     const startTime = Date.now();
     // Logger auto-includes the current traceId + chatId from AsyncLocalStorage
     // — no manual threading needed. See trace.ts.
-    const rlog = log;
-    rlog.info({ textLen: text.length, preview: text.slice(0, 80) }, 'Processing message');
+    log.info({ textLen: text.length, preview: text.slice(0, 80) }, 'Processing message');
 
     try {
       // ── 0. Early stages via pipeline (injection guard + frustration) ──
@@ -1252,11 +1262,7 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
                 log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (parallel)');
                 let result = await withTimeout(this.toolExecutor.execute(job.toolName, job.toolArgs), TOOL_TIMEOUT_MS, job.toolName);
                 result = repairToolResult(result);
-                const isToolError =
-                  result.startsWith('Error:') || result.startsWith('Command rejected') ||
-                  result.startsWith('STDERR:\n') ||
-                  /\b(ENOENT|EACCES|EPERM|ENODIR|ETIMEDOUT|ECONNREFUSED)\b/.test(result);
-                if (isToolError) {
+                if (this.isToolErrorResult(result)) {
                   result += '\n\n[TOOL RETURNED AN ERROR — do not claim success. Report the error to the user.]';
                   log.warn({ toolName: job.toolName }, 'Tool returned an error result');
                 }
@@ -1281,11 +1287,7 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
             log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (sequential)');
             let result = await withTimeout(this.toolExecutor.execute(job.toolName, job.toolArgs), TOOL_TIMEOUT_MS, job.toolName);
             result = repairToolResult(result);
-            const isToolError =
-              result.startsWith('Error:') || result.startsWith('Command rejected') ||
-              result.startsWith('STDERR:\n') ||
-              /\b(ENOENT|EACCES|EPERM|ENODIR|ETIMEDOUT|ECONNREFUSED)\b/.test(result);
-            if (isToolError) {
+            if (this.isToolErrorResult(result)) {
               result += '\n\n[TOOL RETURNED AN ERROR — do not claim success. Report the error to the user.]';
               log.warn({ toolName: job.toolName }, 'Tool returned an error result');
             }
@@ -1538,14 +1540,14 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
       // Post-LLM output filter: catch any system prompt leakage (OpenClaw pattern)
       const leaked = filterSystemPromptLeak(scrubbed);
       if (leaked) {
-        rlog.warn('System prompt leak detected in LLM response — blocked');
+        log.warn('System prompt leak detected in LLM response — blocked');
         return leaked;
       }
 
-      rlog.info({ durationMs: Date.now() - startTime, responseLen: scrubbed.length, toolCalls: toolCallCount }, 'Message handled successfully');
+      log.info({ durationMs: Date.now() - startTime, responseLen: scrubbed.length, toolCalls: toolCallCount }, 'Message handled successfully');
       return scrubbed;
     } catch (err) {
-      rlog.error({ err, text: truncate(text, 200), durationMs: Date.now() - startTime }, 'Failed to process message');
+      log.error({ err, text: truncate(text, 200), durationMs: Date.now() - startTime }, 'Failed to process message');
       this.personality.processEvent('task_failure');
       return "Something went wrong on my end. I'm looking into it. Try again in a moment.";
     }

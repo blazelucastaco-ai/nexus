@@ -146,10 +146,9 @@ You have a real dream cycle — it runs automatically on a schedule and consolid
 
   // ── Relevant memories ──────────────────────────────────────────────────────
   const nonDreamMemories = context.recentMemories.filter((m) => {
-    const tags = Array.isArray((m as Record<string, unknown>).tags)
-      ? ((m as Record<string, unknown>).tags as string[])
-      : [];
-    const src = String((m as Record<string, unknown>).source ?? '');
+    const r = m as unknown as Record<string, unknown>;
+    const tags = Array.isArray(r.tags) ? (r.tags as string[]) : [];
+    const src = String(r.source ?? '');
     return !tags.includes('dream-cycle') && !tags.includes('dream-reflection') && src !== 'dream-cycle';
   });
   if (nonDreamMemories.length > 0) {

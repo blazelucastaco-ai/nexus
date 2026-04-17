@@ -67,6 +67,8 @@ export const commands: BotCommand[] = [
   { command: 'go', description: 'Resume context on a project — /go <name>' },
   { command: 'project', description: 'Detailed status for a project — /project <name>' },
   { command: 'dreams', description: 'Recent Code Dreams observations — /dreams [project]' },
+  { command: 'thinking', description: 'What NEXUS is currently doing and recent context' },
+  { command: 'resume', description: 'Resume a project and set it active — /resume <name>' },
   { command: 'stop', description: 'Graceful shutdown' },
   { command: 'help', description: 'Show all available commands' },
 ];
@@ -334,7 +336,7 @@ export async function handlePreferences(ctx: Context, orchestrator: Orchestrator
 
     // Also pull stored preference facts from semantic memory
     try {
-      const storedFacts = orchestrator.memory.semantic.getPreferences().slice(0, 5);
+      const storedFacts = orchestrator.memory.semantic.getAllPreferences().slice(0, 5);
       if (storedFacts.length > 0 && prefs.length === 0) {
         lines.push('<b>Stored facts:</b>');
         for (const f of storedFacts) {
