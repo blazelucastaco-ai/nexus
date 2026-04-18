@@ -893,185 +893,14 @@ export class Orchestrator {
       // ── 7. Explicit "remember" intent detection ───────────────
       await this.detectAndStoreRememberIntent(text);
 
-      // ── 7b. Task engine routing ───────────────────────────────
-      // If the message looks like a build/fix/diagnose task, hand off to
-      // the TaskRunner which executes it step-by-step with live progress.
-
-      // ── Check if user is answering requirements questions ────────────────
-      if (this.pendingProjects.has(chatId)) {
-        const pending = this.pendingProjects.get(chatId)!;
-        // Expire stale pending projects — user abandoned the flow
-        if (Date.now() - pending.createdAt > Orchestrator.PENDING_PROJECT_TTL_MS) {
-          log.info({ chatId, ageMs: Date.now() - pending.createdAt }, 'Pending project expired — treating as new message');
-          this.pendingProjects.delete(chatId);
-        } else {
-          pending.answers.push(text);
-
-        // Build full context from original request + all answers
-        const fullContext = `${pending.originalRequest}\n\nUser provided these details:\n${pending.answers.map((a, i) => `Round ${i + 1}: ${a}`).join('\n')}`;
-
-        // Ask LLM if we have enough to start or need more info — fast tier is plenty
-        const readinessCheck = await this.ai.complete({
-          model: this.config.ai.fastModel,
-          maxTokens: 512,
-          temperature: 0.1,
-          systemPrompt: `You are deciding whether there is enough information to start a coding/web project.
-Respond with EXACTLY one of:
-  READY — [one sentence summary of what to build]
-  NEED_MORE — [one specific follow-up question, max 2 sentences]
-
-Only say READY if you know: what the project is, who it's for, and what it should contain/do.
-If any of those are unclear, say NEED_MORE with the most important missing question.`,
-          messages: [{ role: 'user', content: fullContext }],
-        });
-
-        const readiness = readinessCheck.content ?? '';
-
-        if (readiness.startsWith('READY') || pending.questionRound >= 2) {
-          // Enough info — start the task with the enriched request
-          this.pendingProjects.delete(chatId);
-          const enrichedRequest = fullContext;
-          log.info({ chatId }, 'Requirements gathered — proceeding to task planning');
-
-          const taskMode = classifyTaskMode(enrichedRequest);
-          const useCoordinator = taskMode === 'coordinator';
-          const useUltra = taskMode === 'ultra';
-          // Planning uses Opus — getting the plan right saves many tokens downstream
-          const plan = await planTask(enrichedRequest, this.ai, this.config.ai.opusModel, useCoordinator);
-
-          if (plan) {
-            if (useUltra) return await this.handleUltraMode(plan, enrichedRequest, chatId);
-
-            const taskSkillsContext = buildSkillsPrompt(this.loadedSkills, enrichedRequest);
-            const taskPromise = new Promise<void>((resolve) => {
-              setImmediate(() => {
-                runTask({
-                  plan, originalRequest: enrichedRequest, chatId,
-                  ai: this.ai, toolExecutor: this.toolExecutor, telegram: this.telegram,
-                  model: this.config.ai.model, maxTokens: this.config.ai.maxTokens,
-                  coordinatorMode: useCoordinator, skillsContext: taskSkillsContext || undefined,
-                }).then(async (result) => {
-                  try {
-                    await this.memory.store('episodic', 'task',
-                      `Task: ${plan.title}\nRequest: ${enrichedRequest}\nResult: ${result.success ? 'success' : 'partial'}`,
-                      { importance: 0.8, tags: ['task', result.success ? 'success' : 'failure'], source: chatId },
-                    );
-                  } catch { /* non-fatal */ }
-                  this.personality.processEvent(result.success ? 'task_success' : 'task_failure');
-                  if (result.success) this.resolveMatchingGoals(enrichedRequest);
-                }).catch((err) => {
-                  log.error({ err, chatId }, 'Task runner failed');
-                  this.telegram.sendMessage(chatId, 'Task failed unexpectedly.').catch((e) => {
-                    log.warn({ e, chatId }, 'Failed to notify user of task failure — user has no indication task crashed');
-                  });
-                }).finally(resolve);
-              });
-            });
-            this.pendingTaskPromises.push(taskPromise);
-            return `Got it — on it now. Planning your task...`;
-          }
-          return `I have enough info — let me start on that.`;
-        }
-
-        // Need more — ask the follow-up question from the LLM
-        pending.questionRound++;
-        const question = readiness.replace(/^NEED_MORE\s*[—-]?\s*/i, '').trim();
-        return question || `Can you tell me a bit more about what you need?`;
-        } // end else: not expired
-      }
-
-      if (messageType === 'task') {
-        // Auto-detect execution mode from the request itself
-        const taskMode = classifyTaskMode(text);
-        const useCoordinator = taskMode === 'coordinator';
-        const useUltra = taskMode === 'ultra';
-
-        log.info({ chatId, taskMode }, 'Message classified as task — routing to TaskEngine');
-
-        // ── Requirements gate: ask for details, store pending project ─────────
-        const missingInfo = detectMissingRequirements(text);
-        if (missingInfo) {
-          log.info({ chatId }, 'Task lacks required details — starting requirements conversation');
-          this.pendingProjects.set(chatId, { originalRequest: text, answers: [], questionRound: 1, createdAt: Date.now() });
-          return missingInfo;
-        }
-
-        // Generate plan — Opus tier: good planning compounds across every step
-        const plan = await planTask(text, this.ai, this.config.ai.opusModel, useCoordinator);
-
-        if (plan) {
-          // ── Ultra Mode: high-stakes tasks → strong model review + approval ──
-          if (useUltra) {
-            log.info({ chatId, title: plan.title }, 'Ultra mode auto-triggered');
-            return await this.handleUltraMode(plan, text, chatId);
-          }
-
-          // ── Standard / Coordinator Mode: run async ────────────────────────
-          const taskSkillsContext = buildSkillsPrompt(this.loadedSkills, text);
-          const taskPromise = new Promise<void>((resolve) => {
-            setImmediate(() => {
-              runTask({
-                plan,
-                originalRequest: text,
-                chatId,
-                ai: this.ai,
-                toolExecutor: this.toolExecutor,
-                telegram: this.telegram,
-                model: this.config.ai.model,
-                maxTokens: this.config.ai.maxTokens,
-                coordinatorMode: useCoordinator,
-                skillsContext: taskSkillsContext || undefined,
-              }).then(async (result) => {
-                log.info({ chatId, success: result.success, steps: result.completedSteps }, 'Task completed');
-                try {
-                  await this.memory.store(
-                    'episodic',
-                    'task',
-                    `Task: ${plan.title}\nRequest: ${text}\nResult: ${result.success ? 'success' : 'partial'}\nFiles: ${result.filesProduced.join(', ')}`,
-                    { importance: 0.8, tags: ['task', result.success ? 'success' : 'failure'], source: chatId },
-                  );
-                } catch { /* non-fatal */ }
-
-                // Update personality based on task outcome
-                this.personality.processEvent(result.success ? 'task_success' : 'task_failure');
-
-                // Track failed requests for /retry
-                if (!result.success) {
-                  this.lastFailedRequests.set(chatId, text);
-                } else {
-                  this.lastFailedRequests.delete(chatId);
-                }
-
-                // Resolve any matching active goals on task success
-                if (result.success) {
-                  this.resolveMatchingGoals(text);
-                }
-
-                // Self-improvement: reflect on partial failures and store as procedural memory
-                const hadFailures = result.completedSteps < result.totalSteps;
-                if (hadFailures && this.ai) {
-                  this.runSelfImprovement(plan.title, text, result).catch((err) =>
-                    log.debug({ err }, 'Self-improvement reflection failed'),
-                  );
-                }
-              }).catch((err) => {
-                log.error({ err, chatId }, 'Task runner failed');
-                this.personality.processEvent('task_failure');
-                this.telegram.sendMessage(chatId, 'Task failed unexpectedly. Check the logs.').catch((e) => {
-                  log.warn({ e, chatId }, 'Failed to notify user of task failure — user has no indication task crashed');
-                });
-              }).finally(resolve);
-            });
-          });
-          this.pendingTaskPromises.push(taskPromise);
-
-          // Return immediately — progress updates come from TaskRunner
-          return 'On it. Planning your task now...';
-        }
-
-        // Plan failed — fall through to standard chat mode
-        log.warn({ chatId }, 'Task planning failed — falling back to chat mode');
-      }
+      // ── 7b. Task engine routing (extracted) ───────────────────
+      // Handles two flows: (a) user answering pending requirements
+      // questions, (b) fresh task message routed to planner + runner.
+      // Returns a string when the caller should stop processing and
+      // surface that string to the user; returns null to fall through
+      // to standard chat mode.
+      const routed = await this.routeTaskOrRequirements({ chatId, text, messageType });
+      if (routed !== null) return routed;
 
       // ── 7c. Inner monologue (think mode) ──────────────────────
       let innerThought = '';
@@ -1123,90 +952,9 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
         finalContent = `💭 ${innerThought}\n\n${finalContent}`;
       }
 
-      // ── 9. Store assistant response ───────────────────────────
-      // Strip write guard annotations before storing — they pollute history and cause cascading guard triggers
-      const cleanContent = finalContent
-        .replace(/\n\n\[Write guard re-prompt:.*?\]/gs, '')
-        .replace(/\n\n\[Auto-saved by NEXUS write guard\]/g, '')
-        .replace(/\n\n\[Note: Could not auto-save[^\]]*\]/g, '')
-        .trim();
-      this.conversationHistory.push({
-        role: 'assistant',
-        content: cleanContent,
-      });
-      this.memory.addToBuffer('assistant', finalContent);
-
-      // ── FIX 1: Persist turn to JSONL session store ────────────
-      try {
-        await appendTurn(chatId, [
-          { role: 'user', content: text },
-          { role: 'assistant', content: finalContent },
-        ]);
-      } catch (err) {
-        log.warn({ err }, 'Session append failed');
-      }
-
-      // ── 10. Store episodic memory ─────────────────────────────
-      await this.memory.store(
-        'episodic',
-        'conversation',
-        `User: ${text}\nNEXUS: ${finalContent}`,
-        {
-          importance: this.estimateImportance(text, finalContent),
-          tags: ['conversation'],
-          source: chatId,
-          emotionalValence:
-            this.personality.getPersonalityState().emotion.valence,
-        },
-      );
-
-      // ── 10b. Session turn tracking + auto-summary ─────────────
-      this.sessionTurnCount++;
-      this.lastMessageTime = Date.now();
-      this.resetInactivityTimer();
-
-      if (this.sessionTurnCount % this.SUMMARY_EVERY_N_TURNS === 0) {
-        this.generateAndStoreSummary('periodic').catch((err) =>
-          log.warn({ err }, 'Periodic session summary failed'),
-        );
-      }
-
-      // ── 10c. Response self-evaluation (async, fire-and-forget) ─
-      // Checks if the response fully addressed the query. When a gap is found,
-      // routes it to the internal mistake tracker and episodic memory so NEXUS
-      // learns from it — never surfaces the raw evaluation to the user.
-      if (this.selfEvaluator) {
-        const evalQuery = text;
-        const evalResponse = finalContent;
-        this.selfEvaluator.evaluate(evalQuery, evalResponse, isTaskMessage).then(async (note) => {
-          if (note) {
-            // Store as a high-importance reflection memory so it surfaces in future recall
-            try {
-              this.memory.store('episodic', 'fact',
-                `Self-reflection: response to "${evalQuery.slice(0, 100)}" had a gap — ${note}`,
-                { importance: 0.65, tags: ['self-eval', 'reflection', 'improvement'], source: 'self-evaluator' },
-              );
-            } catch (e) { log.debug({ e }, 'Failed to store self-eval reflection'); }
-
-            // Record as a tracked mistake so /mistakes shows it and prevention checks catch it
-            this.learning.mistakes.recordMistake(
-              `Incomplete response: ${evalQuery.slice(0, 80)}`,
-              'communication',
-              {
-                whatHappened: `Response to "${evalQuery.slice(0, 150)}" did not fully address the question`,
-                whatShouldHaveHappened: note,
-                rootCause: 'response gap identified by post-response self-evaluation',
-              },
-            );
-
-            log.debug({ note: note.slice(0, 80) }, 'Self-eval gap stored to memory and mistake tracker');
-          }
-        }).catch(() => { /* non-fatal */ });
-      }
-
-      // ── 11. Update emotional state ────────────────────────────
-      const interactionQuality = toolCallCount > 0 ? 0.6 : 0.5;
-      this.personality.updateMood(interactionQuality);
+      // ── 9–11. Finalize turn: history + session persistence + memory +
+      //         summary + self-eval + emotional state update ────────
+      await this.finalizeTurn({ chatId, text, finalContent, toolCallCount, isTaskMessage });
 
       const duration = Date.now() - startTime;
       log.info(
@@ -1664,6 +1412,269 @@ ${extras.memorySynthesis}`);
       return 'creative';
     }
     return 'casual';
+  }
+
+  /**
+   * Finalize a turn after the tool-call loop + write-guard have produced
+   * the final response. Handles: history append, JSONL session persistence,
+   * episodic-memory store, session-turn tracking + auto-summary trigger,
+   * self-evaluation (fire-and-forget), and emotional-state mood update.
+   * Kept as a private orchestrator method rather than a standalone class
+   * because the state dependencies (conversationHistory, personality,
+   * selfEvaluator, learning.mistakes, sessionTurnCount, inactivity timer)
+   * are too tangled to inject cleanly — the value of the extract is
+   * readability of `_handleMessage`, not independent testability.
+   */
+
+  /**
+   * Task-engine routing. Two branches:
+   *   1. User is mid-requirements-conversation (answering follow-up questions).
+   *      Build cumulative context, ask the LLM "READY / NEED_MORE", and either
+   *      plan the task or return the next question.
+   *   2. Fresh message classified as a task. Gate on missing requirements,
+   *      classify mode (coordinator / ultra / standard), plan, and dispatch
+   *      the TaskRunner async so progress streams via Telegram.
+   *
+   * Returns a string when the caller should STOP and use that string as the
+   * user-facing reply. Returns null to fall through to standard chat mode.
+   */
+  private async routeTaskOrRequirements(params: {
+    chatId: string;
+    text: string;
+    messageType: string;
+  }): Promise<string | null> {
+    const { chatId, text, messageType } = params;
+
+    // Branch (a): user is answering a pending requirements question
+    if (this.pendingProjects.has(chatId)) {
+      const pending = this.pendingProjects.get(chatId)!;
+      if (Date.now() - pending.createdAt > Orchestrator.PENDING_PROJECT_TTL_MS) {
+        log.info({ chatId, ageMs: Date.now() - pending.createdAt }, 'Pending project expired — treating as new message');
+        this.pendingProjects.delete(chatId);
+      } else {
+        pending.answers.push(text);
+
+        const fullContext = `${pending.originalRequest}\n\nUser provided these details:\n${pending.answers.map((a, i) => `Round ${i + 1}: ${a}`).join('\n')}`;
+
+        const readinessCheck = await this.ai.complete({
+          model: this.config.ai.fastModel,
+          maxTokens: 512,
+          temperature: 0.1,
+          systemPrompt: `You are deciding whether there is enough information to start a coding/web project.
+Respond with EXACTLY one of:
+  READY — [one sentence summary of what to build]
+  NEED_MORE — [one specific follow-up question, max 2 sentences]
+
+Only say READY if you know: what the project is, who it's for, and what it should contain/do.
+If any of those are unclear, say NEED_MORE with the most important missing question.`,
+          messages: [{ role: 'user', content: fullContext }],
+        });
+
+        const readiness = readinessCheck.content ?? '';
+
+        if (readiness.startsWith('READY') || pending.questionRound >= 2) {
+          this.pendingProjects.delete(chatId);
+          const enrichedRequest = fullContext;
+          log.info({ chatId }, 'Requirements gathered — proceeding to task planning');
+
+          const taskMode = classifyTaskMode(enrichedRequest);
+          const useCoordinator = taskMode === 'coordinator';
+          const useUltra = taskMode === 'ultra';
+          const plan = await planTask(enrichedRequest, this.ai, this.config.ai.opusModel, useCoordinator);
+
+          if (plan) {
+            if (useUltra) return await this.handleUltraMode(plan, enrichedRequest, chatId);
+
+            const taskSkillsContext = buildSkillsPrompt(this.loadedSkills, enrichedRequest);
+            const taskPromise = new Promise<void>((resolve) => {
+              setImmediate(() => {
+                runTask({
+                  plan, originalRequest: enrichedRequest, chatId,
+                  ai: this.ai, toolExecutor: this.toolExecutor, telegram: this.telegram,
+                  model: this.config.ai.model, maxTokens: this.config.ai.maxTokens,
+                  coordinatorMode: useCoordinator, skillsContext: taskSkillsContext || undefined,
+                }).then(async (result) => {
+                  try {
+                    await this.memory.store('episodic', 'task',
+                      `Task: ${plan.title}\nRequest: ${enrichedRequest}\nResult: ${result.success ? 'success' : 'partial'}`,
+                      { importance: 0.8, tags: ['task', result.success ? 'success' : 'failure'], source: chatId },
+                    );
+                  } catch { /* non-fatal */ }
+                  this.personality.processEvent(result.success ? 'task_success' : 'task_failure');
+                  if (result.success) this.resolveMatchingGoals(enrichedRequest);
+                }).catch((err) => {
+                  log.error({ err, chatId }, 'Task runner failed');
+                  this.telegram.sendMessage(chatId, 'Task failed unexpectedly.').catch((e) => {
+                    log.warn({ e, chatId }, 'Failed to notify user of task failure — user has no indication task crashed');
+                  });
+                }).finally(resolve);
+              });
+            });
+            this.pendingTaskPromises.push(taskPromise);
+            return `Got it — on it now. Planning your task...`;
+          }
+          return `I have enough info — let me start on that.`;
+        }
+
+        // NEED_MORE — ask the follow-up question
+        pending.questionRound++;
+        const question = readiness.replace(/^NEED_MORE\s*[—-]?\s*/i, '').trim();
+        return question || `Can you tell me a bit more about what you need?`;
+      }
+    }
+
+    // Branch (b): fresh task message
+    if (messageType === 'task') {
+      const taskMode = classifyTaskMode(text);
+      const useCoordinator = taskMode === 'coordinator';
+      const useUltra = taskMode === 'ultra';
+      log.info({ chatId, taskMode }, 'Message classified as task — routing to TaskEngine');
+
+      // Requirements gate — if the request is too vague, ask a question
+      const missingInfo = detectMissingRequirements(text);
+      if (missingInfo) {
+        log.info({ chatId }, 'Task lacks required details — starting requirements conversation');
+        this.pendingProjects.set(chatId, { originalRequest: text, answers: [], questionRound: 1, createdAt: Date.now() });
+        return missingInfo;
+      }
+
+      const plan = await planTask(text, this.ai, this.config.ai.opusModel, useCoordinator);
+
+      if (plan) {
+        if (useUltra) {
+          log.info({ chatId, title: plan.title }, 'Ultra mode auto-triggered');
+          return await this.handleUltraMode(plan, text, chatId);
+        }
+
+        const taskSkillsContext = buildSkillsPrompt(this.loadedSkills, text);
+        const taskPromise = new Promise<void>((resolve) => {
+          setImmediate(() => {
+            runTask({
+              plan, originalRequest: text, chatId,
+              ai: this.ai, toolExecutor: this.toolExecutor, telegram: this.telegram,
+              model: this.config.ai.model, maxTokens: this.config.ai.maxTokens,
+              coordinatorMode: useCoordinator, skillsContext: taskSkillsContext || undefined,
+            }).then(async (result) => {
+              log.info({ chatId, success: result.success, steps: result.completedSteps }, 'Task completed');
+              try {
+                await this.memory.store('episodic', 'task',
+                  `Task: ${plan.title}\nRequest: ${text}\nResult: ${result.success ? 'success' : 'partial'}\nFiles: ${result.filesProduced.join(', ')}`,
+                  { importance: 0.8, tags: ['task', result.success ? 'success' : 'failure'], source: chatId },
+                );
+              } catch { /* non-fatal */ }
+              this.personality.processEvent(result.success ? 'task_success' : 'task_failure');
+              if (!result.success) this.lastFailedRequests.set(chatId, text);
+              else this.lastFailedRequests.delete(chatId);
+              if (result.success) this.resolveMatchingGoals(text);
+              const hadFailures = result.completedSteps < result.totalSteps;
+              if (hadFailures && this.ai) {
+                this.runSelfImprovement(plan.title, text, result).catch((err) =>
+                  log.debug({ err }, 'Self-improvement reflection failed'),
+                );
+              }
+            }).catch((err) => {
+              log.error({ err, chatId }, 'Task runner failed');
+              this.personality.processEvent('task_failure');
+              this.telegram.sendMessage(chatId, 'Task failed unexpectedly. Check the logs.').catch((e) => {
+                log.warn({ e, chatId }, 'Failed to notify user of task failure — user has no indication task crashed');
+              });
+            }).finally(resolve);
+          });
+        });
+        this.pendingTaskPromises.push(taskPromise);
+        return 'On it. Planning your task now...';
+      }
+
+      log.warn({ chatId }, 'Task planning failed — falling back to chat mode');
+    }
+
+    return null; // fall through to chat mode
+  }
+
+  private async finalizeTurn(params: {
+    chatId: string;
+    text: string;
+    finalContent: string;
+    toolCallCount: number;
+    isTaskMessage: boolean;
+  }): Promise<void> {
+    const { chatId, text, finalContent, toolCallCount, isTaskMessage } = params;
+
+    // Phase 9 — Store assistant response. Strip write-guard annotations
+    // before history persistence; they'd pollute later context + trigger
+    // cascading guard hits.
+    const cleanContent = finalContent
+      .replace(/\n\n\[Write guard re-prompt:.*?\]/gs, '')
+      .replace(/\n\n\[Auto-saved by NEXUS write guard\]/g, '')
+      .replace(/\n\n\[Note: Could not auto-save[^\]]*\]/g, '')
+      .trim();
+    this.conversationHistory.push({ role: 'assistant', content: cleanContent });
+    this.memory.addToBuffer('assistant', finalContent);
+
+    // FIX 1 — Persist turn to JSONL session store.
+    try {
+      await appendTurn(chatId, [
+        { role: 'user', content: text },
+        { role: 'assistant', content: finalContent },
+      ]);
+    } catch (err) {
+      log.warn({ err }, 'Session append failed');
+    }
+
+    // Phase 10 — Store episodic memory.
+    await this.memory.store(
+      'episodic',
+      'conversation',
+      `User: ${text}\nNEXUS: ${finalContent}`,
+      {
+        importance: this.estimateImportance(text, finalContent),
+        tags: ['conversation'],
+        source: chatId,
+        emotionalValence: this.personality.getPersonalityState().emotion.valence,
+      },
+    );
+
+    // Phase 10b — Session turn tracking + auto-summary trigger.
+    this.sessionTurnCount++;
+    this.lastMessageTime = Date.now();
+    this.resetInactivityTimer();
+    if (this.sessionTurnCount % this.SUMMARY_EVERY_N_TURNS === 0) {
+      this.generateAndStoreSummary('periodic').catch((err) =>
+        log.warn({ err }, 'Periodic session summary failed'),
+      );
+    }
+
+    // Phase 10c — Response self-evaluation (async, fire-and-forget).
+    // Gaps route to the internal mistake tracker + episodic memory so NEXUS
+    // learns; never surfaces the raw evaluation to the user.
+    if (this.selfEvaluator) {
+      this.selfEvaluator.evaluate(text, finalContent, isTaskMessage).then(async (note) => {
+        if (!note) return;
+        try {
+          this.memory.store(
+            'episodic',
+            'fact',
+            `Self-reflection: response to "${text.slice(0, 100)}" had a gap — ${note}`,
+            { importance: 0.65, tags: ['self-eval', 'reflection', 'improvement'], source: 'self-evaluator' },
+          );
+        } catch (e) { log.debug({ e }, 'Failed to store self-eval reflection'); }
+
+        this.learning.mistakes.recordMistake(
+          `Incomplete response: ${text.slice(0, 80)}`,
+          'communication',
+          {
+            whatHappened: `Response to "${text.slice(0, 150)}" did not fully address the question`,
+            whatShouldHaveHappened: note,
+            rootCause: 'response gap identified by post-response self-evaluation',
+          },
+        );
+        log.debug({ note: note.slice(0, 80) }, 'Self-eval gap stored to memory and mistake tracker');
+      }).catch(() => { /* non-fatal */ });
+    }
+
+    // Phase 11 — Emotional state mood update.
+    const interactionQuality = toolCallCount > 0 ? 0.6 : 0.5;
+    this.personality.updateMood(interactionQuality);
   }
 
   private estimateImportance(userMessage: string, response: string): number {
