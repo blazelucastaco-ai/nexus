@@ -200,10 +200,14 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'web_search',
     description:
-      'Search the web for current information by opening the default browser. ' +
-      'Use when asked about recent events, current prices, latest versions, or anything ' +
-      'you are not confident about from training data. ' +
-      'Do NOT use for things you already know confidently, or for reading local files.',
+      'Search the web with a natural-language QUERY. Returns a list of result snippets ' +
+      '(title + URL + blurb) via DuckDuckGo. ' +
+      'Use when the user asks a QUESTION and you need fresh info — recent events, prices, ' +
+      'latest versions, or anything you are not confident about from training data. ' +
+      'CRITICAL: NEVER pass a URL as the query. If the user gave you a URL, they want you ' +
+      'to visit or read it, not search for it — use browser_navigate (to visit in Chrome) ' +
+      'or crawl_url (to read its content). Example: user "check out https://foo.com" → ' +
+      'browser_navigate. NOT web_search with query="https://foo.com".',
     parameters: {
       type: 'object',
       properties: {
@@ -272,9 +276,12 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'web_fetch',
     description:
-      'Fetch the text content of a URL. Strips HTML for readability. ' +
-      'Use when you need to read the contents of a webpage, API endpoint, or document online. ' +
-      'Do NOT use for searching — use web_search for that.',
+      'Fetch the raw text of a URL (strips HTML). Lightweight — for plain text files, ' +
+      'API endpoints returning JSON/text, or very simple pages. ' +
+      'For real article/blog/news pages, prefer crawl_url (smarter content extraction). ' +
+      'For pages that need a real browser (JS-heavy SPAs, auth, cookie walls), use ' +
+      'browser_navigate + browser_extract. ' +
+      'Do NOT pass a search QUERY here — use web_search for that.',
     parameters: {
       type: 'object',
       properties: {
@@ -289,9 +296,13 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'crawl_url',
     description:
-      'Deeply crawl a URL: fetch HTML, extract title, main body text, and links using a proper HTML parser. ' +
-      'Better than web_fetch for reading articles, news pages, or content-heavy sites. ' +
-      'Use when you need to extract structured content from a webpage (e.g. Hacker News, Wikipedia, blog posts).',
+      'Read a URL and return its article content — title, main body text, and links — ' +
+      'using a proper HTML parser (cheerio). Best choice when the user gives you a URL ' +
+      'and wants to know what\'s on it (a blog post, news article, Hacker News thread, ' +
+      'Wikipedia page, docs page, etc.). ' +
+      'Do NOT use for pages that need a real browser (JS-heavy SPAs, pages behind auth, ' +
+      'cookie walls) — use browser_navigate + browser_extract for those. ' +
+      'Do NOT pass a search query — use web_search for that.',
     parameters: {
       type: 'object',
       properties: {
@@ -547,11 +558,15 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'browser_navigate',
     description:
-      'Navigate the active Chrome tab to a URL and wait for it to load. ' +
-      'Waits an extra 800ms after load for SPA frameworks to render. ' +
-      'Returns the final URL and page title. ' +
-      'Use when asked to visit a website, open a URL, or go to a page. ' +
-      'Requires the NEXUS Bridge Chrome extension to be connected.',
+      'Drive the user\'s Chrome to a URL — actually opens the page in the active tab. ' +
+      'Waits for load + 800ms more for SPA frameworks to render. Returns final URL + title. ' +
+      'Use when the user wants to VISIT or OPEN a page (gives you a URL and says "check ' +
+      'this out", "open this", "go to this", "load this"). ' +
+      'Use when the page is JS-heavy / behind auth / needs real-browser behavior (crawl_url ' +
+      'won\'t work there). ' +
+      'Requires the NEXUS Bridge Chrome extension to be connected. ' +
+      'Chain with browser_extract, browser_click, browser_screenshot, etc. for deeper ' +
+      'interaction after navigating.',
     parameters: {
       type: 'object',
       properties: {
@@ -807,6 +822,66 @@ export const toolDefinitions: ToolDefinition[] = [
     name: 'browser_reload',
     description: 'Reload the current Chrome tab and wait for it to finish loading.',
     parameters: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'browser_switch_tab',
+    description:
+      'Focus / activate a specific Chrome tab by its tab ID. ' +
+      'Combine with browser_get_tabs (which returns all open tabs with their IDs) to ' +
+      'switch context without opening a new tab. ' +
+      'Returns the activated tab\'s URL and title.',
+    parameters: {
+      type: 'object',
+      properties: {
+        tabId: {
+          type: 'number',
+          description: 'Chrome tab ID (get these via browser_get_tabs).',
+        },
+      },
+      required: ['tabId'],
+    },
+  },
+  {
+    name: 'browser_select',
+    description:
+      'Choose an option in a native <select> dropdown on the current tab. ' +
+      'Use this instead of browser_click for HTML <select> elements — clicking them ' +
+      'opens the dropdown UI but does not pick an option; this tool sets the value ' +
+      'and dispatches a change event so the page sees the choice.',
+    parameters: {
+      type: 'object',
+      properties: {
+        selector: {
+          type: 'string',
+          description: 'CSS selector matching a <select> element.',
+        },
+        value: {
+          type: 'string',
+          description: 'The value attribute of the <option> to choose.',
+        },
+      },
+      required: ['selector', 'value'],
+    },
+  },
+  {
+    name: 'browser_clear',
+    description:
+      'Empty a text input / textarea / contenteditable on the current tab so you can ' +
+      'type fresh content with browser_type. Clearing via browser_type ending with an ' +
+      'empty string does NOT work — many React/Vue controlled inputs ignore that. ' +
+      'This tool uses the native property setter + dispatches input/change events so ' +
+      'controlled components reset properly. ' +
+      'Call without a selector to clear document.activeElement (the currently-focused field).',
+    parameters: {
+      type: 'object',
+      properties: {
+        selector: {
+          type: 'string',
+          description: 'CSS selector for the field to clear. Omit to clear the currently-focused element.',
+        },
+      },
+      required: [],
+    },
   },
 ];
 

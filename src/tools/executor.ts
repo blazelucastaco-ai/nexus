@@ -150,6 +150,9 @@ const TOOL_RISK: Record<string, 'AUTO' | 'LOGGED' | 'CONFIRM'> = {
   browser_new_tab:        'LOGGED',
   browser_close_tab:      'LOGGED',
   browser_fill_form:      'LOGGED',
+  browser_switch_tab:     'LOGGED',
+  browser_select:         'LOGGED',
+  browser_clear:          'LOGGED',
 };
 
 // Commands that require explicit user approval — returned as a confirmation prompt
@@ -493,6 +496,9 @@ export class ToolExecutor {
       case 'browser_back':             return this.runBrowserTool('back',            {});
       case 'browser_forward':          return this.runBrowserTool('forward',         {});
       case 'browser_reload':           return this.runBrowserTool('reload',          {});
+      case 'browser_switch_tab':       return this.runBrowserTool('switch_tab',      args);
+      case 'browser_select':           return this.runBrowserTool('select',          args);
+      case 'browser_clear':            return this.runBrowserTool('clear',           args);
       default: {
         // Check plugin handlers
         for (const plugin of this.plugins) {

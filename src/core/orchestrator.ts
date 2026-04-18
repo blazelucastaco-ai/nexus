@@ -32,6 +32,7 @@ import { startCodeDreams } from '../brain/code-dreams.js';
 import { startTimeCapsule } from '../brain/time-capsule.js';
 import { startIntrospection, type IntrospectionHandle } from '../brain/introspection.js';
 import { buildThreadContext } from '../brain/context-stitcher.js';
+import { buildUrlHint } from '../brain/url-hint.js';
 import { getProject, slugify } from '../data/projects-repository.js';
 import { SELF_DISCLOSURE_REFUSAL } from './self-protection.js';
 import { InnerMonologue } from '../brain/inner-monologue.js';
@@ -876,12 +877,17 @@ export class Orchestrator {
       // Thread context: related prior conversations on the same topic. Pure read,
       // no side effects. Null if nothing relevant was found.
       const threadContext = buildThreadContext(text);
+      // URL hint: if the user's message contains http(s) URLs, tell the LLM
+      // explicitly how to route them (so it doesn't pass a URL as a search
+      // query, the classic failure mode).
+      const urlHint = buildUrlHint(text);
       const rawSystemPrompt = this.buildFullSystemPrompt(context, prevention, injectionResult, {
         memorySynthesis: synthesis.synthesis,
         continuityBrief: this.continuityBrief,
         activeGoals,
         reasoningTrace: this.reasoningTrace?.formatForPrompt(trace) ?? '',
         threadContext: threadContext ?? '',
+        urlHint: urlHint ?? '',
       });
       // Clear continuity brief after first use — it's session-start only
       this.continuityBrief = '';
@@ -1061,6 +1067,7 @@ export class Orchestrator {
       activeGoals?: string[];
       reasoningTrace?: string;
       threadContext?: string;
+      urlHint?: string;
     },
   ): string {
     const personalityPrompt = this.personality.getSystemPromptAdditions({
@@ -1228,6 +1235,13 @@ ${extras.continuityBrief}`);
 ## Thread Context
 You've discussed this topic before. Incorporate this prior context naturally — don't announce it, just use it.
 ${extras.threadContext}`);
+    }
+
+    // ── URL routing hint (when the user's message contains http(s) URLs) ──
+    if (extras?.urlHint) {
+      extensions.push(`
+## URL Handling
+${extras.urlHint}`);
     }
 
     // ── Active project ───────────────────────────────────────────────
