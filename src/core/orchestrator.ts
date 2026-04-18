@@ -10,6 +10,7 @@ import { generateId, nowISO, truncate, safeJsonParse } from '../utils/helpers.js
 import { loadConfig } from '../config.js';
 import { assembleContext, buildSystemPrompt } from './context.js';
 import { EventLoop } from './event-loop.js';
+import { ToolCallLoop } from './tool-call-loop.js';
 import { toOpenAITools } from '../tools/definitions.js';
 import { ToolExecutor } from '../tools/executor.js';
 import { classifyMessage, classifyTaskMode, isUndercoverProbe, detectMissingRequirements } from './task-classifier.js';
@@ -202,6 +203,7 @@ export class Orchestrator {
   private startTime = Date.now();
   private initialized = false;
   public toolExecutor!: ToolExecutor;
+  private toolCallLoop!: ToolCallLoop;
   private selfAwareness!: SelfAwareness;
   public innerMonologue!: InnerMonologue;
 
@@ -395,6 +397,25 @@ export class Orchestrator {
     this.selfAwareness = new SelfAwareness(this.memory, this.personality);
     this.innerMonologue = new InnerMonologue(this.ai, this.config.ai.fastModel);
     this.toolExecutor = new ToolExecutor(this.agents, this.memory, this.selfAwareness, this.innerMonologue);
+
+    // Extract the LLM tool-calling loop into its own unit so it can be
+    // tested in isolation. Dependencies injected explicitly — no back-ref
+    // to `this` survives inside the loop itself.
+    this.toolCallLoop = new ToolCallLoop({
+      ai: this.ai,
+      toolExecutor: this.toolExecutor,
+      eventLoop: this.eventLoop,
+      config: this.config,
+      pruneHistory: (msgs) => this.pruneHistory(msgs),
+      maybeCompact: (msgs, prompt) => this.maybeCompact(msgs, prompt),
+      isToolError: (r) => this.isToolErrorResult(r),
+      maybeSendScreenshot: (name, result, chatId) => this.maybeSendScreenshot(name, result, chatId),
+      onTokenUsage: (input, output) => {
+        this.sessionTokens.input += input;
+        this.sessionTokens.output += output;
+        this.sessionTokens.requests += 1;
+      },
+    });
 
     // Cognitive subsystems — tiered by complexity:
     //   synthesizer + reasoning trace → fast tier (1-paragraph summaries, short thoughts)
@@ -1057,279 +1078,24 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
         });
       }
 
-      // ── 8. Tool calling loop ──────────────────────────────────
-      const tools = toOpenAITools();
-      const maxTokens = this.config.ai.maxTokens;
+      // ── 8. Tool calling loop (extracted to ToolCallLoop) ──────
+      // This phase delegates to a dedicated class so it can be unit-tested
+      // in isolation. The loop owns: LLM iteration, tool dispatch with
+      // parallel/sequential split, loop detection, arg-parse recovery,
+      // screenshot short-circuiting, and token-usage accumulation.
+      const loopResult = await this.toolCallLoop.run({
+        chatId,
+        systemPrompt,
+        startingHistory: this.conversationHistory.slice(-20),
+        isTaskMessage,
+        onToken,
+        onStatus,
+      });
+      let finalContent = loopResult.finalContent;
+      const toolCallCount = loopResult.toolCallCount;
+      const writeFileCallsMade = loopResult.writeFileCallsMade;
+      const loopMessages = loopResult.loopMessages;
 
-      // Working messages for the tool loop — starts from conversation history (pruned to fit context)
-      const loopMessages: AIMessage[] = this.pruneHistory([...this.conversationHistory.slice(-20)]);
-      let finalContent = '';
-      let toolCallCount = 0;
-
-      // Write guard: track whether write_file was called this turn
-      const writeFileCallsMade: Array<{ path: string }> = [];
-
-      // ── FIX 3: Tool loop detection state ──────────────────────────
-      const toolCallCounts = new Map<string, number>();
-      const toolNameCounts = new Map<string, number>(); // per-name count regardless of args
-      const recentToolSequence: string[] = [];
-      // Hard cap on screenshot-type tools per turn — these should be used sparingly
-      const SCREENSHOT_TOOLS = new Set(['browser_screenshot', 'take_screenshot', 'understand_image']);
-      const MAX_SCREENSHOTS_PER_TURN = 1;
-
-      for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
-        // ── FIX 2: LLM-driven compaction ──────────────────────────
-        await this.maybeCompact(loopMessages, systemPrompt);
-
-        // Use lower temperature for tool-calling loops (precision matters),
-        // higher temperature only for the final text-only response.
-        const loopTemp = isTaskMessage ? this.config.ai.temperature : (iteration === 0 && !isTaskMessage ? this.config.ai.chatTemperature : this.config.ai.temperature);
-        let aiResponse = await this.ai.complete({
-          messages: loopMessages,
-          systemPrompt,
-          model: this.config.ai.model,
-          maxTokens,
-          temperature: loopTemp,
-          tools,
-          tool_choice: 'auto',
-          onToken,
-        });
-
-        // Track token usage
-        if (aiResponse.tokensUsed) {
-          this.sessionTokens.input += aiResponse.tokensUsed.input;
-          this.sessionTokens.output += aiResponse.tokensUsed.output;
-          this.sessionTokens.requests += 1;
-        }
-
-        // Empty response retry — occasionally the LLM returns blank content with no tool calls
-        const isEmptyResponse =
-          (!aiResponse.toolCalls || aiResponse.toolCalls.length === 0) &&
-          (!aiResponse.content || aiResponse.content.trim().length === 0);
-        if (isEmptyResponse) {
-          log.warn({ iteration }, '[Empty response from LLM, retrying...]');
-          await new Promise((r) => setTimeout(r, 1500));
-          aiResponse = await this.ai.complete({
-            messages: loopMessages,
-            systemPrompt,
-            model: this.config.ai.model,
-            maxTokens,
-            temperature: this.config.ai.temperature,
-            tools,
-            tool_choice: 'auto',
-          });
-          log.info({ iteration }, 'Empty response retry complete');
-        }
-
-        log.info(
-          {
-            provider: aiResponse.provider,
-            model: aiResponse.model,
-            iteration,
-            toolCalls: aiResponse.toolCalls?.length ?? 0,
-            contentLen: aiResponse.content?.length ?? 0,
-          },
-          'AI response received',
-        );
-
-        // If no tool calls, we're done — this is the final response
-        if (!aiResponse.toolCalls || aiResponse.toolCalls.length === 0) {
-          if (toolCallCount > 0) onStatus?.('✍️ Writing response...');
-          finalContent = aiResponse.content;
-          break;
-        }
-
-        // Add the assistant message with tool calls to the loop
-        loopMessages.push({
-          role: 'assistant',
-          content: aiResponse.content || null,
-          tool_calls: aiResponse.toolCalls,
-        });
-
-        // ── FIX 3: Check alternating pattern (A→B→A→B) ──────────
-        let loopDetected = false;
-        let screenshotWasSent = false; // track at iteration scope for response message
-        if (recentToolSequence.length >= 4) {
-          const len = recentToolSequence.length;
-          if (
-            recentToolSequence[len - 4] === recentToolSequence[len - 2] &&
-            recentToolSequence[len - 3] === recentToolSequence[len - 1]
-          ) {
-            log.warn({ sequence: recentToolSequence.slice(-4) }, 'Alternating tool pattern detected');
-            loopDetected = true;
-          }
-        }
-        if (loopDetected) {
-          finalContent = "I noticed I was repeating the same actions in a loop. Let me try a different approach.";
-          break;
-        }
-
-        // ── Phase 1: Pre-process all tool calls (loop detection, write guard) ──
-        interface ToolCallJob {
-          toolCall: AIToolCall;
-          toolName: string;
-          toolArgs: Record<string, unknown>;
-          loopBlocked: boolean;
-        }
-        const jobs: ToolCallJob[] = [];
-
-        for (const toolCall of aiResponse.toolCalls) {
-          toolCallCount++;
-          const toolName = toolCall.function.name;
-          let toolArgs: Record<string, unknown> = {};
-          let argsParseFailed = false;
-
-          try {
-            toolArgs = JSON.parse(toolCall.function.arguments);
-          } catch {
-            argsParseFailed = true;
-            log.warn({ toolName, raw: toolCall.function.arguments?.slice(0, 200) }, 'Failed to parse tool arguments — returning error to LLM');
-          }
-
-          // Report parse errors back to the LLM so it can retry with valid args
-          if (argsParseFailed) {
-            loopMessages.push({ role: 'assistant', content: aiResponse.content || null, tool_calls: [toolCall] });
-            loopMessages.push({
-              role: 'tool',
-              content: `Error: Tool arguments for "${toolName}" are malformed JSON. This usually means max_tokens was exceeded and arguments were truncated. Retry with simpler/shorter arguments.`,
-              tool_call_id: toolCall.id,
-            });
-            continue;
-          }
-
-          // ── FIX 3: Track tool+args combo frequency ────────────
-          const argsHash = createHash('sha256').update(toolCall.function.arguments).digest('hex').slice(0, 8);
-          const comboKey = `${toolName}:${argsHash}`;
-          const comboCount = (toolCallCounts.get(comboKey) ?? 0) + 1;
-          toolCallCounts.set(comboKey, comboCount);
-          const nameCount = (toolNameCounts.get(toolName) ?? 0) + 1;
-          toolNameCounts.set(toolName, nameCount);
-          recentToolSequence.push(comboKey);
-
-          // Hard cap: screenshot tools max 2 per turn
-          if (SCREENSHOT_TOOLS.has(toolName) && nameCount > MAX_SCREENSHOTS_PER_TURN) {
-            log.warn({ toolName, nameCount }, 'Screenshot cap reached — blocking further screenshot calls this turn');
-            jobs.push({ toolCall, toolName, toolArgs, loopBlocked: true });
-            loopDetected = true;
-            break;
-          }
-
-          // Same tool+args called 2+ times: warn LLM on 2nd, block on 3rd
-          if (comboCount >= 3) {
-            log.warn({ toolName, comboKey, count: comboCount }, 'Tool loop detected — same tool+args called 3+ times');
-            jobs.push({ toolCall, toolName, toolArgs, loopBlocked: true });
-            loopDetected = true;
-            break;
-          }
-
-          // Write guard: record write_file invocations
-          if (toolName === 'write_file' && typeof toolArgs.path === 'string') {
-            writeFileCallsMade.push({ path: toolArgs.path as string });
-          }
-
-          jobs.push({ toolCall, toolName, toolArgs, loopBlocked: false });
-        }
-
-        // ── Phase 2: Execute tools — parallel for reads, sequential for writes ──
-        const untrustedTools = new Set(['web_search', 'read_file', 'run_terminal_command', 'web_fetch', 'crawl_url']);
-        const parallelSafe = new Set(['read_file', 'recall', 'web_search', 'web_fetch', 'crawl_url',
-          'get_system_info', 'list_directory', 'introspect', 'check_injection', 'check_command_risk',
-          'understand_image', 'read_pdf', 'transcribe_audio', 'list_tasks', 'list_sessions']);
-
-        if (!loopDetected) {
-          // Separate jobs into groups: parallel-safe and sequential
-          const parallelJobs = jobs.filter((j) => parallelSafe.has(j.toolName) && !j.loopBlocked);
-          const sequentialJobs = jobs.filter((j) => !parallelSafe.has(j.toolName) || j.loopBlocked);
-
-          log.info(
-            { total: jobs.length, parallel: parallelJobs.length, sequential: sequentialJobs.length },
-            jobs.length > 1 ? 'Executing tool calls (parallel + sequential split)' : 'Executing tool call',
-          );
-
-          // Build result map: tool_call_id → result string
-          const resultMap = new Map<string, string>();
-
-          // Run parallel-safe tools concurrently
-          if (parallelJobs.length > 0) {
-            // Emit combined status for parallel batch
-            if (parallelJobs.length === 1) {
-              onStatus?.(getToolStatus(parallelJobs[0].toolName, parallelJobs[0].toolArgs));
-            } else {
-              onStatus?.(`⚙️ Working...`);
-            }
-            const parallelResults = await Promise.all(
-              parallelJobs.map(async (job) => {
-                log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (parallel)');
-                let result = await withTimeout(this.toolExecutor.execute(job.toolName, job.toolArgs), TOOL_TIMEOUT_MS, job.toolName);
-                result = repairToolResult(result);
-                if (this.isToolErrorResult(result)) {
-                  result += '\n\n[TOOL RETURNED AN ERROR — do not claim success. Report the error to the user.]';
-                  log.warn({ toolName: job.toolName }, 'Tool returned an error result');
-                }
-                if (untrustedTools.has(job.toolName)) result = wrapUntrustedContent(result, job.toolName);
-                this.eventLoop.emit('agent:completed', { tool: job.toolName, resultLen: result.length }, 'medium', 'orchestrator');
-                // Send screenshot images directly to Telegram
-                this.maybeSendScreenshot(job.toolName, result, chatId).catch((e) => log.debug({ e }, 'Failed to send screenshot'));
-                return { id: job.toolCall.id, result };
-              }),
-            );
-            for (const { id, result } of parallelResults) resultMap.set(id, result);
-          }
-
-          // Run sequential tools one at a time (writes, commands, etc.)
-          let screenshotSent = false;
-          for (const job of sequentialJobs) {
-            if (job.loopBlocked) {
-              resultMap.set(job.toolCall.id, '[Loop detected: this exact action was already tried twice. Try a different approach.]');
-              continue;
-            }
-            onStatus?.(getToolStatus(job.toolName, job.toolArgs));
-            log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (sequential)');
-            let result = await withTimeout(this.toolExecutor.execute(job.toolName, job.toolArgs), TOOL_TIMEOUT_MS, job.toolName);
-            result = repairToolResult(result);
-            if (this.isToolErrorResult(result)) {
-              result += '\n\n[TOOL RETURNED AN ERROR — do not claim success. Report the error to the user.]';
-              log.warn({ toolName: job.toolName }, 'Tool returned an error result');
-            }
-            if (untrustedTools.has(job.toolName)) result = wrapUntrustedContent(result, job.toolName);
-            this.eventLoop.emit('agent:completed', { tool: job.toolName, resultLen: result.length }, 'medium', 'orchestrator');
-            // Send screenshot images directly to Telegram; stop looping once sent
-            const sent = await this.maybeSendScreenshot(job.toolName, result, chatId);
-            if (sent) screenshotSent = true;
-            resultMap.set(job.toolCall.id, result);
-            if (screenshotSent) break; // screenshot is always the last action in a turn
-          }
-          if (screenshotSent) { loopDetected = true; screenshotWasSent = true; } // reuse flag to break outer iteration loop
-
-          // Add tool results to loopMessages in original order
-          for (const job of jobs) {
-            loopMessages.push({
-              role: 'tool',
-              content: resultMap.get(job.toolCall.id) ?? '(no result)',
-              tool_call_id: job.toolCall.id,
-            });
-          }
-        }
-
-        // Break out of outer loop if tool loop was detected during this iteration
-        if (loopDetected) {
-          if (!finalContent) {
-            if (screenshotWasSent) {
-              // Screenshot was successfully sent — use the LLM's content from this iteration as the response
-              finalContent = aiResponse.content?.trim() || 'Done — screenshot sent.';
-            } else {
-              finalContent = 'I hit a repeated action and stopped to avoid a loop. Let me know how you\'d like me to proceed.';
-            }
-          }
-          break;
-        }
-
-        // If this was the last iteration, the next loop will get the final response
-        // (or we'll hit the max and use whatever content we have)
-        if (iteration === MAX_TOOL_ITERATIONS - 1) {
-          finalContent = aiResponse.content || 'I completed the tasks but ran out of processing turns.';
-        }
-      }
 
       // ── 8b. Write guard — catch hallucinated file saves ──────
       // If the response claims a file was created/saved but no write_file tool was called,
@@ -1406,7 +1172,7 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
               model: this.config.ai.model,
               maxTokens: this.config.ai.maxTokens,
               temperature: this.config.ai.temperature,
-              tools,
+              tools: toOpenAITools(),
               tool_choice: 'auto',
             });
             let wroteFile = false;
