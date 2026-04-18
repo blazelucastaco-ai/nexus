@@ -881,6 +881,10 @@ export class Orchestrator {
       // explicitly how to route them (so it doesn't pass a URL as a search
       // query, the classic failure mode).
       const urlHint = buildUrlHint(text);
+      if (urlHint) {
+        const urlCount = (text.match(/https?:\/\//g) ?? []).length;
+        log.info({ chatId, urlCount }, 'URL hint injected into system prompt');
+      }
       const rawSystemPrompt = this.buildFullSystemPrompt(context, prevention, injectionResult, {
         memorySynthesis: synthesis.synthesis,
         continuityBrief: this.continuityBrief,
