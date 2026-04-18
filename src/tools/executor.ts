@@ -344,12 +344,25 @@ export class ToolExecutor {
   private afterHooks: ToolHook[] = [];
   private plugins: LoadedPlugin[] = [];
 
+  /**
+   * When set, returns the active project's disk path (or null if no active
+   * project). Used to resolve bare/relative write_file paths so files land
+   * in the project directory instead of $HOME — honors the "## Active
+   * Project" promise made in the system prompt.
+   */
+  private activeProjectPath?: () => string | null;
+
   constructor(
     private agents: AgentManager,
     private memory: MemoryManager,
     private selfAwareness?: SelfAwareness,
     private innerMonologue?: InnerMonologue,
   ) {}
+
+  /** Inject an accessor for the orchestrator's current active project. */
+  setActiveProjectPath(resolver: () => string | null): void {
+    this.activeProjectPath = resolver;
+  }
 
   /** Register loaded plugins so their tools can be dispatched */
   setPlugins(plugins: LoadedPlugin[]): void {
@@ -740,13 +753,26 @@ export class ToolExecutor {
   }
 
   private async writeFile(args: Record<string, unknown>): Promise<string> {
-    const rawPath = String(args.path ?? '');
+    let rawPath = String(args.path ?? '');
     // Content arrives via JSON.parse() so actual newlines are already real newlines.
     // Do NOT unescape \n — that would corrupt Python/bash string literals like print("hello\nworld").
     const content = String(args.content ?? '');
     const executable = args.executable === true || args.executable === 'true';
 
     if (!rawPath) return 'Error: No path provided';
+
+    // Active-project default: if the LLM passes a bare or relative path and
+    // an active project is set, anchor the write under the project directory.
+    // Absolute paths (/...) and home-relative paths (~/...) pass through
+    // unchanged — the LLM made an explicit choice.
+    if (this.activeProjectPath && !rawPath.startsWith('/') && !rawPath.startsWith('~')) {
+      const projectDir = this.activeProjectPath();
+      if (projectDir) {
+        const anchored = `${projectDir.replace(/\/$/, '')}/${rawPath.replace(/^\.?\//, '')}`;
+        log.info({ original: rawPath, anchored, projectDir }, 'write_file: anchoring bare path under active project');
+        rawPath = anchored;
+      }
+    }
 
     // Guard against writing empty files (common LLM mistake when context is truncated)
     if (content.length === 0) {

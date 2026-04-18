@@ -398,6 +398,16 @@ export class Orchestrator {
     this.innerMonologue = new InnerMonologue(this.ai, this.config.ai.fastModel);
     this.toolExecutor = new ToolExecutor(this.agents, this.memory, this.selfAwareness, this.innerMonologue);
 
+    // Close the "Active Project" loop (FIND-CMP-03): the system prompt tells
+    // the LLM that file writes default to the project's directory, but until
+    // now the tool executor had no way to consult the active project. Inject
+    // a resolver that reads the current slug and looks up its on-disk path.
+    this.toolExecutor.setActiveProjectPath(() => {
+      if (!this.activeProject) return null;
+      const proj = getProject(this.activeProject);
+      return proj?.path ?? null;
+    });
+
     // Extract the LLM tool-calling loop into its own unit so it can be
     // tested in isolation. Dependencies injected explicitly — no back-ref
     // to `this` survives inside the loop itself.
