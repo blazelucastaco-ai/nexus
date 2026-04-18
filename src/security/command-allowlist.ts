@@ -24,12 +24,40 @@ const DEFAULT_CONFIG: AllowlistConfig = {
 
 let cachedAllowlist: AllowlistConfig | null = null;
 
+/**
+ * Validate that a parsed allowlist file has the expected shape. Legacy files
+ * sometimes have a plain string array (pre-structured format) which would
+ * crash the iteration in isAllowlisted with "config.commands is not iterable".
+ * We coerce-with-defaults here so approval checks never crash.
+ */
+function coerceAllowlistShape(raw: unknown): AllowlistConfig {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    // Legacy shape: a bare string array. Promote to the structured form.
+    if (Array.isArray(raw) && raw.every((x) => typeof x === 'string')) {
+      log.info({ count: raw.length }, 'Allowlist: upgrading legacy string-array shape');
+      return { commands: raw as string[], patterns: [], updatedAt: new Date().toISOString() };
+    }
+    log.warn({ raw: typeof raw }, 'Allowlist: unexpected top-level type — using defaults');
+    return { ...DEFAULT_CONFIG };
+  }
+  const obj = raw as Record<string, unknown>;
+  const commands = Array.isArray(obj.commands) && obj.commands.every((x) => typeof x === 'string')
+    ? (obj.commands as string[])
+    : [];
+  const patterns = Array.isArray(obj.patterns) && obj.patterns.every((x) => typeof x === 'string')
+    ? (obj.patterns as string[])
+    : [];
+  const updatedAt = typeof obj.updatedAt === 'string' ? obj.updatedAt : new Date().toISOString();
+  return { commands, patterns, updatedAt };
+}
+
 async function loadAllowlist(): Promise<AllowlistConfig> {
   if (cachedAllowlist) return cachedAllowlist;
 
   try {
     const raw = await readFile(ALLOWLIST_PATH, 'utf-8');
-    cachedAllowlist = JSON.parse(raw) as AllowlistConfig;
+    const parsed = JSON.parse(raw) as unknown;
+    cachedAllowlist = coerceAllowlistShape(parsed);
     log.info({ path: ALLOWLIST_PATH, commands: cachedAllowlist.commands.length }, 'Allowlist loaded');
     return cachedAllowlist;
   } catch (err: unknown) {
