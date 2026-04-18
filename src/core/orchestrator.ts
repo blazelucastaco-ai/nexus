@@ -11,7 +11,7 @@ import { loadConfig } from '../config.js';
 import { assembleContext, buildSystemPrompt } from './context.js';
 import { EventLoop } from './event-loop.js';
 import { ToolCallLoop } from './tool-call-loop.js';
-import { toOpenAITools } from '../tools/definitions.js';
+import { runWriteGuard } from './write-guard.js';
 import { ToolExecutor } from '../tools/executor.js';
 import { classifyMessage, classifyTaskMode, isUndercoverProbe, detectMissingRequirements } from './task-classifier.js';
 import { planTask, type TaskPlan } from './task-planner.js';
@@ -1097,109 +1097,16 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
       const loopMessages = loopResult.loopMessages;
 
 
-      // ── 8b. Write guard — catch hallucinated file saves ──────
-      // If the response claims a file was created/saved but no write_file tool was called,
-      // try progressively harder to extract content and auto-save it.
-      const fileClaimPattern =
-        /\b(?:created?|saved?|written?|done[,.]?\s*(?:created?|saved?|written?)|i'?(?:ve|'m)?\s+(?:created?|saved?|written?|done\s+(?:creating|saving|writing))|file\s+(?:is|has\s+been)\s+(?:created?|saved?|written?|ready)|saved?\s+(?:it\s+)?to|here'?s?\s+(?:the\s+)?(?:file|content|code|script)|file\s+(?:content|saved|created))\b/i;
-      const filePathPattern = /[`'"]?(~\/[\w\-\/\.]+|\/[\w\-\/\.]+)/;
-      const claimsFileSaved = fileClaimPattern.test(finalContent) && filePathPattern.test(finalContent);
-      const didCallWriteFile = writeFileCallsMade.length > 0;
-
-      if (claimsFileSaved && !didCallWriteFile) {
-        const pathMatch = finalContent.match(filePathPattern);
-        // Strip any trailing punctuation from path (e.g. "path." → "path")
-        const targetPath = pathMatch ? pathMatch[1].replace(/[.,;:!?)]+$/, '') : null;
-
-        // Strategy 1: fenced code block (``` ... ```)
-        const fencedMatch = finalContent.match(/```(?:\w+)?\n([\s\S]*?)```/);
-
-        // Strategy 2: indented block (4-space or tab indented lines, ≥3 consecutive)
-        const indentedLines = finalContent.split('\n').filter((l) => /^(?:    |\t)/.test(l));
-        const indentedMatch = indentedLines.length >= 3 ? indentedLines.join('\n') : null;
-
-        // Strategy 3: if >50% of non-empty lines look like code, use the whole response
-        const nonEmpty = finalContent.split('\n').filter((l) => l.trim().length > 0);
-        const codeLineCount = nonEmpty.filter((l) =>
-          /^(?:\s*(?:def |class |import |from |if |for |while |return |const |let |var |function |\/\/|\/\*|\*|echo |#!))/.test(l)
-        ).length;
-        const looksLikeCode = nonEmpty.length > 0 && codeLineCount / nonEmpty.length > 0.5;
-
-        const extractedContent = fencedMatch?.[1] ?? (indentedMatch) ?? (looksLikeCode ? finalContent : null);
-
-        log.warn(
-          { targetPath, strategy: fencedMatch ? 'fenced' : indentedMatch ? 'indented' : looksLikeCode ? 'whole-response' : 'none' },
-          'Write guard triggered: response claims file saved but write_file was not called',
-        );
-
-        if (targetPath && extractedContent) {
-          try {
-            await this.toolExecutor.execute('write_file', {
-              path: targetPath,
-              content: extractedContent,
-            });
-            finalContent += '\n\n[Auto-saved by NEXUS write guard]';
-            log.info({ targetPath }, 'Write guard: auto-saved extracted content');
-          } catch (err) {
-            log.warn({ err, targetPath }, 'Write guard: auto-save failed');
-            finalContent += '\n\n[Note: I described the content but failed to save it automatically. Please ask me to try again.]';
-          }
-        } else {
-          // Strategy 4: re-prompt the LLM to generate content AND call write_file
-          log.warn({ targetPath }, 'Write guard: no extractable content — re-prompting LLM to generate and call write_file');
-
-          // Use only current-turn context (messages since the last user message)
-          // to avoid polluting with stale [Write guard re-prompt:] entries from history
-          const lastUserIdx = [...loopMessages].reverse().findIndex((m) => m.role === 'user');
-          const currentTurnMessages = lastUserIdx >= 0
-            ? loopMessages.slice(loopMessages.length - 1 - lastUserIdx)
-            : loopMessages.slice(-6);
-          const forceWriteMessages: AIMessage[] = [
-            ...currentTurnMessages,
-            {
-              role: 'assistant',
-              content: finalContent,
-            },
-            {
-              role: 'user',
-              content: `CRITICAL ERROR: You claimed to create/save a file but you NEVER called the write_file tool. The file does NOT exist. You MUST call write_file RIGHT NOW to actually create it. Do not describe the file or say you will do it — call write_file immediately. Path: ${targetPath ?? 'the path you mentioned above'}`,
-            },
-          ];
-          try {
-            const forceResponse = await this.ai.complete({
-              messages: forceWriteMessages,
-              systemPrompt,
-              model: this.config.ai.model,
-              maxTokens: this.config.ai.maxTokens,
-              temperature: this.config.ai.temperature,
-              tools: toOpenAITools(),
-              tool_choice: 'auto',
-            });
-            let wroteFile = false;
-            if (forceResponse.toolCalls && forceResponse.toolCalls.length > 0) {
-              for (const tc of forceResponse.toolCalls) {
-                if (tc.function.name === 'write_file') {
-                  let tcArgs: Record<string, unknown> = {};
-                  try { tcArgs = JSON.parse(tc.function.arguments); } catch (e) { log.debug({ e }, 'Failed to parse forced write_file args'); }
-                  if (typeof tcArgs.path === 'string') {
-                    writeFileCallsMade.push({ path: tcArgs.path as string });
-                  }
-                  const writeResult = await this.toolExecutor.execute('write_file', tcArgs);
-                  finalContent += `\n\n[Write guard re-prompt: ${writeResult}]`;
-                  log.info({ path: tcArgs.path }, 'Write guard: re-prompt write_file succeeded');
-                  wroteFile = true;
-                }
-              }
-            }
-            if (!wroteFile) {
-              finalContent += '\n\n[Note: Could not auto-save — re-prompt did not produce a write_file call. Please ask me to create the file(s) again.]';
-            }
-          } catch (err) {
-            log.warn({ err }, 'Write guard: re-prompt failed');
-            finalContent += '\n\n[Note: Could not auto-save — re-prompt failed. Please ask me to create the file(s) again.]';
-          }
-        }
-      }
+      // ── 8b. Write guard (extracted to src/core/write-guard.ts) ──
+      // If the response text claims a file was saved but no write_file tool
+      // was actually called, the guard attempts to recover (either by
+      // extracting content from the response and saving it, or by re-prompting
+      // the LLM to call write_file explicitly).
+      const __wg = await runWriteGuard(
+        { ai: this.ai, toolExecutor: this.toolExecutor, config: this.config },
+        { finalContent, writeFileCallsMade, loopMessages, systemPrompt },
+      );
+      finalContent = __wg.finalContent;
 
       // ── 8c. Prepend inner monologue if think mode active ──────
       if (innerThought) {
