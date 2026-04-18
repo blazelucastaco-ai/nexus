@@ -61,12 +61,12 @@ function extractFirstJsonObject(text: string): string | null {
 
   let depth = 0;
   let inString = false;
-  let escape = false;
+  let escaped = false;
 
   for (let i = start; i < text.length; i++) {
     const ch = text[i];
-    if (escape) { escape = false; continue; }
-    if (ch === '\\') { escape = true; continue; }
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\') { escaped = true; continue; }
     if (ch === '"') { inString = !inString; continue; }
     if (inString) continue;
     if (ch === '{') depth++;

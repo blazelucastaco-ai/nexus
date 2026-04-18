@@ -126,7 +126,7 @@ export class MemoryRetrieval {
   private temporalDecay(memory: Memory): number {
     const createdMs = new Date(memory.createdAt).getTime();
     // Guard: invalid date → treat as recent (no decay)
-    if (isNaN(createdMs)) return 1.0;
+    if (Number.isNaN(createdMs)) return 1.0;
     const ageDays = (Date.now() - createdMs) / (1000 * 60 * 60 * 24);
     // Half-life = 30 days: decay = exp(-ln2 / 30 * ageDays)
     return Math.exp((-0.693 / 30) * ageDays);

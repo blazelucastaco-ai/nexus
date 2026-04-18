@@ -583,7 +583,7 @@ export class MemoryManager {
         ? new Date(memory.createdAt).getTime()
         : Date.now();
     // Guard: invalid date → treat as recent (no decay)
-    if (isNaN(created)) return 1.0;
+    if (Number.isNaN(created)) return 1.0;
     const ageDays = (Date.now() - created) / (1000 * 60 * 60 * 24);
     return Math.exp((-0.693 / 30) * ageDays);
   }

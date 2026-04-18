@@ -153,7 +153,7 @@ export class TerminalAgent extends BaseAgent {
     const pid = Number(params.pid);
     const signal = String(params.signal ?? 'TERM');
 
-    if (!pid || isNaN(pid)) {
+    if (!pid || Number.isNaN(pid)) {
       return this.createResult(false, null, 'Invalid PID', start);
     }
 

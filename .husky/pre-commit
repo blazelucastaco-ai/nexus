@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+# Pre-commit hook — runs biome on staged files + typecheck across the repo.
+# Keep fast: lint-staged only hits changed files; tsc --noEmit is repo-wide
+# but cached, so subsequent runs are quick.
+
+npx lint-staged
+npx tsc --noEmit

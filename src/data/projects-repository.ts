@@ -160,7 +160,7 @@ export function inferProjectFromPath(path: string): { name: string; dir: string 
   // Match: anywhere in the path a segment after 'nexus-workspace' or 'workspace' or a top-level project-named folder
   const WORKSPACE_SEGMENTS = /(?:nexus-workspace|nexusworkspace|Projects|projects|workspace)\/([^/]+)/;
   const match = path.match(WORKSPACE_SEGMENTS);
-  if (match && match[1]) {
+  if (match?.[1]) {
     const name = slugify(match[1]);
     const dirIdx = path.indexOf(match[0]) + match[0].length;
     const dir = path.slice(0, dirIdx);

@@ -1,0 +1,5 @@
+{
+  "*.{ts,tsx,js,mjs,cjs}": [
+    "biome check --no-errors-on-unmatched"
+  ]
+}

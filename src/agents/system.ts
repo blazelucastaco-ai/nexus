@@ -156,7 +156,7 @@ export class SystemAgent extends BaseAgent {
     });
 
     const cpuLine = stdout.split('\n').find((l) => l.includes('CPU usage'));
-    let cpuParsed: Record<string, string> = {};
+    const cpuParsed: Record<string, string> = {};
     if (cpuLine) {
       const matches = cpuLine.match(/([\d.]+)%\s+(\w+)/g);
       if (matches) {

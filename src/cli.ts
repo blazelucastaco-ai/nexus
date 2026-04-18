@@ -180,7 +180,7 @@ function getUptime(pid: string): string {
 function getMemUsage(pid: string): string {
   try {
     const kb = parseInt(execSync(`ps -o rss= -p ${pid}`, { stdio: 'pipe' }).toString().trim(), 10);
-    if (isNaN(kb)) return 'unknown';
+    if (Number.isNaN(kb)) return 'unknown';
     return `${(kb / 1024).toFixed(1)} MB`;
   } catch {
     return 'unknown';

@@ -94,7 +94,7 @@ async function checkContacts(): Promise<boolean> {
       ['-e', 'tell application "Contacts" to return count of every person'],
       { timeout: 4000 },
     );
-    return !isNaN(parseInt(stdout.trim(), 10));
+    return !Number.isNaN(parseInt(stdout.trim(), 10));
   } catch {
     return false;
   }
