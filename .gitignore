@@ -8,3 +8,4 @@ dist/
 .nexus/
 coverage/
 .claude/
+installer-app/release/

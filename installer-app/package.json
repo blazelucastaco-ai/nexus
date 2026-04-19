@@ -1,0 +1,67 @@
+{
+  "name": "nexus-installer",
+  "version": "0.1.0",
+  "description": "NEXUS installer — native macOS app for installing NEXUS in a few clicks",
+  "private": true,
+  "main": "dist/main/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev:renderer": "vite",
+    "build:renderer": "vite build",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build": "pnpm run build:renderer && pnpm run build:main",
+    "dev": "pnpm run build:main && concurrently -k \"pnpm run dev:renderer\" \"wait-on http://127.0.0.1:5173 && cross-env NEXUS_INSTALLER_DEV=1 electron dist/main/main.js\"",
+    "start": "pnpm run build && electron dist/main/main.js",
+    "dist": "pnpm run build && electron-builder --mac dmg"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "wait-on": "^8.0.1"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "build": {
+    "appId": "com.nexus.installer",
+    "productName": "NEXUS Installer",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      { "from": "../chrome-extension", "to": "chrome-extension" }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] }
+      ],
+      "darkModeSupport": false,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "identity": null
+    },
+    "dmg": {
+      "title": "NEXUS Installer",
+      "contents": [
+        { "x": 130, "y": 220 },
+        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+      ]
+    }
+  }
+}

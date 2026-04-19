@@ -687,6 +687,7 @@ footer {
   .feat-grid { grid-template-columns:1fr 1fr; }
   .perf-grid { grid-template-columns:1fr 1fr; }
   .arch-grid { grid-template-columns:1fr 1fr; }
+  #install > div[style*="grid-template-columns:1fr 1fr"] { grid-template-columns:1fr !important; }
   footer { flex-direction:column; gap:18px; text-align:center; padding:28px 20px; }
 }
 @media (max-width: 540px) {
@@ -900,17 +901,34 @@ footer {
 <!-- INSTALL -->
 <section id="install" class="sec">
   <span class="eyebrow">Installation</span>
-  <h2>One command. <em>That's it.</em></h2>
-  <p class="lead">The installer clones the repo, checks your system, installs dependencies, and walks you through setup interactively.</p>
+  <h2>Pick your <em>path.</em></h2>
+  <p class="lead">Download the guided Mac installer for a clean, click-through setup — or paste one command into your terminal if you'd rather.</p>
 
-  <!-- ONE-LINER HERO -->
-  <div style="margin:40px 0;background:#1C1310;border-radius:var(--r12);overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.18);">
-    <div style="padding:11px 18px;background:rgba(255,255,255,.05);border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;justify-content:space-between;">
-      <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:rgba(255,255,255,.25);letter-spacing:.09em;">quick install</span>
-      <button onclick="navigator.clipboard?.writeText('curl -fsSL https://raw.githubusercontent.com/blazelucastaco-ai/nexus/main/remote-install.sh | bash');this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',2000)" style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#D17A60;letter-spacing:.08em;background:none;border:1px solid rgba(209,122,96,.35);padding:3px 10px;border-radius:3px;cursor:pointer;">Copy</button>
+  <!-- TWO-PATH HERO -->
+  <div style="margin:40px 0 0 0;display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+
+    <!-- OPTION A: DOWNLOAD -->
+    <div style="background:var(--p2);border:1px solid var(--div);border-radius:var(--r12);padding:28px 26px;display:flex;flex-direction:column;">
+      <span style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--t);margin-bottom:10px;">Recommended</span>
+      <h3 style="font-family:'Libre Baskerville',serif;font-size:22px;font-weight:700;color:var(--ink);margin-bottom:8px;line-height:1.2;">Download the <em style="color:var(--t);">installer app.</em></h3>
+      <p style="font-size:13.5px;color:var(--mid);line-height:1.65;margin-bottom:22px;flex:1;">A native Mac app that walks you through Telegram, API keys, agents, personality, and permissions — no terminal required.</p>
+      <a href="https://github.com/blazelucastaco-ai/nexus/releases/latest/download/NEXUS-Installer.dmg" class="btn-p" style="justify-content:center;padding:13px 20px;">
+        <span>↓</span><span>Download for Mac</span>
+      </a>
+      <p style="font-size:11.5px;color:var(--soft);margin-top:12px;text-align:center;font-family:'JetBrains Mono',monospace;letter-spacing:.05em;">macOS 12+ · Apple Silicon · ~95 MB</p>
     </div>
-    <div style="padding:22px 26px;">
-      <span style="font-family:'JetBrains Mono',monospace;font-size:13.5px;color:rgba(255,255,255,.85);word-break:break-all;"><span style="color:#D17A60;">curl</span> <span style="color:rgba(255,255,255,.4);">-fsSL</span> <span style="color:#7BAEC8;">https://raw.githubusercontent.com/blazelucastaco-ai/nexus/main/remote-install.sh</span> <span style="color:rgba(255,255,255,.4);">| bash</span></span>
+
+    <!-- OPTION B: CURL -->
+    <div style="background:#1C1310;border-radius:var(--r12);overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.18);display:flex;flex-direction:column;">
+      <div style="padding:12px 18px;background:rgba(255,255,255,.05);border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.35);">For developers</span>
+        <button onclick="navigator.clipboard?.writeText('curl -fsSL https://raw.githubusercontent.com/blazelucastaco-ai/nexus/main/remote-install.sh | bash');this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',2000)" style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#D17A60;letter-spacing:.08em;background:none;border:1px solid rgba(209,122,96,.35);padding:3px 10px;border-radius:3px;cursor:pointer;">Copy</button>
+      </div>
+      <div style="padding:24px 26px;flex:1;display:flex;flex-direction:column;justify-content:center;">
+        <p style="font-family:'Libre Baskerville',serif;font-size:18px;font-weight:700;color:rgba(255,255,255,.92);margin-bottom:6px;line-height:1.3;">Install from the <em style="color:#D17A60;">terminal.</em></p>
+        <p style="font-size:12.5px;color:rgba(255,255,255,.45);margin-bottom:18px;line-height:1.6;">One command. Clones the repo, installs deps, and launches the same setup wizard.</p>
+        <code style="display:block;font-family:'JetBrains Mono',monospace;font-size:12.5px;line-height:1.6;color:rgba(255,255,255,.85);word-break:break-all;background:rgba(255,255,255,.04);padding:12px 14px;border-radius:6px;border:1px solid rgba(255,255,255,.06);"><span style="color:#D17A60;">curl</span> <span style="color:rgba(255,255,255,.4);">-fsSL</span> <span style="color:#7BAEC8;">https://raw.githubusercontent.com/blazelucastaco-ai/nexus/main/remote-install.sh</span> <span style="color:rgba(255,255,255,.4);">| bash</span></code>
+      </div>
     </div>
   </div>
 
