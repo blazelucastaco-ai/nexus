@@ -152,6 +152,16 @@ export function checkRepo(): RepoStatus {
 type ProgressCb = (progress: InstallProgress) => void;
 
 export async function runInstall(input: ConfigInput, onProgress: ProgressCb): Promise<void> {
+  // Pre-create the full ~/.nexus/ tree so that package.json's build script,
+  // which does `cp dist/index.cjs ~/.nexus/app/index.cjs`, doesn't fail on
+  // a fresh install before our registerLaunchd step has had a chance to
+  // create it. All four subdirs are cheap and idempotent.
+  mkdirSync(NEXUS_DIR, { recursive: true });
+  mkdirSync(join(NEXUS_DIR, 'app'), { recursive: true });
+  mkdirSync(join(NEXUS_DIR, 'logs'), { recursive: true });
+  mkdirSync(join(NEXUS_DIR, 'screenshots'), { recursive: true });
+  mkdirSync(join(NEXUS_DIR, 'data'), { recursive: true });
+
   const steps: Array<{ phase: InstallProgress['phase']; label: string; run: () => Promise<void> }> = [
     { phase: 'cloning', label: 'Fetching NEXUS from GitHub…', run: () => cloneOrUpdateRepo(onProgress) },
     { phase: 'installing-deps', label: 'Installing dependencies…', run: () => installDeps(onProgress) },
@@ -159,7 +169,7 @@ export async function runInstall(input: ConfigInput, onProgress: ProgressCb): Pr
     { phase: 'linking-cli', label: 'Linking the nexus CLI…', run: () => linkCli(onProgress) },
     { phase: 'writing-config', label: 'Writing configuration…', run: () => writeConfig(input) },
     { phase: 'initializing-db', label: 'Creating memory database…', run: () => initDatabase() },
-    { phase: 'registering-service', label: 'Registering background service…', run: () => registerLaunchd() },
+    { phase: 'registering-service', label: 'Registering background service…', run: () => registerLaunchd(input) },
   ];
 
   for (let i = 0; i < steps.length; i++) {
@@ -199,17 +209,35 @@ async function buildRepo(onProgress: ProgressCb): Promise<void> {
 
 async function linkCli(onProgress: ProgressCb): Promise<void> {
   const pnpm = (await resolveBinary('pnpm')) ?? 'pnpm';
+  onProgress({ phase: 'linking-cli', label: 'Linking nexus CLI globally…', pct: 70 });
   try {
     await runStreamed(pnpm, ['link', '--global'], REPO_DIR, (line) =>
       onProgress({ phase: 'linking-cli', label: 'Linking nexus CLI globally…', pct: 70, log: line }),
     );
+    return;
   } catch {
-    const localBin = join(HOME, '.local', 'bin');
-    mkdirSync(localBin, { recursive: true });
-    const target = join(localBin, 'nexus');
-    const src = join(REPO_DIR, 'dist', 'cli.js');
-    await execFileAsync('ln', ['-sf', src, target]);
-    await execFileAsync('chmod', ['+x', target]);
+    /* pnpm link needs a global bin dir that may not be set up — fall through */
+  }
+  // Fallback: symlink into ~/.local/bin pointing at the actual built artifact.
+  // `dist/index.cjs` is produced by tsup; the original setup.ts also used this.
+  const localBin = join(HOME, '.local', 'bin');
+  mkdirSync(localBin, { recursive: true });
+  const target = join(localBin, 'nexus');
+  const src = join(REPO_DIR, 'dist', 'index.cjs');
+  if (!existsSync(src)) {
+    onProgress({
+      phase: 'linking-cli',
+      label: 'Skipping CLI link — build artifact missing',
+      pct: 70,
+      log: `warn: ${src} not found; nexus CLI won't be available in PATH`,
+    });
+    return;
+  }
+  await execFileAsync('ln', ['-sf', src, target]);
+  try {
+    await execFileAsync('chmod', ['+x', src]);
+  } catch {
+    /* source lives in pnpm store on some setups; chmod not critical */
   }
 }
 
@@ -286,41 +314,18 @@ function writeConfig(input: ConfigInput): Promise<void> {
 }
 
 async function initDatabase(): Promise<void> {
-  const nodeBin = (await resolveBinary('node')) ?? 'node';
-  const script = `
-    const Database = require('${REPO_DIR}/node_modules/better-sqlite3');
-    const db = new Database('${DB_PATH}');
-    db.pragma('journal_mode = WAL');
-    db.exec(\`
-      CREATE TABLE IF NOT EXISTS memories (
-        id TEXT PRIMARY KEY, type TEXT NOT NULL, content TEXT NOT NULL,
-        embedding BLOB, importance REAL DEFAULT 0.5, access_count INTEGER DEFAULT 0,
-        last_accessed TEXT, created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now')), metadata TEXT DEFAULT '{}'
-      );
-      CREATE TABLE IF NOT EXISTS conversations (
-        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, role TEXT NOT NULL,
-        content TEXT NOT NULL, tokens INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now')), metadata TEXT DEFAULT '{}'
-      );
-      CREATE TABLE IF NOT EXISTS tasks (
-        id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT,
-        status TEXT DEFAULT 'pending', agent TEXT, priority INTEGER DEFAULT 5,
-        created_at TEXT DEFAULT (datetime('now')), completed_at TEXT,
-        metadata TEXT DEFAULT '{}'
-      );
-      CREATE TABLE IF NOT EXISTS context (
-        key TEXT PRIMARY KEY, value TEXT NOT NULL,
-        updated_at TEXT DEFAULT (datetime('now'))
-      );
-    \`);
-    db.close();
-  `;
-  await execFileAsync(nodeBin, ['-e', script]);
+  // NEXUS ships its own migration system that creates all tables on first
+  // boot. Pre-creating schema here caused conflicts (CREATE TABLE without
+  // IF NOT EXISTS vs tables we'd already made) and the service would fail
+  // to start. Just ensure the directory exists and let NEXUS populate it.
+  mkdirSync(NEXUS_DIR, { recursive: true });
+  // Touching a zero-byte file is optional; better-sqlite3 creates it on open.
+  // Leaving this as a no-op keeps the step visible in the progress UI.
+  return Promise.resolve();
 }
 
-async function registerLaunchd(): Promise<void> {
-  const plistPath = join(HOME, 'Library', 'LaunchAgents', 'com.nexus.ai.plist');
+async function registerLaunchd(input?: ConfigInput): Promise<void> {
+  const plistPath = NEXUS_PLIST;
   const startSh = join(NEXUS_DIR, 'start.sh');
   const appCjs = join(NEXUS_DIR, 'app', 'index.cjs');
 
@@ -333,6 +338,26 @@ async function registerLaunchd(): Promise<void> {
 
   const startScript = `#!/bin/bash\ncd "${NEXUS_DIR}"\nexec /usr/bin/env node "${appCjs}"\n`;
   writeFileSync(startSh, startScript, { mode: 0o755 });
+
+  // Pull credentials from the just-written .env so the service process
+  // has them in its environment too — required because the built
+  // dist/index.cjs expects TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID /
+  // ANTHROPIC_API_KEY in process.env.
+  const envVars = readEnvVars();
+  if (input) {
+    envVars.TELEGRAM_BOT_TOKEN = input.telegram.botToken;
+    envVars.TELEGRAM_CHAT_ID = input.telegram.chatId;
+    envVars.ANTHROPIC_API_KEY = input.anthropicKey;
+  }
+  // NODE_PATH points at the repo's node_modules so `require('better-sqlite3')`
+  // et al. resolve — without it, the service crashes at startup with
+  // MODULE_NOT_FOUND. See "Destructive test 2" finding, 2026-04-19.
+  envVars.NODE_PATH = join(REPO_DIR, 'node_modules');
+  envVars.PATH = envVars.PATH ?? '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin';
+
+  const envXml = Object.entries(envVars)
+    .map(([k, v]) => `    <key>${escapeXml(k)}</key><string>${escapeXml(v)}</string>`)
+    .join('\n');
 
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -350,7 +375,7 @@ async function registerLaunchd(): Promise<void> {
   <key>StandardErrorPath</key><string>${join(NEXUS_DIR, 'nexus.err')}</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+${envXml}
   </dict>
 </dict>
 </plist>
@@ -364,6 +389,27 @@ async function registerLaunchd(): Promise<void> {
     /* not loaded yet */
   }
   await execFileAsync('launchctl', ['load', plistPath]);
+}
+
+function readEnvVars(): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!existsSync(ENV_PATH)) return out;
+  try {
+    const text = readFileSync(ENV_PATH, 'utf-8');
+    for (const line of text.split('\n')) {
+      const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
+      if (m) out[m[1]!] = m[2]!.trim();
+    }
+  } catch {
+    /* swallow */
+  }
+  return out;
+}
+
+function escapeXml(s: string): string {
+  return s.replace(/[<>&'"]/g, (c) =>
+    c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '&' ? '&amp;' : c === "'" ? '&apos;' : '&quot;',
+  );
 }
 
 // ── Permissions ──────────────────────────────────────────────────────
@@ -726,11 +772,20 @@ export async function registerMenubarAgent(appBinary: string): Promise<void> {
 export async function reconfigure(input: ConfigInput, onProgress: ProgressCb): Promise<void> {
   onProgress({ phase: 'writing-config', label: 'Writing configuration…', pct: 30 });
   await writeConfig(input);
-  onProgress({ phase: 'registering-service', label: 'Restarting NEXUS service…', pct: 75 });
+  // Re-register the launchd agent so new Telegram/Anthropic env values land
+  // in the plist's EnvironmentVariables dict — writeConfig only touches
+  // config.json and .env, but the running service loads env from the plist.
+  onProgress({ phase: 'registering-service', label: 'Re-registering service with new creds…', pct: 70 });
   try {
-    await restartService();
-  } catch {
-    /* service may not be registered yet — that's fine */
+    await registerLaunchd(input);
+  } catch (err) {
+    onProgress({
+      phase: 'registering-service',
+      label: 'Could not re-register service — restarting anyway',
+      pct: 80,
+      log: err instanceof Error ? err.message : String(err),
+    });
+    try { await restartService(); } catch { /* ignore */ }
   }
   onProgress({ phase: 'done', label: 'Config updated.', pct: 100 });
 }
