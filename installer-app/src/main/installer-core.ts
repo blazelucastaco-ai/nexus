@@ -20,7 +20,10 @@ const execFileAsync = promisify(execFile);
 const VERSION = '0.1.0';
 const HOME = homedir();
 const NEXUS_DIR = join(HOME, '.nexus');
+// Wizard writes config.json; older installs (and the legacy setup.yaml flow)
+// use config.yaml. Detection accepts either; writes always go to .json.
 const CONFIG_PATH = join(NEXUS_DIR, 'config.json');
+const CONFIG_PATH_YAML = join(NEXUS_DIR, 'config.yaml');
 const DB_PATH = join(NEXUS_DIR, 'memory.db');
 const REPO_DIR = join(HOME, 'nexus');
 const ENV_PATH = join(REPO_DIR, '.env');
@@ -534,7 +537,12 @@ function runStreamed(
 // ── Detection ────────────────────────────────────────────────────────
 
 export async function detectExistingInstall(): Promise<DetectionResult> {
-  const configExists = existsSync(CONFIG_PATH);
+  const jsonExists = existsSync(CONFIG_PATH);
+  const yamlExists = existsSync(CONFIG_PATH_YAML);
+  const configExists = jsonExists || yamlExists;
+  // Report whichever config file is actually on disk so the UI can tell
+  // the user exactly where it lives.
+  const configPath = jsonExists ? CONFIG_PATH : yamlExists ? CONFIG_PATH_YAML : CONFIG_PATH;
   const repoExists = existsSync(join(REPO_DIR, 'package.json'));
   const serviceRegistered = existsSync(NEXUS_PLIST);
   const menubarRegistered = existsSync(MENUBAR_PLIST);
@@ -557,11 +565,14 @@ export async function detectExistingInstall(): Promise<DetectionResult> {
     serviceRegistered,
     serviceRunning,
     menubarRegistered,
-    configPath: CONFIG_PATH,
+    configPath,
     repoPath: REPO_DIR,
   };
 
-  if (configExists) {
+  // Prefill from config.json only — we don't ship a YAML parser and legacy
+  // users will retype their personality/agents. Services + .env probing
+  // below still work for YAML-only installs, so they get prefilled keys.
+  if (jsonExists) {
     try {
       const parsed = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
       if (typeof parsed?.version === 'string') result.version = parsed.version;
