@@ -48,7 +48,7 @@ import { SelfEvaluator } from '../brain/self-evaluator.js';
 import { loadSkills, buildSkillsPrompt, selectRelevantSkills } from '../brain/skills.js';
 import type { Skill } from '../brain/skills.js';
 import { contextCache } from './context-cache.js';
-import { checkContextUsage, aggressiveCompact } from './context-guard.js';
+import { checkContextUsage, aggressiveCompact, safeCutEnd } from './context-guard.js';
 import { repairToolResult } from './transcript-repair.js';
 import { events } from './events.js';
 import { traced, newTraceId, setTraceAttrs } from './trace.js';
@@ -1806,8 +1806,13 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
     if (messages.length < 6) return;
 
     // Keep system prompt (index 0 if present) and last 4 messages; summarize middle
-    const keepEnd = Math.max(1, messages.length - 4);
+    const rawKeepEnd = Math.max(1, messages.length - 4);
     const keepStart = messages[0]?.role === 'system' ? 1 : 0;
+    // safeCutEnd shifts keepEnd left so we never split between an
+    // assistant(tool_calls) message and its tool_result followups. Without
+    // this, Anthropic returns 400 "tool_use_id in tool_result blocks has no
+    // corresponding tool_use" on the next call.
+    const keepEnd = safeCutEnd(messages, rawKeepEnd, keepStart);
     const middle = messages.slice(keepStart, keepEnd);
 
     if (middle.length === 0) return;
@@ -1870,7 +1875,9 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
     // Keep: the first user message + last 6 messages. Summarize the middle.
     // Drop any messages BEFORE the first user message (system prompts, orphaned assistant msgs)
     // so they don't grow unbounded.
-    const keepEnd = Math.max(firstUserIdx + 1, messages.length - 6);
+    const rawKeepEnd = Math.max(firstUserIdx + 1, messages.length - 6);
+    // Respect tool_use/tool_result boundaries — see safeCutEnd docstring.
+    const keepEnd = safeCutEnd(messages, rawKeepEnd, firstUserIdx + 1);
     const middleMessages = messages.slice(firstUserIdx + 1, keepEnd);
     if (middleMessages.length === 0) return messages;
 

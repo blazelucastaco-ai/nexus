@@ -79,6 +79,43 @@ export function checkContextUsage(
 }
 
 /**
+ * Shift a cut point left until splitting at that index cannot orphan a
+ * tool_use/tool_result pair.
+ *
+ * Semantics: `messages.slice(keepStart, cutEnd)` is the region that callers
+ * will drop/summarize; `messages.slice(cutEnd)` is the region they keep.
+ *
+ * A split is "unsafe" if either:
+ *   - the kept tail starts with a `role:'tool'` message whose matching
+ *     assistant(tool_calls) is inside the dropped region, OR
+ *   - the dropped region ends with an assistant(tool_calls) whose
+ *     tool results are at the head of the kept tail.
+ *
+ * Both forms produce an orphan tool_result once converted to Anthropic's
+ * API shape, which returns HTTP 400. This helper shifts cutEnd left until
+ * neither condition holds, returning keepStart in the worst case (meaning
+ * there is nothing safe to compact — callers should treat that as a no-op).
+ */
+export function safeCutEnd(messages: AIMessage[], cutEnd: number, keepStart = 0): number {
+  let adjusted = Math.min(cutEnd, messages.length);
+  while (adjusted > keepStart) {
+    const tailHead = messages[adjusted];
+    const middleTail = messages[adjusted - 1];
+    const tailStartsWithTool = tailHead?.role === 'tool';
+    const middleEndsWithToolUse =
+      middleTail?.role === 'assistant' &&
+      Array.isArray(middleTail.tool_calls) &&
+      middleTail.tool_calls.length > 0;
+    if (tailStartsWithTool || middleEndsWithToolUse) {
+      adjusted--;
+      continue;
+    }
+    break;
+  }
+  return adjusted;
+}
+
+/**
  * Aggressively prune messages to reduce context size.
  * Strategy: compress tool results first (keep only summaries), then drop oldest.
  * Preserves tool call/result pairs to avoid orphaned messages.
