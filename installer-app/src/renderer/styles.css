@@ -567,7 +567,16 @@ h1.step-title em { font-style: italic; color: var(--t); }
 /* ─────────────────────────────────────────────
    MAIN-APP STYLES (dashboard / logs / etc)
 ───────────────────────────────────────────── */
-.nav-item { cursor: pointer; width: 100%; text-align: left; }
+.nav-item { cursor: pointer; width: 100%; text-align: left; position: relative; }
+.nav-badge {
+  margin-left: auto;
+  background: var(--t); color: #fff;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px; font-weight: 600;
+  min-width: 16px; height: 16px; border-radius: var(--r99);
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0 5px;
+}
 .nav-item:hover:not(.active) { color: var(--ink); background: rgba(196, 101, 74, 0.04); }
 .nav-item.active .step-dot {
   background: var(--t); border-color: var(--t); color: #fff;

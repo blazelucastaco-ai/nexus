@@ -511,11 +511,20 @@ export async function checkChrome(): Promise<ChromeStatus> {
   return { installed: false, appPath: null, appLabel: null, extensionConnected: false };
 }
 
+const CHROME_LABEL_ALLOWLIST = new Set(['Google Chrome', 'Chromium', 'Brave Browser']);
+
 export async function openChromeExtensions(appLabel: string): Promise<void> {
+  // Only accept known-good Chromium-family app names. Anything else
+  // could let a compromised renderer pass an AppleScript payload into
+  // osascript via string templating.
+  if (!CHROME_LABEL_ALLOWLIST.has(appLabel)) {
+    throw new Error(`Refusing to open unknown app: ${appLabel}`);
+  }
+  const escaped = appLabel.replace(/"/g, '\\"');
   const script =
-    `tell application "${appLabel}" to activate\n` +
+    `tell application "${escaped}" to activate\n` +
     'delay 0.8\n' +
-    `tell application "${appLabel}" to open location "chrome://extensions"`;
+    `tell application "${escaped}" to open location "chrome://extensions"`;
   try {
     await execFileAsync('osascript', ['-e', script]);
   } catch {
@@ -976,6 +985,8 @@ export async function runUpdate(onProgress: UpdateProgressCb): Promise<void> {
 
 // ── Memory browser (read-only) ───────────────────────────────────────
 
+const MEMORY_TYPE_ENUM = new Set(['episodic', 'semantic', 'procedural']);
+
 export async function listMemories(opts: {
   limit?: number;
   type?: string;
@@ -985,12 +996,22 @@ export async function listMemories(opts: {
   if (!existsSync(bsqlPath)) return [];
   const nodeBin = (await resolveBinary('node')) ?? 'node';
   const limit = Math.max(1, Math.min(opts.limit ?? 100, 500));
-  const typeFilter = opts.type ? `AND type = '${opts.type.replace(/'/g, "''")}'` : '';
+  // Clamp type to the known enum. If the caller sent anything else,
+  // silently ignore the filter — never inject arbitrary strings into SQL.
+  const safeType = opts.type && MEMORY_TYPE_ENUM.has(opts.type) ? opts.type : null;
+  // Pass the type + limit as a JSON arg to the child process so they flow
+  // into the query via prepared-statement bindings, not string templating.
+  const payload = JSON.stringify({ type: safeType, limit });
   const script = `
-    const Database = require('${bsqlPath}');
-    const db = new Database('${DB_PATH}', { readonly: true });
+    const Database = require(${JSON.stringify(bsqlPath)});
+    const args = JSON.parse(process.env.__NEXUS_ARGS__ || '{}');
+    const db = new Database(${JSON.stringify(DB_PATH)}, { readonly: true });
     try {
-      const rows = db.prepare("SELECT id, type, content, importance, created_at FROM memories WHERE 1=1 ${typeFilter} ORDER BY created_at DESC LIMIT ${limit}").all();
+      const sql = args.type
+        ? 'SELECT id, type, content, importance, created_at FROM memories WHERE type = ? ORDER BY created_at DESC LIMIT ?'
+        : 'SELECT id, type, content, importance, created_at FROM memories ORDER BY created_at DESC LIMIT ?';
+      const params = args.type ? [args.type, args.limit] : [args.limit];
+      const rows = db.prepare(sql).all(...params);
       console.log(JSON.stringify(rows));
     } catch (e) {
       console.log('[]');
@@ -999,7 +1020,11 @@ export async function listMemories(opts: {
     }
   `;
   try {
-    const { stdout } = await execFileAsync(nodeBin, ['-e', script], { timeout: 5000, maxBuffer: 10 * 1024 * 1024 });
+    const { stdout } = await execFileAsync(nodeBin, ['-e', script], {
+      timeout: 5000,
+      maxBuffer: 10 * 1024 * 1024,
+      env: { ...process.env, __NEXUS_ARGS__: payload },
+    });
     const raw = JSON.parse(stdout) as Array<{ id: string; type: string; content: string; importance: number; created_at: string }>;
     return raw.map((r) => ({
       id: r.id,

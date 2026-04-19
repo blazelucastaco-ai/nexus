@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, shell, Tray } from 'electron';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import {
@@ -33,6 +33,72 @@ const isDev = process.env.NEXUS_INSTALLER_DEV === '1';
 const isMenubarMode = process.argv.includes('--menubar');
 const initialRoute = process.argv.find((a) => a.startsWith('--route='))?.slice('--route='.length);
 
+/**
+ * URL allowlist for shell.openExternal + navigation handlers. Blocks
+ * `javascript:`, `file:`, `data:`, and any custom protocol that could
+ * trigger arbitrary app launches via URL handlers. Only obvious safe
+ * schemes are let through.
+ */
+const AGENT_ID_ALLOWLIST = new Set([
+  'vision', 'file', 'browser', 'terminal', 'code', 'research', 'system', 'creative', 'comms', 'scheduler',
+]);
+const PRESET_ALLOWLIST = new Set(['professional', 'friendly', 'sarcastic_genius', 'custom']);
+
+/**
+ * Validate a ConfigInput payload from the renderer before letting it touch
+ * disk. Rejects anything malformed. This is defense-in-depth — contextIsolation
+ * already prevents the web page from directly calling Node, but a compromised
+ * renderer could still send junk via the exposed IPC bridge.
+ */
+function validateConfigInput(x: unknown): ConfigInput {
+  if (!x || typeof x !== 'object') throw new Error('Invalid config: not an object');
+  const c = x as Partial<ConfigInput>;
+
+  // Telegram
+  if (!c.telegram || typeof c.telegram !== 'object') throw new Error('Invalid config: telegram');
+  if (typeof c.telegram.botToken !== 'string' || c.telegram.botToken.length > 1024) throw new Error('Invalid bot token');
+  if (!/^\d+:[A-Za-z0-9_-]+$/.test(c.telegram.botToken)) throw new Error('Bot token format');
+  if (typeof c.telegram.chatId !== 'string' || !/^-?\d{1,32}$/.test(c.telegram.chatId)) throw new Error('Chat ID format');
+
+  // Anthropic key
+  if (typeof c.anthropicKey !== 'string') throw new Error('Invalid anthropic key');
+  if (!c.anthropicKey.startsWith('sk-ant-') || c.anthropicKey.length > 512) throw new Error('Anthropic key format');
+
+  // Agents
+  if (!Array.isArray(c.agents) || c.agents.length > 16) throw new Error('Invalid agents');
+  for (const a of c.agents) {
+    if (typeof a !== 'string' || !AGENT_ID_ALLOWLIST.has(a)) throw new Error(`Unknown agent: ${a}`);
+  }
+
+  // Personality
+  if (!c.personality || typeof c.personality !== 'object') throw new Error('Invalid personality');
+  if (!PRESET_ALLOWLIST.has(c.personality.preset)) throw new Error('Unknown preset');
+  const t = c.personality.traits;
+  if (!t || typeof t !== 'object') throw new Error('Invalid traits');
+  for (const k of ['humor', 'sarcasm', 'formality', 'assertiveness', 'verbosity', 'empathy'] as const) {
+    const v = (t as Record<string, unknown>)[k];
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1) {
+      throw new Error(`Invalid trait ${k}`);
+    }
+  }
+
+  return c as ConfigInput;
+}
+
+function isSafeExternalUrl(url: string): boolean {
+  if (typeof url !== 'string' || url.length > 2048) return false;
+  try {
+    const u = new URL(url);
+    // macOS System Settings deep-links are how we open permission panes.
+    if (u.protocol === 'x-apple.systempreferences:') return true;
+    if (u.protocol === 'https:' || u.protocol === 'http:') return true;
+    if (u.protocol === 'mailto:') return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 let wizardWindow: BrowserWindow | null = null;
 let dashboardWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -62,7 +128,10 @@ function createWizardWindow(_route?: 'wizard' | 'dashboard'): void {
       preload: join(__dirname, '..', 'preload', 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      devTools: !app.isPackaged,
     },
   });
   wizardWindow.once('ready-to-show', () => wizardWindow?.show());
@@ -77,8 +146,15 @@ function createWizardWindow(_route?: 'wizard' | 'dashboard'): void {
     void wizardWindow.loadFile(join(__dirname, '..', 'renderer', 'index.html'));
   }
   wizardWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    if (isSafeExternalUrl(url)) void shell.openExternal(url);
     return { action: 'deny' };
+  });
+  wizardWindow.webContents.on('will-navigate', (e, url) => {
+    // Only allow navigating within the loaded file:// + dev server.
+    if (!url.startsWith('file://') && !url.startsWith('http://127.0.0.1:5173')) {
+      e.preventDefault();
+      if (isSafeExternalUrl(url)) void shell.openExternal(url);
+    }
   });
   wizardWindow.on('closed', () => {
     wizardWindow = null;
@@ -105,7 +181,10 @@ function createDashboardWindow(): void {
       preload: join(__dirname, '..', 'preload', 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      devTools: !app.isPackaged,
     },
   });
   dashboardWindow.once('ready-to-show', () => dashboardWindow?.show());
@@ -127,8 +206,14 @@ function createDashboardWindow(): void {
     });
   }
   dashboardWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    if (isSafeExternalUrl(url)) void shell.openExternal(url);
     return { action: 'deny' };
+  });
+  dashboardWindow.webContents.on('will-navigate', (e, url) => {
+    if (!url.startsWith('file://') && !url.startsWith('http://127.0.0.1:5173')) {
+      e.preventDefault();
+      if (isSafeExternalUrl(url)) void shell.openExternal(url);
+    }
   });
   dashboardWindow.on('closed', () => {
     dashboardWindow = null;
@@ -155,6 +240,10 @@ function makeTrayIcon(_active: boolean): Electron.NativeImage {
   return img;
 }
 
+// Remembers the last running state so we only fire a notification on
+// transition (not every 3s poll).
+let lastServiceRunning: boolean | null = null;
+
 async function rebuildTrayMenu(): Promise<void> {
   if (!tray) return;
   const status = await getServiceStatus().catch(
@@ -166,6 +255,24 @@ async function rebuildTrayMenu(): Promise<void> {
         pid: undefined,
       }) as Awaited<ReturnType<typeof getServiceStatus>>,
   );
+
+  // Fire a native notification on running → stopped transition. Skip the
+  // initial read (lastServiceRunning === null) to avoid a ghost notification
+  // on app boot.
+  if (lastServiceRunning === true && status.running === false && status.registered) {
+    try {
+      if (Notification.isSupported()) {
+        new Notification({
+          title: 'NEXUS stopped',
+          body: 'The background service is no longer running. Open the dashboard to investigate.',
+          silent: false,
+        }).show();
+      }
+    } catch {
+      /* ignore — notifications are best-effort */
+    }
+  }
+  lastServiceRunning = status.running;
 
   tray.setImage(makeTrayIcon(status.running));
   tray.setToolTip(`NEXUS · ${status.running ? 'Running' : status.registered ? 'Stopped' : 'Not installed'}`);
@@ -264,12 +371,18 @@ app.whenReady().then(() => {
   ipcMain.handle('system:checks', async () => runSystemChecks());
   ipcMain.handle('repo:status', async () => checkRepo());
   ipcMain.handle('permissions:check', async () => checkPermissions());
-  ipcMain.handle('permissions:open', async (_e, url: string) => openPrefs(url));
+  ipcMain.handle('permissions:open', async (_e, url: string) => {
+    if (!isSafeExternalUrl(url)) throw new Error('URL rejected by allowlist');
+    return openPrefs(url);
+  });
   ipcMain.handle('chrome:check', async () => checkChrome());
   ipcMain.handle('chrome:open-extensions', async (_e, label: string) => openChromeExtensions(label));
   ipcMain.handle('chrome:extension-path', async () => getExtensionPath());
   ipcMain.handle('chrome:test-connection', async () => testExtensionConnection());
-  ipcMain.handle('external:open', async (_e, url: string) => shell.openExternal(url));
+  ipcMain.handle('external:open', async (_e, url: string) => {
+    if (!isSafeExternalUrl(url)) throw new Error('URL rejected by allowlist');
+    return shell.openExternal(url);
+  });
 
   ipcMain.handle('detect:existing', async () => detectExistingInstall());
   ipcMain.handle('detect:uninstall', async (_e, options: { removeRepo: boolean }) => {
@@ -277,9 +390,10 @@ app.whenReady().then(() => {
     return { ok: true };
   });
 
-  ipcMain.handle('install:run', async (event, input: ConfigInput) => {
+  ipcMain.handle('install:run', async (event, rawInput: unknown) => {
     const send = (p: InstallProgress): void => { event.sender.send('install:progress', p); };
     try {
+      const input = validateConfigInput(rawInput);
       await runInstall(input, send);
       const appBin = app.getPath('exe');
       await registerMenubarAgent(appBin);
@@ -289,9 +403,10 @@ app.whenReady().then(() => {
     }
   });
 
-  ipcMain.handle('install:reconfigure', async (event, input: ConfigInput) => {
+  ipcMain.handle('install:reconfigure', async (event, rawInput: unknown) => {
     const send = (p: InstallProgress): void => { event.sender.send('install:progress', p); };
     try {
+      const input = validateConfigInput(rawInput);
       await reconfigure(input, send);
       return { ok: true };
     } catch (err) {

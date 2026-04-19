@@ -21,6 +21,23 @@ const TABS: Array<{ key: MainTab; label: string; icon: string }> = [
 
 export function MainApp(): JSX.Element {
   const [tab, setTab] = useState<MainTab>('dashboard');
+  const [commitsBehind, setCommitsBehind] = useState(0);
+
+  // Kick an update check on mount + every 30 minutes. If we're behind
+  // upstream, show a red dot on the Updates nav item so the user notices.
+  useEffect(() => {
+    const check = async (): Promise<void> => {
+      try {
+        const r = await window.nexus.main.updatesCheck();
+        setCommitsBehind(r.commitsBehind);
+      } catch {
+        /* offline or no repo — silently skip */
+      }
+    };
+    void check();
+    const id = setInterval(() => void check(), 30 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <div className="shell">
@@ -39,6 +56,11 @@ export function MainApp(): JSX.Element {
             >
               <div className="step-dot">{t.icon}</div>
               <span>{t.label}</span>
+              {t.key === 'updates' && commitsBehind > 0 && (
+                <span className="nav-badge" title={`${commitsBehind} commit${commitsBehind === 1 ? '' : 's'} behind`}>
+                  {commitsBehind > 9 ? '9+' : commitsBehind}
+                </span>
+              )}
             </button>
           ))}
         </div>
