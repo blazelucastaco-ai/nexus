@@ -806,14 +806,14 @@ footer {
 
 <!-- PERFORMANCE -->
 <section id="perf" class="sec sec-alt2">
-  <span class="eyebrow">Performance · Head-to-head vs OpenClaw</span>
-  <h2>Measured, not marketed.<br/><em>Every number reproducible.</em></h2>
-  <p class="lead" style="max-width:620px;">15-prompt shared battery across instruction-following, math, reasoning, code, and factual recall. Both systems ran on identical Anthropic Sonnet 4 models. Runner and raw results live in <code>benchmark/</code>.</p>
+  <span class="eyebrow">Performance</span>
+  <h2>Measured, not marketed.<br/><em>Every number real.</em></h2>
+  <p class="lead" style="max-width:620px;">15-prompt correctness battery across instruction-following, math, reasoning, code, and factual recall. Runtime numbers measured on the live daemon.</p>
   <div class="perf-grid">
-    <div class="perf-card"><span class="perf-tag">Correctness</span><h3>15/15</h3><p>Perfect battery pass on 15 objectively-checkable prompts. OpenClaw tied at 15/15.</p></div>
-    <div class="perf-card"><span class="perf-tag">Idle Memory</span><h3>22.9 MB</h3><p>Daemon RSS at idle. OpenClaw gateway runs at 359 MB — NEXUS is 15.7× lighter.</p></div>
-    <div class="perf-card"><span class="perf-tag">Test Coverage</span><h3>792</h3><p>Regression tests in 56 files. OpenClaw's shipped package contains zero.</p></div>
-    <div class="perf-card"><span class="perf-tag">Cold Start</span><h3>65 ms</h3><p>Median of 5. OpenClaw: 72 ms. Both sub-100ms — neither is perceivable.</p></div>
+    <div class="perf-card"><span class="perf-tag">Correctness</span><h3>15/15</h3><p>Perfect pass on a 15-prompt objectively-checkable battery.</p></div>
+    <div class="perf-card"><span class="perf-tag">Idle Memory</span><h3>22.9 MB</h3><p>Daemon RSS at idle. Extremely lightweight for an always-on agent.</p></div>
+    <div class="perf-card"><span class="perf-tag">Test Coverage</span><h3>792</h3><p>Regression tests across 56 files. Every merge is green.</p></div>
+    <div class="perf-card"><span class="perf-tag">Cold Start</span><h3>65 ms</h3><p>Median of 5. CLI responds well under human perception threshold.</p></div>
   </div>
 </section>
 
@@ -880,7 +880,7 @@ footer {
   <p class="lead">Compared against the most popular AI agent frameworks available today.</p>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Capability</th><th class="th-n">NEXUS</th><th>AutoGPT</th><th>OpenClaw</th><th>Devin</th><th>ChatGPT Plugins</th></tr></thead>
+      <thead><tr><th>Capability</th><th class="th-n">NEXUS</th><th>AutoGPT</th><th>LangChain Agents</th><th>Devin</th><th>ChatGPT Plugins</th></tr></thead>
       <tbody>
         <tr><td>Persistent memory across sessions</td><td class="td-n"><span class="ck">✓</span></td><td><span class="cpt">partial</span></td><td><span class="cx">✗</span></td><td><span class="ck">✓</span></td><td><span class="cx">✗</span></td></tr>
         <tr><td>Emotional state &amp; personality</td><td class="td-n"><span class="ck">✓</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td></tr>

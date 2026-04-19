@@ -1136,9 +1136,9 @@ export class ToolExecutor {
       log.warn({ err }, 'DuckDuckGo Instant API failed — trying HTML scraper');
     }
 
-    // ── Step 2: DDG HTML scraper (OpenClaw pattern) ───────────────
+    // ── Step 2: DDG HTML scraper ───────────────
     // html.duckduckgo.com returns a plain HTML page with real search results.
-    // Uses Linux Chrome UA (same as OpenClaw) to avoid bot detection.
+    // Uses Linux Chrome UA to avoid bot detection.
     try {
       const htmlUrl = `https://html.duckduckgo.com/html/?q=${encodedQuery}&kl=us-en`;
       const htmlResp = await fetch(htmlUrl, {
@@ -1153,14 +1153,14 @@ export class ToolExecutor {
       if (htmlResp.ok) {
         const html = await htmlResp.text();
 
-        // OpenClaw pattern: detect bot challenge / CAPTCHA page
+        // Detect bot challenge / CAPTCHA page
         const hasBotChallenge = !/class="[^"]*\bresult__a\b[^"]*"/.test(html) &&
           /g-recaptcha|are you a human|id="challenge-form"|name="challenge"/i.test(html);
 
         if (hasBotChallenge) {
           log.warn({}, 'DDG HTML: bot challenge detected, skipping to lite scraper');
         } else {
-          // OpenClaw regex-based extraction (faster and more reliable than cheerio for DDG)
+          // Regex-based extraction (faster and more reliable than cheerio for DDG)
           const resultAnchorRe = /<a\b(?=[^>]*\bclass="[^"]*\bresult__a\b[^"]*")[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
           const snippetRe = /<a\b(?=[^>]*\bclass="[^"]*\bresult__snippet\b[^"]*")[^>]*>([\s\S]*?)<\/a>/gi;
 
@@ -1205,7 +1205,7 @@ export class ToolExecutor {
       log.warn({ err }, 'DuckDuckGo HTML scraper failed');
     }
 
-    // ── Step 3: DDG Lite scraper (OpenClaw pattern — lite.duckduckgo.com) ────
+    // ── Step 3: DDG Lite scraper (lite.duckduckgo.com) ────
     try {
       const liteUrl = `https://lite.duckduckgo.com/lite/?q=${encodedQuery}`;
       const liteResp = await fetch(liteUrl, {

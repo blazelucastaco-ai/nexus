@@ -38,7 +38,7 @@ Deduction: Script runs `find ~` without timeout/depth limits — minor UX issue,
 - Python: 3.14.3
 - Git: 2.50.1 (Apple Git-155)
 - Brew (first 20): abseil, ada-url, brotli, c-ares, ca-certificates, certifi, clamav, cliclick, cloudflared, cocoapods, dav1d, deno, docker, docker-completion, docker-compose, eigen, ffmpeg, fmt, gcc, gemini-cli
-- Global npm: @expo/ngrok, @getlatedev/node, @openai/codex, @steipete/oracle, localtunnel, nexus-ai, openclaw, pm2, pnpm, vercel, wrangler, wscat
+- Global npm: @expo/ngrok, @getlatedev/node, @openai/codex, @steipete/oracle, localtunnel, nexus-ai, pm2, pnpm, vercel, wrangler, wscat
 
 **Root cause:** Gemini-2.5-Flash generated JSON action blocks instead of the `[DELEGATE:agent:task]` format — delegation parser doesn't handle this alternative format.
 

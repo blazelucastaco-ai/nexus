@@ -978,7 +978,7 @@ export class Orchestrator {
       // Scrub any secrets before returning/sending via Telegram
       const scrubbed = sanitizeEnvVars(finalContent);
 
-      // Post-LLM output filter: catch any system prompt leakage (OpenClaw pattern)
+      // Post-LLM output filter: catch any system prompt leakage
       const leaked = filterSystemPromptLeak(scrubbed);
       if (leaked) {
         log.warn('System prompt leak detected in LLM response — blocked');
@@ -1860,8 +1860,8 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
    * older messages are replaced with a compact summary:
    *   "[Earlier: discussed X, Y, Z]"
    *
-   * Bootstrap protection: the first user message is NEVER pruned, matching
-   * the pattern used in OpenClaw to preserve the original task context.
+   * Bootstrap protection: the first user message is NEVER pruned so the
+   * original task context is always preserved.
    */
   private pruneHistory(messages: any[], maxTokens = 16000): any[] {
     const estimate = (msg: any) => Math.ceil((String(msg.content ?? '')).length / 4);

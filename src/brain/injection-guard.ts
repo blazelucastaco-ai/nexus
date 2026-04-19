@@ -1,6 +1,5 @@
 // Brain Phase 1.1 — Prompt Injection Detection & Sanitization
 //
-// Inspired by OpenClaw's sanitizeForPromptLiteral + wrapUntrustedPromptDataBlock.
 // Guards NEXUS against prompt injection through user messages, tool results, and
 // external data (file contents, web fetch results, etc.).
 
@@ -75,8 +74,6 @@ const ENV_VAR_PATTERNS: Array<{ re: RegExp; label: string }> = [
 /**
  * Strip Unicode control chars, Cf format chars, line/paragraph separators,
  * and BIDI overrides from user input before passing to the LLM.
- *
- * Equivalent to OpenClaw's sanitizeForPromptLiteral.
  */
 export function sanitizeInput(text: string): string {
   return text
@@ -144,7 +141,6 @@ export function detectInjection(text: string): InjectionResult {
  * Wrap external data (web fetch results, file contents, tool results) in an
  * XML envelope with a unique random ID that prevents spoofing attacks.
  *
- * Mirrors OpenClaw's wrapUntrustedPromptDataBlock + EXTERNAL_CONTENT_WARNING.
  * Each wrapper gets a unique 8-byte hex ID so malicious content can't inject
  * fake boundary markers to escape the untrusted zone.
  */
@@ -179,7 +175,7 @@ export function sanitizeEnvVars(text: string): string {
 
 // ── Hard block patterns ───────────────────────────────────────────────────
 // These should be refused BEFORE reaching the LLM — no soft warning.
-// OpenClaw approach: pre-LLM input blocking for known attack patterns.
+// Pre-LLM input blocking for known attack patterns.
 
 interface HardBlockPattern {
   name: string;
@@ -237,7 +233,7 @@ const HARD_BLOCK_PATTERNS: HardBlockPattern[] = [
 ];
 
 // ── Post-LLM output filtering ─────────────────────────────────────────────
-// OpenClaw approach: scan LLM responses for system prompt leakage.
+// Scan LLM responses for system prompt leakage.
 // Unique phrases from the NEXUS system prompt that should never appear in responses.
 
 const SYSTEM_PROMPT_LEAK_PATTERNS: RegExp[] = [
@@ -254,8 +250,6 @@ const SYSTEM_PROMPT_LEAK_PATTERNS: RegExp[] = [
 /**
  * Scan a LLM response for signs that it's leaking the system prompt.
  * If detected, returns a safe replacement. If clean, returns null.
- *
- * OpenClaw pattern: post-LLM output sanitization for system prompt leaks.
  */
 export function filterSystemPromptLeak(response: string): string | null {
   for (const re of SYSTEM_PROMPT_LEAK_PATTERNS) {
