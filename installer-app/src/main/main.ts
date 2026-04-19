@@ -224,19 +224,26 @@ function createDashboardWindow(): void {
 // MENUBAR MODE
 // ─────────────────────────────────────────────────────────────────────
 
-const TRAY_ICON_16 =
-  'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAEKADAAQAAAABAAAAEAAAAAA0VXHyAAABoElEQVQ4Ed2QSyhEYRiG3/+cOf/MMJy5YYbEkDIpCxMWFFIuUZRbs7K0UuwsKYWFLCxsZceOsrAgERsLSooF0bhlFMY5DOfmH7cMjT3f5vt7v/d7+r8X+PNFEl1w3+FJ4x3OPKGozKFtrx1eTB+FfED0u/8HQB6oCwheb79hT68lAvUIdhc0OSLpD9Lu4+LskDgXWvoKiQNIvWVBS2X9FO/NEXXpHjrHAYRDzMSbOOi3N7KyOt9qntxaZpoRAzHHW8l9Aa/gLxnj7W5RZbJOLbGtV4DB3mqSCM6Wmgx/YPy2GuLH3ieAPGs+ml+YrdkcgK4DAoXBOnG4ATODqQpUsxU0K6eYltdU/QRcHp9FdzbW+fApePkOxJoMzuVhH2UQlgNxpoNYbCAKyzF8zqhvFZdBCLDaG6yNtKV7mJZU+CGzHCIRqJLEQAaoiUf0ZP9Q2VxpSl24Pogh4gDvUDw0I8tU3tKpnJ+kcc6MIC+6crlMn6ZehfaeFmbaJlZxNMgO/fD/2p9HukqfRrsOlHZXbdiNlF/NiYZ3Pf6CRLN/oL8APG+Cr3lk5owAAAAASUVORK5CYII=';
-const TRAY_ICON_32 =
-  'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAIKADAAQAAAABAAAAIAAAAACshmLzAAAFK0lEQVRYCe2VWWxUVRjH/+cus3RmOoUy3feNMrSFQoGaYtlBVNxKEYQHkyqasCQ+SjD2wfBCTIwG44OixgdIFIlUCCJCpWpZ7FQoZavSQhfazkw7a2fmbsfTiZERplI0Jj70S25ycu853/c/v2+5wJRNEZgi8C8JUEA4zZ5/6oZM5iBtBAfHDJP3jsvGi0gQSguruJTsx2SPWxPsVeVi0gwtcvbkMfR0XqIa8e49Hjn+ZiPz3AjKAjCNE9ukBDgBi3mDrZ5buHI7l1FQJnAQ4RsFRB2wcQfQ3ARcvQDUPA7qHZGk9pbvI6cO7yZJVo9lyHWTNEOZSMKEAmi9zUw+dwb8L5VuNSxe+xpEYzEf8PBqvh3K5XPQ171C5QvNhEucBrX7CrjMAhC2ht8LQRkDE/CL0nfzM9OhkfdYEHkiAXy8D90v5hl0fk/prurcTYaKRe8K2cU2zZDA0bxZLNsC6PAASGoW0a78DO3WDeie2AKSYILyw1EQ63SoAT90aTlpuqXr1gQT+k172oZPxIsz/o6L9yH/k54wbFmPJCxe8zYpmkNoyRzKAkK73g6ExwBrMjhbOojBCN36raBBH+SvPoa4djP4uTXgZ82DWlAGmlYIIbtoa3AJFnjrs6bHixVXgGc5CvlZla9rhIcmSZBbTxIaCoIrrgA/s5IFToB6xRHFDp0RytlvoW/YxfCPQmH1QFkatIFb0BQZuprVZi0nd6+g+gqjxXyPirgCxKraN/RlCzLlgA8wJ4Fk5oO3z4fW+yuUS62gg7dAMvJAZQlaz3UgEobmvAPlYitIchqEhctAzBbIxw9C8flh3rBtiSaYckgjtHvix00B4Y2mcng80G/cBpI0jd3IA+nLj0BMVohrNkBYXge17QzUaw5oQ73Qb9pOufRsCNWrwM9ZBOpxQ73qgLCICUnJAFVV8NlFOztng7XNXy3eAKHaqLMTFdXzlPYfo/nlslguVz7LbngW0oF9oL4R5nwFxFV1UW/aWIAobS2AFAFUBXR0GOLKOvCllZAO7gNJywaXN7Mmx9ZSwg5cjpVwn4BwXWqBGvB24dQX4ArmgqtdB7WrA9Lh/dEA4pNbougpmwNqx3lGoC/aGVxOMYT5j4KOp40VKmXPeHAutwRqfze4gd94ahSsuGck3CdgjJPculHnkbGWY6niUG8D73MbBI8LYfcg9C/vjqZD/u4w+AJ7tO911SsYJT801yDUdlYDmblQO9sA1hnC/FqAZ53e0QrJOdQrGs1MrScWACYcROO7Qk8ZajmDpUEO+jLFpxuWi6s3E/nMEfCzq8CXLYBy7hToyBBoKAQuPZeR0LE5kMRqYJSJCoJYrGzthBjyotjw/6DFtWKBH9YfZtj+7dnhO3OIe/PsBawDgoMvmpD4K5BqtRbzfzmdiJzaORp5rB0KoAhmNRnAF9/lKjCBeMxKFJWl1lvaaJxLDbIhyBN1CV6nvRzEYvhZF7qHHstmSiE6zSofYdmbDjwGNbIIB+Pjz3UOcHwbvzJt/1AQzd/7kEXUyvp5/g3Ty5LUBf8z+u1EALnnpOT4jB7+IiTqmp67EjjYx6sezUDuuLhQzg10wb7dMq44BCmeCD0Z5ndx1ifMenybn3w03/K/J3l43fKzgfAAAAAElFTkSuQmCC';
+// 22x22 + 44x44 @2x NEXUS "N" glyph (monochrome). We use setTemplateImage so
+// macOS inverts based on menu bar appearance — bigger + crisper than the
+// previous 16x16 scaled-down color logo.
+const TRAY_ICON_22 =
+  'iVBORw0KGgoAAAANSUhEUgAAABYAAAAWCAYAAADEtGw7AAAAZklEQVR4nNXUQQoAIQxD0f65/511Kwy0TSULsxKsj5KFEa+F47ySuyq/t58wLCWDr/AKDie8XPAIz2Bu8GpjpninCiZ4t2OaczIc6tYKjIKrG9PFJ1XQwacd4/wrcMHhhHHBKW7JBgy8DSblzxQFAAAAAElFTkSuQmCC';
+const TRAY_ICON_44 =
+  'iVBORw0KGgoAAAANSUhEUgAAACwAAAAsCAYAAAAehFoBAAAAs0lEQVR4nO2YwQ3DMAwDSe6/M7tAH20iy6LhewaRchAowDFwuWTDL8/85/tV+JfvqrBpC3pQ4zRhJAobgRM2AiNhBGbYCFw6Y6gwsRkV9vJUYe6U1sO6bdJ6UbtFWi/r26VV0IMnHX48VbgtGirs1SIt1LJcWqhnqbSwBp70i+SpwkuisXrCrJbuiAQrpbsyzCrpzqXjSRcpnirMxAkzMRJMzDATl45pwkgUZprwiCuwSywfqUIZSjTBfFcAAAAASUVORK5CYII=';
 
 function makeTrayIcon(_active: boolean): Electron.NativeImage {
-  const img = nativeImage.createFromBuffer(Buffer.from(TRAY_ICON_16, 'base64'));
+  const img = nativeImage.createFromBuffer(Buffer.from(TRAY_ICON_22, 'base64'));
   img.addRepresentation({
     scaleFactor: 2,
-    width: 32,
-    height: 32,
-    buffer: Buffer.from(TRAY_ICON_32, 'base64'),
+    width: 44,
+    height: 44,
+    buffer: Buffer.from(TRAY_ICON_44, 'base64'),
   });
+  // Template images render in the current menu bar accent color (black on
+  // light mode, white on dark). Way more prominent than the muddy scaled-
+  // down logo we had before.
+  img.setTemplateImage(true);
   return img;
 }
 
