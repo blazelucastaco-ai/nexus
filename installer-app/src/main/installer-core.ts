@@ -789,3 +789,252 @@ export async function reconfigure(input: ConfigInput, onProgress: ProgressCb): P
   }
   onProgress({ phase: 'done', label: 'Config updated.', pct: 100 });
 }
+
+// ═════════════════════════════════════════════════════════════════════
+// MAIN-APP FUNCTIONS (post-install management UI)
+// ═════════════════════════════════════════════════════════════════════
+
+const LOG_PATH = join(NEXUS_DIR, 'nexus.log');
+
+// ── Dashboard ────────────────────────────────────────────────────────
+
+export async function getDashboardState(): Promise<import('../shared/types').DashboardState> {
+  const service = await getServiceStatus();
+  const configPath = existsSync(join(NEXUS_DIR, 'config.json')) ? join(NEXUS_DIR, 'config.json') : join(NEXUS_DIR, 'config.yaml');
+  let version: string | undefined;
+  try {
+    if (existsSync(configPath) && configPath.endsWith('.json')) {
+      const parsed = JSON.parse(readFileSync(configPath, 'utf-8'));
+      if (typeof parsed?.version === 'string') version = parsed.version;
+    }
+  } catch { /* ignore */ }
+
+  // Uptime: ps -o etimes for the service pid
+  let uptimeSeconds: number | undefined;
+  if (service.pid) {
+    try {
+      const { stdout } = await execFileAsync('ps', ['-p', String(service.pid), '-o', 'etimes=']);
+      const n = Number.parseInt(stdout.trim(), 10);
+      if (Number.isFinite(n)) uptimeSeconds = n;
+    } catch { /* ignore */ }
+  }
+
+  // Memory + session counts from the DB (best-effort; don't fail the dashboard if DB is missing or locked)
+  let memoryCount = 0;
+  let sessionCount = 0;
+  let lastMessageAt: string | undefined;
+  try {
+    const nodeBin = (await resolveBinary('node')) ?? 'node';
+    const bsqlPath = join(REPO_DIR, 'node_modules', 'better-sqlite3');
+    if (existsSync(DB_PATH) && existsSync(bsqlPath)) {
+      const script = `
+        const Database = require('${bsqlPath}');
+        const db = new Database('${DB_PATH}', { readonly: true });
+        let mem = 0, sess = 0, lastMsg = null;
+        try { mem = db.prepare('SELECT COUNT(*) AS c FROM memories').get().c; } catch {}
+        try { sess = db.prepare('SELECT COUNT(DISTINCT user_id) AS c FROM conversations').get().c; } catch {}
+        try { lastMsg = db.prepare('SELECT created_at FROM conversations ORDER BY created_at DESC LIMIT 1').get()?.created_at ?? null; } catch {}
+        db.close();
+        console.log(JSON.stringify({ mem, sess, lastMsg }));
+      `;
+      const { stdout } = await execFileAsync(nodeBin, ['-e', script], { timeout: 3000 });
+      const parsed = JSON.parse(stdout);
+      memoryCount = parsed.mem ?? 0;
+      sessionCount = parsed.sess ?? 0;
+      lastMessageAt = parsed.lastMsg ?? undefined;
+    }
+  } catch { /* ignore — stats are best-effort */ }
+
+  return {
+    service,
+    uptimeSeconds,
+    configPath,
+    logPath: LOG_PATH,
+    repoPath: REPO_DIR,
+    memoryCount,
+    version,
+    sessionCount,
+    lastMessageAt,
+  };
+}
+
+// ── Live log tail ────────────────────────────────────────────────────
+
+type LogLineCb = (line: string) => void;
+
+interface LogTail {
+  stop: () => void;
+}
+
+export function tailLog(onLine: LogLineCb): LogTail {
+  if (!existsSync(LOG_PATH)) {
+    onLine('{"level":30,"time":"","component":"installer","msg":"Log file does not exist yet — waiting…"}');
+  }
+  const child = spawn('tail', ['-n', '200', '-F', LOG_PATH], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let buf = '';
+  child.stdout.on('data', (chunk: Buffer) => {
+    buf += chunk.toString('utf-8');
+    let nl = buf.indexOf('\n');
+    while (nl !== -1) {
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      if (line.trim()) onLine(line);
+      nl = buf.indexOf('\n');
+    }
+  });
+  child.stderr.on('data', (chunk: Buffer) => {
+    // tail -F prints "file not found" to stderr while waiting for creation —
+    // surface these as log lines so the UI can show the wait state.
+    const s = chunk.toString('utf-8').trim();
+    if (s) onLine(`{"level":40,"time":"","component":"tail","msg":${JSON.stringify(s)}}`);
+  });
+  child.on('error', (err) => {
+    onLine(`{"level":50,"time":"","component":"tail","msg":${JSON.stringify(err.message)}}`);
+  });
+  return {
+    stop: () => {
+      try { child.kill(); } catch { /* ignore */ }
+    },
+  };
+}
+
+// ── Update (git pull + rebuild + restart) ────────────────────────────
+
+type UpdateProgressCb = (p: import('../shared/types').UpdateProgress) => void;
+
+export async function checkForUpdates(): Promise<{
+  localSha: string;
+  remoteSha: string;
+  commitsBehind: number;
+  upToDate: boolean;
+}> {
+  if (!existsSync(REPO_DIR)) {
+    return { localSha: '', remoteSha: '', commitsBehind: 0, upToDate: true };
+  }
+  const { stdout: local } = await execFileAsync('git', ['-C', REPO_DIR, 'rev-parse', 'HEAD']);
+  await execFileAsync('git', ['-C', REPO_DIR, 'fetch', '--quiet']).catch(() => undefined);
+  const { stdout: remote } = await execFileAsync('git', ['-C', REPO_DIR, 'rev-parse', '@{u}']).catch(
+    async () => await execFileAsync('git', ['-C', REPO_DIR, 'rev-parse', 'origin/main']),
+  );
+  const { stdout: countStr } = await execFileAsync('git', [
+    '-C', REPO_DIR, 'rev-list', '--count', `${local.trim()}..${remote.trim()}`,
+  ]).catch(() => ({ stdout: '0' }));
+  const commitsBehind = Number.parseInt(countStr.trim(), 10) || 0;
+  return {
+    localSha: local.trim().slice(0, 7),
+    remoteSha: remote.trim().slice(0, 7),
+    commitsBehind,
+    upToDate: commitsBehind === 0,
+  };
+}
+
+export async function runUpdate(onProgress: UpdateProgressCb): Promise<void> {
+  onProgress({ phase: 'checking', label: 'Checking for updates…', pct: 5 });
+  const check = await checkForUpdates();
+  if (check.upToDate) {
+    onProgress({ phase: 'up-to-date', label: 'Already up to date.', pct: 100, ...check });
+    return;
+  }
+  onProgress({
+    phase: 'pulling',
+    label: `Pulling ${check.commitsBehind} new commit${check.commitsBehind === 1 ? '' : 's'}…`,
+    pct: 20,
+    ...check,
+  });
+  await runStreamed('git', ['-C', REPO_DIR, 'pull', '--ff-only'], REPO_DIR, (line) =>
+    onProgress({ phase: 'pulling', label: 'Pulling…', pct: 25, log: line }),
+  );
+
+  onProgress({ phase: 'installing', label: 'Installing updated dependencies…', pct: 40 });
+  const pnpm = (await resolveBinary('pnpm')) ?? 'pnpm';
+  await runStreamed(pnpm, ['install'], REPO_DIR, (line) =>
+    onProgress({ phase: 'installing', label: 'Installing…', pct: 50, log: line }),
+  );
+
+  onProgress({ phase: 'building', label: 'Rebuilding…', pct: 65 });
+  await runStreamed(pnpm, ['run', 'build'], REPO_DIR, (line) =>
+    onProgress({ phase: 'building', label: 'Building…', pct: 75, log: line }),
+  );
+
+  // Copy new build to ~/.nexus/app/index.cjs
+  const built = join(REPO_DIR, 'dist', 'index.cjs');
+  if (existsSync(built)) {
+    mkdirSync(join(NEXUS_DIR, 'app'), { recursive: true });
+    await execFileAsync('cp', [built, join(NEXUS_DIR, 'app', 'index.cjs')]);
+  }
+
+  onProgress({ phase: 'restarting', label: 'Restarting NEXUS service…', pct: 90 });
+  try {
+    await restartService();
+  } catch {
+    /* not fatal — user can start manually */
+  }
+  onProgress({ phase: 'done', label: 'Update complete.', pct: 100 });
+}
+
+// ── Memory browser (read-only) ───────────────────────────────────────
+
+export async function listMemories(opts: {
+  limit?: number;
+  type?: string;
+}): Promise<Array<import('../shared/types').MemoryEntry>> {
+  if (!existsSync(DB_PATH)) return [];
+  const bsqlPath = join(REPO_DIR, 'node_modules', 'better-sqlite3');
+  if (!existsSync(bsqlPath)) return [];
+  const nodeBin = (await resolveBinary('node')) ?? 'node';
+  const limit = Math.max(1, Math.min(opts.limit ?? 100, 500));
+  const typeFilter = opts.type ? `AND type = '${opts.type.replace(/'/g, "''")}'` : '';
+  const script = `
+    const Database = require('${bsqlPath}');
+    const db = new Database('${DB_PATH}', { readonly: true });
+    try {
+      const rows = db.prepare("SELECT id, type, content, importance, created_at FROM memories WHERE 1=1 ${typeFilter} ORDER BY created_at DESC LIMIT ${limit}").all();
+      console.log(JSON.stringify(rows));
+    } catch (e) {
+      console.log('[]');
+    } finally {
+      db.close();
+    }
+  `;
+  try {
+    const { stdout } = await execFileAsync(nodeBin, ['-e', script], { timeout: 5000, maxBuffer: 10 * 1024 * 1024 });
+    const raw = JSON.parse(stdout) as Array<{ id: string; type: string; content: string; importance: number; created_at: string }>;
+    return raw.map((r) => ({
+      id: r.id,
+      type: r.type,
+      content: r.content,
+      importance: r.importance,
+      createdAt: r.created_at,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// ── About / system info ──────────────────────────────────────────────
+
+export async function getAboutInfo(appPath: string): Promise<import('../shared/types').AboutInfo> {
+  const { stdout: nodeVer } = await execFileAsync((await resolveBinary('node')) ?? 'node', ['-v']).catch(
+    () => ({ stdout: 'unknown' }),
+  );
+  let version: string | undefined;
+  const cjson = join(NEXUS_DIR, 'config.json');
+  if (existsSync(cjson)) {
+    try {
+      version = JSON.parse(readFileSync(cjson, 'utf-8'))?.version;
+    } catch { /* ignore */ }
+  }
+  return {
+    version: version ?? 'unknown',
+    nodeVersion: nodeVer.trim().replace(/^v/, ''),
+    platform: process.platform,
+    configPath: existsSync(cjson) ? cjson : join(NEXUS_DIR, 'config.yaml'),
+    dbPath: DB_PATH,
+    logPath: LOG_PATH,
+    repoPath: REPO_DIR,
+    appPath,
+    installerVersion: VERSION,
+  };
+}

@@ -123,3 +123,66 @@ export const PERSONALITY_PRESETS = {
   sarcastic_genius: { humor: 0.9, sarcasm: 0.8, formality: 0.2, assertiveness: 0.8, verbosity: 0.5, empathy: 0.4 },
   custom:       { humor: 0.5, sarcasm: 0.5, formality: 0.5, assertiveness: 0.5, verbosity: 0.5, empathy: 0.5 },
 } as const;
+
+// ─── Main-app types (post-install management UI) ──────────────────────
+
+export type MainTab = 'dashboard' | 'config' | 'logs' | 'chrome' | 'updates' | 'memory' | 'about';
+
+export interface DashboardState {
+  service: ServiceStatus;
+  uptimeSeconds?: number;
+  configPath: string;
+  logPath: string;
+  repoPath: string;
+  memoryCount: number;
+  version?: string;
+  sessionCount: number;
+  lastMessageAt?: string;
+}
+
+export interface LogEntry {
+  ts: string;
+  level: number; // pino numeric level
+  component?: string;
+  msg: string;
+  raw: string;
+}
+
+export type UpdatePhase =
+  | 'checking'
+  | 'pulling'
+  | 'installing'
+  | 'building'
+  | 'restarting'
+  | 'done'
+  | 'up-to-date';
+
+export interface UpdateProgress {
+  phase: UpdatePhase;
+  label: string;
+  pct: number;
+  log?: string;
+  localSha?: string;
+  remoteSha?: string;
+  commitsBehind?: number;
+}
+
+export interface MemoryEntry {
+  id: string;
+  type: string;
+  content: string;
+  importance: number;
+  createdAt: string;
+}
+
+export interface AboutInfo {
+  version: string;
+  nodeVersion: string;
+  platform: string;
+  configPath: string;
+  dbPath: string;
+  logPath: string;
+  repoPath: string;
+  appPath: string;
+  installerVersion: string;
+}

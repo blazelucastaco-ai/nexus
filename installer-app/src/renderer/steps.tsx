@@ -926,16 +926,16 @@ export function DoneStep(props: { mode: 'install' | 'reconfigure' | 'repair' }):
         <button
           type="button"
           className="btn-p"
-          onClick={() => window.nexus.external.open('https://t.me')}
+          onClick={() => void window.nexus.main.openDashboard()}
         >
-          Open Telegram ↗
+          Open NEXUS dashboard →
         </button>
         <button
           type="button"
           className="btn-g"
-          onClick={() => window.nexus.external.open('https://github.com/blazelucastaco-ai/nexus')}
+          onClick={() => window.nexus.external.open('https://t.me')}
         >
-          View on GitHub ↗
+          Open Telegram ↗
         </button>
       </div>
     </div>
