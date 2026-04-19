@@ -233,9 +233,11 @@ function ConfigTab(): JSX.Element {
         />
         <KV
           k="Anthropic key"
-          v={detection?.existingAnthropicKey
-            ? `${detection.existingAnthropicKey.slice(0, 12)}…${detection.existingAnthropicKey.slice(-4)}`
-            : 'not set'}
+          v={detection?.existingAnthropicKey ? '•••••••••••••• configured' : 'not set'}
+        />
+        <KV
+          k="Telegram token"
+          v={detection?.existingTelegram?.botToken ? '•••••••••••••• configured' : 'not set'}
         />
         <KV
           k="Telegram chat"
