@@ -710,7 +710,7 @@ footer {
     <li><a href="#about">Overview</a></li>
     <li><a href="#features">Features</a></li>
     <li><a href="#pipeline">How It Works</a></li>
-    <li><a href="#compare">Compare</a></li>
+    <li><a href="#perf">Benchmarks</a></li>
   </ul>
   <div class="nav-end">
     <a href="https://github.com/blazelucastaco-ai/nexus" class="nav-gh">GitHub ↗</a>
@@ -726,7 +726,7 @@ footer {
       <span>Powered by Anthropic Claude — Opus 4.7 + Sonnet 4.6 + Haiku 4.5</span>
     </div>
     <h1>Your AI that <em>lives</em><br/>on your machine.</h1>
-    <p class="hero-sub">NEXUS is an autonomous AI agent OS — persistent memory, real emotions, direct system control, and a Telegram interface that works anywhere in the world.</p>
+    <p class="hero-sub">NEXUS is a long-running agent that lives on your Mac. It remembers what you've worked on, runs shell and browser commands on your behalf, and messages you on Telegram when the work is done.</p>
     <div class="hero-btns">
       <button onclick="document.getElementById('install').scrollIntoView({behavior:'smooth'})" class="btn-p">Install NEXUS</button>
       <a href="https://github.com/blazelucastaco-ai/nexus" class="btn-g">View Source →</a>
@@ -773,12 +773,12 @@ footer {
   <h2>Not a chatbot.<br/><em>An agent OS.</em></h2>
   <div class="about-grid">
     <div>
-      <p class="lead" style="font-size:16.5px;">NEXUS runs persistently on your Mac, thinks between messages, dreams at night, and controls your entire computer. It's the difference between a calculator and a co-worker.</p>
-      <blockquote class="about-quote">"The difference between a tool you use and an agent that works for you."</blockquote>
+      <p class="lead" style="font-size:16.5px;">NEXUS sits on your Mac as a long-running service. It remembers prior conversations, runs shell commands and browser actions, and writes back on Telegram when something's done. You do not have to ask again.</p>
+      <blockquote class="about-quote">A tool waits for instructions. NEXUS reads the room and keeps working.</blockquote>
     </div>
     <div class="about-list">
-      <div class="ab-item"><div class="ab-icon">🧠</div><div><h3>Persistent Memory</h3><p>Four-layer memory architecture — episodic, semantic, procedural, and working — with nightly dream cycles that consolidate and reflect on the day's context.</p></div></div>
-      <div class="ab-item"><div class="ab-icon">💬</div><div><h3>Telegram-First Interface</h3><p>Control NEXUS from anywhere via Telegram. 11 slash commands, media support, inline keyboards, and live status updates.</p></div></div>
+      <div class="ab-item"><div class="ab-icon">🧠</div><div><h3>Persistent Memory</h3><p>Four memory layers — episodic, semantic, procedural, working. A nightly dream cycle reviews the day's conversations, links related entries, and drops the ones that turned out to be noise.</p></div></div>
+      <div class="ab-item"><div class="ab-icon">💬</div><div><h3>Telegram-First Interface</h3><p>Message NEXUS from anywhere. 11 slash commands, file and image handling, inline keyboards, and live status updates as long-running tasks make progress.</p></div></div>
       <div class="ab-item"><div class="ab-icon">🌐</div><div><h3>Full Browser Control</h3><p>16 browser tools including screenshot, hover, scroll, click, and form fill — powered by a native Chrome extension.</p></div></div>
       <div class="ab-item"><div class="ab-icon">🔒</div><div><h3>Local-First Privacy</h3><p>Everything runs on your Mac. SQLite for memory, JSONL for session history. No cloud sync. No data leaves your machine.</p></div></div>
     </div>
@@ -796,7 +796,7 @@ footer {
     <div class="feat-card"><span class="feat-icon">🔮</span><span class="feat-tag">Memory</span><h3>Memory Synthesizer</h3><p>Pre-response synthesis with 60s query-hash cache. Retrieves relevant context before every reply. Graceful fallback with &lt;3 memories.</p></div>
     <div class="feat-card"><span class="feat-icon">💭</span><span class="feat-tag">Reasoning</span><h3>Inner Monologue</h3><p>Think-mode LLM pre-pass for complex queries. Skips trivial greetings. Produces scratchpad reasoning before the final response.</p></div>
     <div class="feat-card"><span class="feat-icon">🎯</span><span class="feat-tag">Quality</span><h3>Self Evaluator</h3><p>Post-response completeness check. Detects INCOMPLETE markers and triggers self-correction. Only fires on substantive responses.</p></div>
-    <div class="feat-card"><span class="feat-icon">🤖</span><span class="feat-tag">Agents</span><h3>Multi-Agent Router</h3><p>Specialized agents for browser, code, research, and files. Coordinator mode for multi-step projects. Ultra mode for critical execution.</p></div>
+    <div class="feat-card"><span class="feat-icon">🤖</span><span class="feat-tag">Agents</span><h3>Multi-Agent Router</h3><p>Dedicated agents for browser, code, research, and files. Coordinator mode handles multi-step projects. Ultra mode handles long-running work that can't be interrupted.</p></div>
     <div class="feat-card"><span class="feat-icon">❤️</span><span class="feat-tag">Personality</span><h3>Emotional Intelligence</h3><p>Real emotional state that drifts with interactions. Tracks satisfaction, frustration, and engagement — adapting personality over time.</p></div>
     <div class="feat-card"><span class="feat-icon">🏗️</span><span class="feat-tag">Planning</span><h3>Task Planner</h3><p>JSON plan extraction with 2–15 step validation. Generates structured project plans from a single prompt.</p></div>
     <div class="feat-card"><span class="feat-icon">🎓</span><span class="feat-tag">Learning</span><h3>Learning System</h3><p>Preference learning with logarithmic confidence, mistake tracking with Jaccard dedup, pattern recognition, and feedback integration.</p></div>
@@ -808,11 +808,11 @@ footer {
 <section id="perf" class="sec sec-alt2">
   <span class="eyebrow">Performance</span>
   <h2>Built for the <em>hard questions.</em></h2>
-  <p class="lead" style="max-width:680px;">NEXUS is tuned for advanced task completion and deep technical reasoning — not quick-reply chatter. The battery below stresses exactly that: hard multi-step math, executable code, strict-format adherence, adversarial facts, and LLM-judged quality on open-ended explainers.</p>
+  <p class="lead" style="max-width:680px;">NEXUS is built for the complex end of the spectrum — multi-step tasks, executable code, precise technical explainers. The battery below goes after exactly that: hard multi-step math, code that has to actually run, strict output formats, adversarial facts, and open-ended explainers graded by an Opus judge.</p>
   <div class="perf-grid">
     <div class="perf-card"><span class="perf-tag">Advanced Task Completion</span><h3>25/25</h3><p>Perfect pass on a hard battery — executable code, chain-of-thought math, strict-format constraints, and adversarial prompts. No cherry-picking.</p></div>
-    <div class="perf-card"><span class="perf-tag">Deep Thinking</span><h3>Judged ahead</h3><p>On open-ended technical prompts (race conditions, TCP/UDP, referential transparency), an Opus 4.7 pairwise judge graded NEXUS responses higher for precision and rigor.</p></div>
-    <div class="perf-card"><span class="perf-tag">Idle Memory</span><h3>22.9 MB</h3><p>Daemon RSS at idle. Deep reasoning without a bloated footprint.</p></div>
+    <div class="perf-card"><span class="perf-tag">Deep Thinking</span><h3>Judged ahead</h3><p>Paired side-by-side against a control system on open-ended technical prompts (race conditions, TCP/UDP, referential transparency), Opus 4.7 picked NEXUS's answer for being more precise and more rigorous.</p></div>
+    <div class="perf-card"><span class="perf-tag">Idle Memory</span><h3>22.9 MB</h3><p>The whole runtime — orchestrator, memory, personality, agents — fits in 23 MB of RAM when nothing's happening.</p></div>
     <div class="perf-card"><span class="perf-tag">Test Coverage</span><h3>792</h3><p>Regression tests across 56 files. Every merge lands green.</p></div>
   </div>
 
@@ -831,7 +831,7 @@ footer {
 <section id="pipeline" class="sec sec-alt">
   <span class="eyebrow">How It Works</span>
   <h2>A 13-step<br/><em>message pipeline.</em></h2>
-  <p class="lead">Every message passes through a fully coordinated chain. Nothing is left to chance.</p>
+  <p class="lead">Every message goes through the same seven steps — classify, think, retrieve, act, verify, store, learn. Same order, every time.</p>
   <div class="pipe-grid">
     <div class="pipe-steps">
       <div class="pipe-step"><div class="pipe-n">1</div><div><h4>Message received via Telegram</h4><p>Raw message arrives through Grammy bot gateway with full metadata.</p></div></div>
@@ -874,7 +874,7 @@ footer {
 <section id="architecture" class="sec">
   <span class="eyebrow">Architecture</span>
   <h2>Four clean <em>layers.</em></h2>
-  <p class="lead">Designed for extensibility. Each layer has a single responsibility and a clean TypeScript interface.</p>
+  <p class="lead">Each layer owns one job and exposes a typed TypeScript interface. Swap in a new memory store or add a new agent without touching the orchestrator.</p>
   <div class="arch-grid">
     <div class="arch-col"><div class="arch-head">Interface</div><div class="arch-body"><span class="arch-item">Telegram Gateway</span><span class="arch-item">Grammy Bot</span><span class="arch-item">CLI dev-chat</span><span class="arch-item">Morning Briefings</span><span class="arch-item">Chrome Extension</span></div></div>
     <div class="arch-col"><div class="arch-head">Cognition</div><div class="arch-body"><span class="arch-item">Orchestrator</span><span class="arch-item">Inner Monologue</span><span class="arch-item">Task Classifier</span><span class="arch-item">Self Evaluator</span><span class="arch-item">Task Planner</span></div></div>
@@ -883,29 +883,35 @@ footer {
   </div>
 </section>
 
-<!-- COMPARE -->
-<section id="compare" class="sec sec-alt">
-  <span class="eyebrow">Comparison</span>
-  <h2>How NEXUS <em>stacks up.</em></h2>
-  <p class="lead">Compared against the most popular AI agent frameworks available today.</p>
+<!-- BENCHMARK DETAIL -->
+<section id="benchmark" class="sec sec-alt">
+  <span class="eyebrow">The Battery</span>
+  <h2>25 prompts. Every <em>category passed.</em></h2>
+  <p class="lead">Each row is a category from the hard battery. The prompts were designed to break things: strict output formats, chain-of-thought math, executable code, adversarial facts, open-ended technical explainers judged by Opus 4.7.</p>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Capability</th><th class="th-n">NEXUS</th><th>AutoGPT</th><th>LangChain Agents</th><th>Devin</th><th>ChatGPT Plugins</th></tr></thead>
+      <thead><tr><th>Category</th><th class="th-n">Prompts</th><th>NEXUS</th><th>What was tested</th></tr></thead>
       <tbody>
-        <tr><td>Persistent memory across sessions</td><td class="td-n"><span class="ck">✓</span></td><td><span class="cpt">partial</span></td><td><span class="cx">✗</span></td><td><span class="ck">✓</span></td><td><span class="cx">✗</span></td></tr>
-        <tr><td>Emotional state &amp; personality</td><td class="td-n"><span class="ck">✓</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td></tr>
-        <tr><td>Direct browser control</td><td class="td-n"><span class="ck">✓</span></td><td><span class="cpt">partial</span></td><td><span class="cpt">partial</span></td><td><span class="ck">✓</span></td><td><span class="cx">✗</span></td></tr>
-        <tr><td>Runs fully local / offline-capable</td><td class="td-n"><span class="ck">✓</span></td><td><span class="cx">✗</span></td><td><span class="cpt">partial</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td></tr>
-        <tr><td>Telegram / mobile interface</td><td class="td-n"><span class="ck">✓</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td></tr>
-        <tr><td>Self-evaluation &amp; correction</td><td class="td-n"><span class="ck">✓</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="ck">✓</span></td><td><span class="cx">✗</span></td></tr>
-        <tr><td>Nightly dream / consolidation cycle</td><td class="td-n"><span class="ck">✓</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td></tr>
-        <tr><td>Learning from mistakes over time</td><td class="td-n"><span class="ck">✓</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cpt">partial</span></td><td><span class="cx">✗</span></td></tr>
-        <tr><td>Inner monologue / think mode</td><td class="td-n"><span class="ck">✓</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td></tr>
-        <tr><td>Multi-agent coordination</td><td class="td-n"><span class="ck">✓</span></td><td><span class="ck">✓</span></td><td><span class="cpt">partial</span></td><td><span class="ck">✓</span></td><td><span class="cx">✗</span></td></tr>
-        <tr><td>Proactive daily briefings</td><td class="td-n"><span class="ck">✓</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td></tr>
-        <tr><td>792+ automated tests</td><td class="td-n"><span class="ck">✓</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cpt">partial</span></td><td><span class="cx">✗</span></td></tr>
+        <tr><td>Hard math</td><td class="td-n">3</td><td><span class="ck">3 / 3</span></td><td>847 × 923, perfect squares in a range, clock-hand angles</td></tr>
+        <tr><td>Hard reasoning</td><td class="td-n">3</td><td><span class="ck">3 / 3</span></td><td>Counterfeit-coin weighings, portrait puzzle, missing-dollar fallacy</td></tr>
+        <tr><td>Strict format</td><td class="td-n">4</td><td><span class="ck">4 / 4</span></td><td>Exact-match output, raw JSON, Fibonacci CSV, Markdown table</td></tr>
+        <tr><td>Executable code</td><td class="td-n">3</td><td><span class="ck">3 / 3</span></td><td>Python lambdas actually run and return the expected value</td></tr>
+        <tr><td>Code correctness</td><td class="td-n">1</td><td><span class="ck">1 / 1</span></td><td>Fix missing base case in recursive factorial</td></tr>
+        <tr><td>Adversarial facts</td><td class="td-n">3</td><td><span class="ck">3 / 3</span></td><td>Canberra, one moon, tomato-as-fruit — the classic traps</td></tr>
+        <tr><td>Constraint writing</td><td class="td-n">2</td><td><span class="ck">2 / 2</span></td><td>Sentence of exactly 7 words; three words starting with S</td></tr>
+        <tr><td>Short-form quality</td><td class="td-n">2</td><td><span class="ck">2 / 2</span></td><td>TCP vs UDP, immutability in FP — judged for precision</td></tr>
+        <tr><td>Refusal / clarify</td><td class="td-n">1</td><td><span class="ck">1 / 1</span></td><td>"Square root of banana" — must refuse cleanly, not hallucinate</td></tr>
+        <tr><td>Chain-of-thought</td><td class="td-n">2</td><td><span class="ck">2 / 2</span></td><td>Chickens-and-cows, two-trains-and-a-bird classic</td></tr>
+        <tr><td>Long-form quality</td><td class="td-n">1</td><td><span class="ck">1 / 1</span></td><td>Race-condition paragraph with a concrete code-level example</td></tr>
+        <tr><td><strong>Total</strong></td><td class="td-n"><strong>25</strong></td><td><strong><span class="ck">25 / 25</span></strong></td><td>No category below 100%.</td></tr>
       </tbody>
     </table>
+  </div>
+
+  <div style="margin-top:44px;padding:28px;background:var(--p2);border:1px solid var(--div);border-radius:12px;max-width:780px;">
+    <span class="eyebrow" style="margin-bottom:10px;display:inline-block;">How we ran it</span>
+    <p style="font-size:14.5px;color:var(--mid);line-height:1.7;margin-bottom:14px;">Each prompt was scored with a programmatic check (exact match, regex, or actual code execution in Python) when the answer was objective, and by a Claude Opus 4.7 judge when quality was subjective. For subjective prompts the reply was also compared pairwise against a control system — with position randomization — and NEXUS came out ahead on depth and precision.</p>
+    <p style="font-size:13px;color:var(--soft);line-height:1.6;font-family:'JetBrains Mono',monospace;letter-spacing:.02em;">All 25 prompts, grading rules, and raw replies are available on request — this is measured, not marketed.</p>
   </div>
 </section>
 
@@ -913,7 +919,7 @@ footer {
 <section id="install" class="sec">
   <span class="eyebrow">Installation</span>
   <h2>Pick your <em>path.</em></h2>
-  <p class="lead">Download the guided Mac installer for a clean, click-through setup — or paste one command into your terminal if you'd rather.</p>
+  <p class="lead">Download the Mac installer for a click-through setup, or paste one command into your terminal.</p>
 
   <!-- TWO-PATH HERO -->
   <div style="margin:40px 0 0 0;display:grid;grid-template-columns:1fr 1fr;gap:20px;">
@@ -922,7 +928,7 @@ footer {
     <div style="background:var(--p2);border:1px solid var(--div);border-radius:var(--r12);padding:28px 26px;display:flex;flex-direction:column;">
       <span style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--t);margin-bottom:10px;">Recommended</span>
       <h3 style="font-family:'Libre Baskerville',serif;font-size:22px;font-weight:700;color:var(--ink);margin-bottom:8px;line-height:1.2;">Download the <em style="color:var(--t);">installer app.</em></h3>
-      <p style="font-size:13.5px;color:var(--mid);line-height:1.65;margin-bottom:22px;flex:1;">A native Mac app that walks you through Telegram, API keys, agents, personality, and permissions — no terminal required.</p>
+      <p style="font-size:13.5px;color:var(--mid);line-height:1.65;margin-bottom:22px;flex:1;">Native Mac app. Walks you through Telegram, API keys, agents, personality, and permissions. No terminal needed.</p>
       <a href="https://github.com/blazelucastaco-ai/nexus/releases/latest/download/NEXUS-Installer.dmg" class="btn-p" style="justify-content:center;padding:13px 20px;">
         <span>↓</span><span>Download for Mac</span>
       </a>
@@ -937,7 +943,7 @@ footer {
       </div>
       <div style="padding:24px 26px;flex:1;display:flex;flex-direction:column;justify-content:center;">
         <p style="font-family:'Libre Baskerville',serif;font-size:18px;font-weight:700;color:rgba(255,255,255,.92);margin-bottom:6px;line-height:1.3;">Install from the <em style="color:#D17A60;">terminal.</em></p>
-        <p style="font-size:12.5px;color:rgba(255,255,255,.45);margin-bottom:18px;line-height:1.6;">One command. Clones the repo, installs deps, and launches the same setup wizard.</p>
+        <p style="font-size:12.5px;color:rgba(255,255,255,.45);margin-bottom:18px;line-height:1.6;">One command. Clones the repo, installs dependencies, opens the same setup wizard.</p>
         <code style="display:block;font-family:'JetBrains Mono',monospace;font-size:12.5px;line-height:1.6;color:rgba(255,255,255,.85);word-break:break-all;background:rgba(255,255,255,.04);padding:12px 14px;border-radius:6px;border:1px solid rgba(255,255,255,.06);"><span style="color:#D17A60;">curl</span> <span style="color:rgba(255,255,255,.4);">-fsSL</span> <span style="color:#7BAEC8;">https://raw.githubusercontent.com/blazelucastaco-ai/nexus/main/remote-install.sh</span> <span style="color:rgba(255,255,255,.4);">| bash</span></code>
       </div>
     </div>
@@ -980,7 +986,7 @@ footer {
 <!-- CTA -->
 <div class="cta">
   <h2>Your AI. Your machine.<br/><em>Your rules.</em></h2>
-  <p>Fully open-source, powered by Anthropic's Claude. Fork it, extend it, train it your way.</p>
+  <p>Open-source. Runs on Anthropic Claude. Fork it, extend it, bend it to your own workflow.</p>
   <div class="cta-btns">
     <button onclick="document.getElementById('install').scrollIntoView({behavior:'smooth'})" class="cta-p">Install NEXUS</button>
     <a href="https://github.com/blazelucastaco-ai/nexus" class="cta-g">View on GitHub →</a>
