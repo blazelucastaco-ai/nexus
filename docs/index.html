@@ -759,7 +759,7 @@ footer {
       <span class="tl"><span class="c-t">✦ </span><span class="c-d">total: </span><span class="c-w">2.4s</span></span>
     </div>
     <div class="hc-stats">
-      <div class="hc-stat"><span class="hc-stat-n">15/15</span><span class="hc-stat-l">Battery Pass Rate</span></div>
+      <div class="hc-stat"><span class="hc-stat-n">25/25</span><span class="hc-stat-l">Hard Battery Pass</span></div>
       <div class="hc-stat"><span class="hc-stat-n">792</span><span class="hc-stat-l">Tests Passing</span></div>
       <div class="hc-stat"><span class="hc-stat-n">22.9MB</span><span class="hc-stat-l">Idle Memory</span></div>
       <div class="hc-stat"><span class="hc-stat-n">40+</span><span class="hc-stat-l">Native Tools</span></div>
@@ -807,13 +807,23 @@ footer {
 <!-- PERFORMANCE -->
 <section id="perf" class="sec sec-alt2">
   <span class="eyebrow">Performance</span>
-  <h2>Measured, not marketed.<br/><em>Every number real.</em></h2>
-  <p class="lead" style="max-width:620px;">15-prompt correctness battery across instruction-following, math, reasoning, code, and factual recall. Runtime numbers measured on the live daemon.</p>
+  <h2>Built for the <em>hard questions.</em></h2>
+  <p class="lead" style="max-width:680px;">NEXUS is tuned for advanced task completion and deep technical reasoning — not quick-reply chatter. The battery below stresses exactly that: hard multi-step math, executable code, strict-format adherence, adversarial facts, and LLM-judged quality on open-ended explainers.</p>
   <div class="perf-grid">
-    <div class="perf-card"><span class="perf-tag">Correctness</span><h3>15/15</h3><p>Perfect pass on a 15-prompt objectively-checkable battery.</p></div>
-    <div class="perf-card"><span class="perf-tag">Idle Memory</span><h3>22.9 MB</h3><p>Daemon RSS at idle. Extremely lightweight for an always-on agent.</p></div>
-    <div class="perf-card"><span class="perf-tag">Test Coverage</span><h3>792</h3><p>Regression tests across 56 files. Every merge is green.</p></div>
-    <div class="perf-card"><span class="perf-tag">Cold Start</span><h3>65 ms</h3><p>Median of 5. CLI responds well under human perception threshold.</p></div>
+    <div class="perf-card"><span class="perf-tag">Advanced Task Completion</span><h3>25/25</h3><p>Perfect pass on a hard battery — executable code, chain-of-thought math, strict-format constraints, and adversarial prompts. No cherry-picking.</p></div>
+    <div class="perf-card"><span class="perf-tag">Deep Thinking</span><h3>Judged ahead</h3><p>On open-ended technical prompts (race conditions, TCP/UDP, referential transparency), an Opus 4.7 pairwise judge graded NEXUS responses higher for precision and rigor.</p></div>
+    <div class="perf-card"><span class="perf-tag">Idle Memory</span><h3>22.9 MB</h3><p>Daemon RSS at idle. Deep reasoning without a bloated footprint.</p></div>
+    <div class="perf-card"><span class="perf-tag">Test Coverage</span><h3>792</h3><p>Regression tests across 56 files. Every merge lands green.</p></div>
+  </div>
+
+  <div style="margin-top:44px;padding:28px;background:var(--p2);border:1px solid var(--div);border-radius:12px;max-width:780px;">
+    <span class="eyebrow" style="margin-bottom:10px;display:inline-block;">Sample judged wins</span>
+    <div style="display:grid;grid-template-columns:1fr;gap:14px;font-size:14.5px;line-height:1.6;">
+      <div><strong>Race conditions</strong> — NEXUS explicitly noted compilation to multiple machine instructions. The judge called it <em>"more rigorous."</em></div>
+      <div><strong>TCP vs UDP</strong> — NEXUS mentioned flow control by name. Judge: <em>"more precise."</em></div>
+      <div><strong>Why immutability matters</strong> — NEXUS named referential transparency. Judge: <em>"more technically precise."</em></div>
+      <div><strong>"Square root of banana"</strong> — NEXUS refused with a type-system framing. Judge: <em>"more technically precise by naming the type distinction."</em></div>
+    </div>
   </div>
 </section>
 
@@ -893,7 +903,7 @@ footer {
         <tr><td>Inner monologue / think mode</td><td class="td-n"><span class="ck">✓</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td></tr>
         <tr><td>Multi-agent coordination</td><td class="td-n"><span class="ck">✓</span></td><td><span class="ck">✓</span></td><td><span class="cpt">partial</span></td><td><span class="ck">✓</span></td><td><span class="cx">✗</span></td></tr>
         <tr><td>Proactive daily briefings</td><td class="td-n"><span class="ck">✓</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td></tr>
-        <tr><td>418+ automated tests</td><td class="td-n"><span class="ck">✓</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cpt">partial</span></td><td><span class="cx">✗</span></td></tr>
+        <tr><td>792+ automated tests</td><td class="td-n"><span class="ck">✓</span></td><td><span class="cx">✗</span></td><td><span class="cx">✗</span></td><td><span class="cpt">partial</span></td><td><span class="cx">✗</span></td></tr>
       </tbody>
     </table>
   </div>
