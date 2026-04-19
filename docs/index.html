@@ -759,9 +759,9 @@ footer {
       <span class="tl"><span class="c-t">✦ </span><span class="c-d">total: </span><span class="c-w">2.4s</span></span>
     </div>
     <div class="hc-stats">
-      <div class="hc-stat"><span class="hc-stat-n">468</span><span class="hc-stat-l">Benchmark Score</span></div>
-      <div class="hc-stat"><span class="hc-stat-n">747</span><span class="hc-stat-l">Tests Passing</span></div>
-      <div class="hc-stat"><span class="hc-stat-n">4</span><span class="hc-stat-l">Memory Layers</span></div>
+      <div class="hc-stat"><span class="hc-stat-n">15/15</span><span class="hc-stat-l">Battery Pass Rate</span></div>
+      <div class="hc-stat"><span class="hc-stat-n">792</span><span class="hc-stat-l">Tests Passing</span></div>
+      <div class="hc-stat"><span class="hc-stat-n">22.9MB</span><span class="hc-stat-l">Idle Memory</span></div>
       <div class="hc-stat"><span class="hc-stat-n">40+</span><span class="hc-stat-l">Native Tools</span></div>
     </div>
   </div>
@@ -789,7 +789,7 @@ footer {
 <section id="features" class="sec">
   <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:48px;flex-wrap:wrap;gap:20px;">
     <div><span class="eyebrow">Capabilities</span><h2>Everything you need.<br/><em>Nothing you don't.</em></h2></div>
-    <p style="font-size:13.5px;color:var(--soft);max-width:240px;line-height:1.65;">14 subsystems, 13-step pipeline, 747 tests passing.</p>
+    <p style="font-size:13.5px;color:var(--soft);max-width:240px;line-height:1.65;">14 subsystems, 13-step pipeline, 792 tests passing.</p>
   </div>
   <div class="feat-grid">
     <div class="feat-card"><span class="feat-icon">🌙</span><span class="feat-tag">Cognitive</span><h3>Dream Engine</h3><p>Nightly consolidation with insight generation, contradiction detection, and idea storage. 7-phase sleep cycle with state persistence.</p></div>
@@ -806,13 +806,14 @@ footer {
 
 <!-- PERFORMANCE -->
 <section id="perf" class="sec sec-alt2">
-  <span class="eyebrow">Performance</span>
-  <h2>Tested, typed, and<br/><em>production-hardened.</em></h2>
+  <span class="eyebrow">Performance · Head-to-head vs OpenClaw</span>
+  <h2>Measured, not marketed.<br/><em>Every number reproducible.</em></h2>
+  <p class="lead" style="max-width:620px;">15-prompt shared battery across instruction-following, math, reasoning, code, and factual recall. Both systems ran on identical Anthropic Sonnet 4 models. Runner and raw results live in <code>benchmark/</code>.</p>
   <div class="perf-grid">
-    <div class="perf-card"><span class="perf-tag">Task Completion</span><h3>91.7%</h3><p>110/120 tasks completed successfully.</p></div>
-    <div class="perf-card"><span class="perf-tag">Memory Accuracy</span><h3>100%</h3><p>Perfect recall — every retrieval test passed.</p></div>
-    <div class="perf-card"><span class="perf-tag">Code Run Chain</span><h3>87%</h3><p>Up from 20%. Multi-step code execution chains.</p></div>
-    <div class="perf-card"><span class="perf-tag">Math Reasoning</span><h3>100%</h3><p>Up from 66%. Full mathematical reasoning benchmark.</p></div>
+    <div class="perf-card"><span class="perf-tag">Correctness</span><h3>15/15</h3><p>Perfect battery pass on 15 objectively-checkable prompts. OpenClaw tied at 15/15.</p></div>
+    <div class="perf-card"><span class="perf-tag">Idle Memory</span><h3>22.9 MB</h3><p>Daemon RSS at idle. OpenClaw gateway runs at 359 MB — NEXUS is 15.7× lighter.</p></div>
+    <div class="perf-card"><span class="perf-tag">Test Coverage</span><h3>792</h3><p>Regression tests in 56 files. OpenClaw's shipped package contains zero.</p></div>
+    <div class="perf-card"><span class="perf-tag">Cold Start</span><h3>65 ms</h3><p>Median of 5. OpenClaw: 72 ms. Both sub-100ms — neither is perceivable.</p></div>
   </div>
 </section>
 

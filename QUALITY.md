@@ -14,7 +14,7 @@ This document tracks task completion rates, known failure modes, and regression 
 | Memory system | 38 | ✅ Pass |
 | Orchestrator | 48 | ✅ Pass |
 | Task planner | 22 | ✅ Pass |
-| All suites | **747** | ✅ **100%** |
+| All suites | **792** | ✅ **100%** |
 
 Run with: `pnpm test`
 

@@ -1,0 +1,92 @@
+[
+  {
+    "id": "q01",
+    "category": "instruction-following",
+    "prompt": "Reply with exactly three words. No punctuation, no emoji. The words must say that you are ready.",
+    "check": { "kind": "word-count", "expect": 3, "mustContain": ["ready"] }
+  },
+  {
+    "id": "q02",
+    "category": "math",
+    "prompt": "What is 347 * 29? Reply with only the number, no words.",
+    "check": { "kind": "contains", "expect": "10063" }
+  },
+  {
+    "id": "q03",
+    "category": "math-multi-step",
+    "prompt": "A train leaves at 3:15 PM and arrives at 7:48 PM. How many minutes was the trip? Reply with only the number.",
+    "check": { "kind": "contains", "expect": "273" }
+  },
+  {
+    "id": "q04",
+    "category": "factual",
+    "prompt": "What is the chemical symbol for gold? Reply with the two-letter symbol only.",
+    "check": { "kind": "contains", "expect": "Au", "caseSensitive": true }
+  },
+  {
+    "id": "q05",
+    "category": "reasoning",
+    "prompt": "Alice is taller than Bob. Bob is taller than Carol. Is Alice taller than Carol? Answer yes or no, then one sentence.",
+    "check": { "kind": "contains", "expect": "yes", "caseSensitive": false }
+  },
+  {
+    "id": "q06",
+    "category": "code",
+    "prompt": "Write a one-line Python expression that returns True if an integer n is prime. Use only basic operations. Reply with only the expression starting with 'lambda n:'.",
+    "check": { "kind": "regex", "expect": "lambda n:" }
+  },
+  {
+    "id": "q07",
+    "category": "format",
+    "prompt": "List the first 5 prime numbers separated by commas, no spaces, no words.",
+    "check": { "kind": "contains", "expect": "2,3,5,7,11" }
+  },
+  {
+    "id": "q08",
+    "category": "reasoning",
+    "prompt": "If today is Wednesday, what day of the week will it be 100 days from now? Reply with just the day name.",
+    "check": { "kind": "contains", "expect": "Friday", "caseSensitive": false }
+  },
+  {
+    "id": "q09",
+    "category": "instruction-following",
+    "prompt": "Write a haiku about coffee. Exactly three lines, 5-7-5 syllables. No title, no commentary.",
+    "check": { "kind": "line-count", "expect": 3 }
+  },
+  {
+    "id": "q10",
+    "category": "code",
+    "prompt": "Write a JavaScript one-liner that reverses a string s. Reply with only the code starting with 's =>' or '(s) =>'.",
+    "check": { "kind": "regex", "expect": "=>" }
+  },
+  {
+    "id": "q11",
+    "category": "factual",
+    "prompt": "Who wrote the novel '1984'? Reply with just the author's name.",
+    "check": { "kind": "contains", "expect": "Orwell", "caseSensitive": false }
+  },
+  {
+    "id": "q12",
+    "category": "math",
+    "prompt": "What is the square root of 144? Reply with only the number.",
+    "check": { "kind": "contains", "expect": "12" }
+  },
+  {
+    "id": "q13",
+    "category": "reasoning",
+    "prompt": "I have 12 apples. I give 1/3 to my friend, then eat 2 myself, then buy 5 more. How many do I have? Reply with only the number.",
+    "check": { "kind": "contains", "expect": "11" }
+  },
+  {
+    "id": "q14",
+    "category": "instruction-following",
+    "prompt": "Reply with exactly the word 'ACKNOWLEDGED' in all caps and nothing else.",
+    "check": { "kind": "exact-match", "expect": "ACKNOWLEDGED" }
+  },
+  {
+    "id": "q15",
+    "category": "code",
+    "prompt": "Write a Bash command to count the number of lines in a file named 'log.txt'. Reply with only the command.",
+    "check": { "kind": "regex", "expect": "wc -l.*log\\.txt|log\\.txt.*wc -l" }
+  }
+]
