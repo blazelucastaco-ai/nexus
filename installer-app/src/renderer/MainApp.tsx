@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { JSX } from 'react';
 import type {
   DashboardState,
   MainTab,
@@ -8,15 +9,19 @@ import type {
   AboutInfo,
   ChromeStatus,
 } from '../shared/types';
+import {
+  IconDashboard, IconConfig, IconLogs, IconChrome, IconUpdate, IconMemory, IconAbout,
+  IconNexusLogo, IconEmptyMemory, IconExternal,
+} from './icons';
 
-const TABS: Array<{ key: MainTab; label: string; icon: string }> = [
-  { key: 'dashboard', label: 'Dashboard', icon: '◎' },
-  { key: 'config',    label: 'Configure', icon: '⚙' },
-  { key: 'logs',      label: 'Logs',      icon: '⋯' },
-  { key: 'chrome',    label: 'Chrome',    icon: '🌐' },
-  { key: 'updates',   label: 'Updates',   icon: '↑' },
-  { key: 'memory',    label: 'Memory',    icon: '✦' },
-  { key: 'about',     label: 'About',     icon: 'ℹ' },
+const TABS: Array<{ key: MainTab; label: string; Icon: () => JSX.Element }> = [
+  { key: 'dashboard', label: 'Dashboard', Icon: IconDashboard },
+  { key: 'config',    label: 'Configure', Icon: IconConfig },
+  { key: 'logs',      label: 'Logs',      Icon: IconLogs },
+  { key: 'chrome',    label: 'Chrome',    Icon: IconChrome },
+  { key: 'updates',   label: 'Updates',   Icon: IconUpdate },
+  { key: 'memory',    label: 'Memory',    Icon: IconMemory },
+  { key: 'about',     label: 'About',     Icon: IconAbout },
 ];
 
 export function MainApp(): JSX.Element {
@@ -51,10 +56,10 @@ export function MainApp(): JSX.Element {
             <button
               type="button"
               key={t.key}
-              className={`step-item nav-item ${tab === t.key ? 'active' : ''}`}
+              className={`nav-item ${tab === t.key ? 'active' : ''}`}
               onClick={() => setTab(t.key)}
             >
-              <div className="step-dot">{t.icon}</div>
+              <div className="nav-icon"><t.Icon /></div>
               <span>{t.label}</span>
               {t.key === 'updates' && commitsBehind > 0 && (
                 <span className="nav-badge" title={`${commitsBehind} commit${commitsBehind === 1 ? '' : 's'} behind`}>
@@ -85,6 +90,7 @@ export function MainApp(): JSX.Element {
 function DashboardTab(): JSX.Element {
   const [state, setState] = useState<DashboardState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [recent, setRecent] = useState<LogEntry[]>([]);
 
   const refresh = useCallback(async (): Promise<void> => {
     const s = await window.nexus.main.dashboard();
@@ -96,6 +102,26 @@ function DashboardTab(): JSX.Element {
     const id = setInterval(refresh, 4000);
     return () => clearInterval(id);
   }, [refresh]);
+
+  // Subscribe to the log tail so the dashboard shows the five most recent
+  // meaningful NEXUS events — tasks, messages, tool calls, errors.
+  useEffect(() => {
+    const unsub = window.nexus.main.onLogLine((raw) => {
+      const parsed = parseLogLine(raw);
+      // Only surface events that feel meaningful on the dashboard: any
+      // warn/error, or info lines from components users care about.
+      const interesting =
+        parsed.level >= 40 ||
+        ['Orchestrator', 'TelegramGateway', 'ToolExecutor', 'Main', 'BrowserBridge', 'Cortex'].includes(parsed.component ?? '');
+      if (!interesting) return;
+      setRecent((r) => [parsed, ...r].slice(0, 8));
+    });
+    void window.nexus.main.logTailStart();
+    return () => {
+      unsub();
+      void window.nexus.main.logTailStop();
+    };
+  }, []);
 
   const act = async (what: 'start' | 'stop' | 'restart'): Promise<void> => {
     setBusy(what);
@@ -167,10 +193,59 @@ function DashboardTab(): JSX.Element {
       </div>
 
       {state?.lastMessageAt && (
-        <p className="subtle" style={{ marginTop: 24 }}>
+        <p className="subtle" style={{ marginTop: 20 }}>
           Last Telegram message: <code>{state.lastMessageAt}</code>
         </p>
       )}
+
+      <div className="section-divider" />
+
+      <div className="section-head">
+        <h2 className="section-title">Recent <em>activity</em></h2>
+        <span className="section-note">streaming from nexus.log</span>
+      </div>
+      <div className="activity-feed">
+        {recent.length === 0 && (
+          <div className="activity-empty">
+            Waiting for NEXUS to do something…
+          </div>
+        )}
+        {recent.map((l, i) => (
+          <div key={`${l.ts}-${i}`} className={`activity-item activity-lvl-${l.level}`}>
+            <div className="activity-ts">{formatTs(l.ts)}</div>
+            <div className="activity-body">
+              {l.component && <span className="activity-comp">{l.component}</span>}
+              <span className="activity-msg">{l.msg}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="section-divider" />
+
+      <div className="quick-links">
+        <button type="button" className="quick-link" onClick={() => void window.nexus.external.open('https://t.me')}>
+          <div className="quick-link-icon" style={{ color: 'var(--t)' }}>✈</div>
+          <div>
+            <div className="quick-link-title">Telegram</div>
+            <div className="quick-link-sub">Chat with NEXUS<IconExternal /></div>
+          </div>
+        </button>
+        <button type="button" className="quick-link" onClick={() => void window.nexus.external.open('https://github.com/blazelucastaco-ai/nexus')}>
+          <div className="quick-link-icon" style={{ color: 'var(--t)' }}>◇</div>
+          <div>
+            <div className="quick-link-title">Source code</div>
+            <div className="quick-link-sub">GitHub<IconExternal /></div>
+          </div>
+        </button>
+        <button type="button" className="quick-link" onClick={() => void window.nexus.service.openLogs()}>
+          <div className="quick-link-icon" style={{ color: 'var(--t)' }}>⊞</div>
+          <div>
+            <div className="quick-link-title">Log file</div>
+            <div className="quick-link-sub">Open in Console.app</div>
+          </div>
+        </button>
+      </div>
     </div>
   );
 }
@@ -610,11 +685,19 @@ function MemoryTab(): JSX.Element {
       <div style={{ marginTop: 16, maxHeight: 'calc(100vh - 320px)', overflowY: 'auto' }}>
         {memories === null && <p className="subtle">Loading…</p>}
         {memories !== null && filtered.length === 0 && (
-          <p className="subtle">
-            {memories.length === 0
-              ? 'No memories found yet. Once NEXUS starts handling messages, entries will appear here.'
-              : 'No matches for that filter.'}
-          </p>
+          <div className="empty-state">
+            <div className="empty-illustration" style={{ color: 'var(--t)' }}>
+              <IconEmptyMemory />
+            </div>
+            <div className="empty-title">
+              {memories.length === 0 ? 'No memories yet' : 'No matches'}
+            </div>
+            <div className="empty-body">
+              {memories.length === 0
+                ? 'Once NEXUS handles a message or completes a task, episodic memories will appear here — automatically consolidated during nightly dream cycles.'
+                : 'Try a different filter or clear the search box.'}
+            </div>
+          </div>
         )}
         {filtered.map((m) => (
           <div className="mem-card" key={m.id}>
@@ -660,11 +743,18 @@ function AboutTab(): JSX.Element {
 
   return (
     <div className="step">
-      <span className="eyebrow">About</span>
-      <h1 className="step-title">NEXUS <em>{about.version}</em>.</h1>
-      <p className="step-lead">
-        Running on Node {about.nodeVersion} · {about.platform}. All paths below.
-      </p>
+      <div className="about-hero">
+        <div className="about-logo" style={{ color: 'var(--t)' }}>
+          <IconNexusLogo />
+        </div>
+        <div>
+          <span className="eyebrow" style={{ marginBottom: 6 }}>About</span>
+          <h1 className="step-title" style={{ marginBottom: 8 }}>NEXUS <em>{about.version}</em>.</h1>
+          <p className="step-lead" style={{ marginBottom: 0 }}>
+            Running on Node {about.nodeVersion} · {about.platform}. All paths below.
+          </p>
+        </div>
+      </div>
 
       <div className="kv-list">
         <KV k="Version"        v={about.version} />

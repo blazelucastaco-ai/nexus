@@ -407,7 +407,7 @@ app.whenReady().then(() => {
     const send = (p: InstallProgress): void => { event.sender.send('install:progress', p); };
     try {
       const input = validateConfigInput(rawInput);
-      await reconfigure(input, send);
+      await reconfigure(input, send, app.getPath('exe'));
       return { ok: true };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };

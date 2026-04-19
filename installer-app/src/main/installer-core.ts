@@ -778,7 +778,11 @@ export async function registerMenubarAgent(appBinary: string): Promise<void> {
 
 // ── Reconfigure (writes fresh config+env without re-cloning/building) ─
 
-export async function reconfigure(input: ConfigInput, onProgress: ProgressCb): Promise<void> {
+export async function reconfigure(
+  input: ConfigInput,
+  onProgress: ProgressCb,
+  appBin?: string,
+): Promise<void> {
   onProgress({ phase: 'writing-config', label: 'Writing configuration…', pct: 30 });
   await writeConfig(input);
   // Re-register the launchd agent so new Telegram/Anthropic env values land
@@ -795,6 +799,21 @@ export async function reconfigure(input: ConfigInput, onProgress: ProgressCb): P
       log: err instanceof Error ? err.message : String(err),
     });
     try { await restartService(); } catch { /* ignore */ }
+  }
+  // Ensure the menu-bar tray agent is also registered. On legacy installs
+  // (or manual setups that predate this flow) it might be missing — if so,
+  // Reconfigure is a good opportunity to repair it.
+  if (appBin && !existsSync(MENUBAR_PLIST)) {
+    try {
+      await registerMenubarAgent(appBin);
+      onProgress({
+        phase: 'registering-service',
+        label: 'Registered menu bar agent',
+        pct: 90,
+      });
+    } catch {
+      /* non-fatal */
+    }
   }
   onProgress({ phase: 'done', label: 'Config updated.', pct: 100 });
 }
