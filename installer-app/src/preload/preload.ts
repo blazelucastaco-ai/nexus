@@ -6,6 +6,8 @@ import type {
   PermissionCheck,
   InstallProgress,
   ChromeStatus,
+  DetectionResult,
+  ServiceStatus,
 } from '../shared/types';
 
 const api = {
@@ -25,14 +27,28 @@ const api = {
     extensionPath: (): Promise<string> => ipcRenderer.invoke('chrome:extension-path'),
     testConnection: (): Promise<boolean> => ipcRenderer.invoke('chrome:test-connection'),
   },
+  detect: {
+    existing: (): Promise<DetectionResult> => ipcRenderer.invoke('detect:existing'),
+    uninstall: (options: { removeRepo: boolean }): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('detect:uninstall', options),
+  },
   install: {
     run: (input: ConfigInput): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('install:run', input),
+    reconfigure: (input: ConfigInput): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('install:reconfigure', input),
     onProgress: (cb: (progress: InstallProgress) => void): (() => void) => {
       const listener = (_e: unknown, progress: InstallProgress): void => cb(progress);
       ipcRenderer.on('install:progress', listener);
       return () => ipcRenderer.removeListener('install:progress', listener);
     },
+  },
+  service: {
+    status: (): Promise<ServiceStatus> => ipcRenderer.invoke('service:status'),
+    start: (): Promise<void> => ipcRenderer.invoke('service:start'),
+    stop: (): Promise<void> => ipcRenderer.invoke('service:stop'),
+    restart: (): Promise<void> => ipcRenderer.invoke('service:restart'),
+    openLogs: (): Promise<void> => ipcRenderer.invoke('service:logs'),
   },
   external: {
     open: (url: string): Promise<void> => ipcRenderer.invoke('external:open', url),

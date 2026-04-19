@@ -5,8 +5,166 @@ import type {
   PermissionCheck,
   InstallProgress,
   ChromeStatus,
+  DetectionResult,
+  DetectAction,
 } from '../shared/types';
 import { AGENT_CHOICES, PERSONALITY_PRESETS } from '../shared/types';
+
+/* ──────────────────────────────────────────────────────────────────
+   0. DETECT — pre-welcome gate, only shown when an existing install
+   is found. If nothing is found, App.tsx skips past this.
+────────────────────────────────────────────────────────────────── */
+export function DetectStep(props: {
+  detection: DetectionResult | null;
+  onPick: (action: DetectAction) => void;
+}): JSX.Element {
+  if (props.detection === null) {
+    return (
+      <div className="step">
+        <span className="eyebrow">Checking…</span>
+        <h1 className="step-title">Looking for an existing <em>NEXUS</em>…</h1>
+      </div>
+    );
+  }
+
+  const d = props.detection;
+
+  return (
+    <div className="step">
+      <div className="pill">
+        <div className="pill-dot" />
+        <span>NEXUS <strong>{d.version ?? 'already'} installed</strong></span>
+      </div>
+      <h1 className="step-title">
+        We found an <em>existing</em> NEXUS.
+      </h1>
+      <p className="step-lead">
+        What would you like to do?
+      </p>
+
+      <div className="checklist" style={{ marginTop: 10, marginBottom: 24 }}>
+        <div className="check-item">
+          <div className={`check-status ${d.configExists ? 'ok' : 'pending'}`}>{d.configExists ? '✓' : '—'}</div>
+          <span className="check-name">Config file</span>
+          <span className="check-detail">{d.configExists ? d.configPath : 'not present'}</span>
+        </div>
+        <div className="check-item">
+          <div className={`check-status ${d.repoExists ? 'ok' : 'pending'}`}>{d.repoExists ? '✓' : '—'}</div>
+          <span className="check-name">Source repo</span>
+          <span className="check-detail">{d.repoExists ? d.repoPath : 'not present'}</span>
+        </div>
+        <div className="check-item">
+          <div className={`check-status ${d.serviceRunning ? 'ok' : d.serviceRegistered ? 'pending' : 'fail'}`}>
+            {d.serviceRunning ? '✓' : d.serviceRegistered ? '○' : '—'}
+          </div>
+          <span className="check-name">Background service</span>
+          <span className="check-detail">
+            {d.serviceRunning ? 'running' : d.serviceRegistered ? 'registered but stopped' : 'not registered'}
+          </span>
+        </div>
+      </div>
+
+      <div className="preset-grid">
+        <button type="button" className="preset-card" onClick={() => props.onPick('reconfigure')}>
+          <div className="preset-name">Reconfigure</div>
+          <div className="preset-desc">Update Telegram, API key, agents, or personality. Nothing reinstalled.</div>
+        </button>
+        <button type="button" className="preset-card" onClick={() => props.onPick('repair')}>
+          <div className="preset-name">Repair / Update</div>
+          <div className="preset-desc">Pull the latest source, rebuild, re-register the service. Config preserved.</div>
+        </button>
+        <button type="button" className="preset-card" onClick={() => props.onPick('fresh')}>
+          <div className="preset-name">Install fresh</div>
+          <div className="preset-desc">Run the full wizard again. Overwrites config and repo.</div>
+        </button>
+        <button type="button" className="preset-card" onClick={() => props.onPick('uninstall')} style={{ borderColor: 'var(--tl)' }}>
+          <div className="preset-name" style={{ color: 'var(--t)' }}>Uninstall</div>
+          <div className="preset-desc">Stop the service and remove ~/.nexus. Repo removal is optional.</div>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   0b. UNINSTALL — confirmation + teardown
+────────────────────────────────────────────────────────────────── */
+export function UninstallStep(props: {
+  detection: DetectionResult | null;
+  onCancel: () => void;
+  onDone: () => void;
+}): JSX.Element {
+  const [removeRepo, setRemoveRepo] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const runUninstall = async (): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    try {
+      await window.nexus.detect.uninstall({ removeRepo });
+      setDone(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (done) {
+    return (
+      <div className="step">
+        <span className="eyebrow">Uninstall complete</span>
+        <h1 className="step-title">NEXUS is <em>gone</em>.</h1>
+        <p className="step-lead">
+          The service was stopped and <code>~/.nexus</code> was removed
+          {removeRepo ? ` along with ${props.detection?.repoPath ?? 'the source repo'}` : ''}.
+          You can reinstall any time from this same app.
+        </p>
+        <div className="btn-row">
+          <button type="button" className="btn-p" onClick={props.onDone}>Install again →</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="step">
+      <span className="eyebrow">Uninstall</span>
+      <h1 className="step-title">Remove <em>NEXUS</em> from this Mac?</h1>
+      <p className="step-lead">
+        This will stop the background service, unload its launchd agent, and delete
+        <code> ~/.nexus</code> (config, memory database, logs, screenshots). Your
+        Telegram bot token and Anthropic API key will be gone.
+      </p>
+
+      <div className="card" style={{ marginBottom: 22 }}>
+        <label className="card-row" style={{ cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={removeRepo}
+            onChange={(e) => setRemoveRepo(e.target.checked)}
+            style={{ marginTop: 4 }}
+          />
+          <div>
+            <h3>Also delete the source repo at <code>{props.detection?.repoPath ?? '~/nexus'}</code></h3>
+            <p>Only check this if you're sure — any local changes or memory snapshots there will be lost.</p>
+          </div>
+        </label>
+      </div>
+
+      {error && <p className="field-error">{error}</p>}
+
+      <div className="btn-row">
+        <button type="button" className="btn-g" onClick={props.onCancel} disabled={busy}>← Back</button>
+        <button type="button" className="btn-p" onClick={() => void runUninstall()} disabled={busy} style={{ background: 'var(--td)' }}>
+          {busy ? 'Uninstalling…' : 'Uninstall NEXUS'}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 /* ──────────────────────────────────────────────────────────────────
    1. WELCOME
@@ -470,7 +628,11 @@ export function PermissionsStep(props: { onNext: () => void; onBack: () => void 
 /* ──────────────────────────────────────────────────────────────────
    8. INSTALL (actual execution)
 ────────────────────────────────────────────────────────────────── */
-export function InstallStep(props: { config: ConfigInput; onNext: () => void }): JSX.Element {
+export function InstallStep(props: {
+  config: ConfigInput;
+  mode: 'install' | 'reconfigure' | 'repair';
+  onNext: () => void;
+}): JSX.Element {
   const [progress, setProgress] = useState<InstallProgress>({
     phase: 'cloning',
     label: 'Preparing…',
@@ -494,7 +656,11 @@ export function InstallStep(props: { config: ConfigInput; onNext: () => void }):
     });
 
     void (async () => {
-      const result = await window.nexus.install.run(props.config);
+      const runner =
+        props.mode === 'reconfigure'
+          ? window.nexus.install.reconfigure
+          : window.nexus.install.run;
+      const result = await runner(props.config);
       if (result.ok) {
         setDone(true);
       } else {
@@ -504,7 +670,7 @@ export function InstallStep(props: { config: ConfigInput; onNext: () => void }):
     })();
 
     return () => unsub();
-  }, [props.config]);
+  }, [props.config, props.mode]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: logLines.length is the trigger to scroll
   useEffect(() => {
@@ -513,18 +679,21 @@ export function InstallStep(props: { config: ConfigInput; onNext: () => void }):
     }
   }, [logLines.length]);
 
+  const copy = {
+    install:     { progress: 'Installing', done: 'Install',    failed: 'Install',    idle: 'Cloning the repo, installing dependencies, building, and registering the launchd service.', success: 'All components installed. The background service is running.' },
+    repair:      { progress: 'Repairing',  done: 'Repair',     failed: 'Repair',     idle: 'Pulling the latest source, rebuilding, and re-registering the launchd service.',         success: 'NEXUS repaired and restarted.' },
+    reconfigure: { progress: 'Saving',     done: 'Config',     failed: 'Save',       idle: 'Writing the new configuration and restarting the service…',                              success: 'Config updated. NEXUS restarted with the new settings.' },
+  } as const;
+  const c = copy[props.mode];
+
   return (
     <div className="step">
       <span className="eyebrow">Step 7 / 9</span>
       <h1 className="step-title">
-        {error ? <>Install <em>failed</em>.</> : done ? <>Install <em>complete</em>.</> : <>Installing <em>NEXUS</em>.</>}
+        {error ? <>{c.failed} <em>failed</em>.</> : done ? <>{c.done} <em>complete</em>.</> : <>{c.progress} <em>NEXUS</em>.</>}
       </h1>
       <p className="step-lead">
-        {error
-          ? 'See the log below for details.'
-          : done
-            ? 'All components installed. The background service is running.'
-            : 'Cloning the repo, installing dependencies, building, and registering the launchd service.'}
+        {error ? 'See the log below for details.' : done ? c.success : c.idle}
       </p>
 
       <div className="progress-wrap">
@@ -698,18 +867,30 @@ export function ChromeStep(props: { onNext: () => void }): JSX.Element {
 /* ──────────────────────────────────────────────────────────────────
    10. DONE
 ────────────────────────────────────────────────────────────────── */
-export function DoneStep(): JSX.Element {
+export function DoneStep(props: { mode: 'install' | 'reconfigure' | 'repair' }): JSX.Element {
+  const leadText =
+    props.mode === 'reconfigure'
+      ? 'Your new settings are live. The service restarted automatically — send your bot a message to verify.'
+      : props.mode === 'repair'
+        ? 'NEXUS has been updated and restarted. Your config is unchanged.'
+        : 'The service is running in the background. Send your Telegram bot any message to say hi.';
+
+  const eyebrowText =
+    props.mode === 'reconfigure' ? 'Config saved'
+    : props.mode === 'repair' ? 'Repair complete'
+    : 'Setup complete';
+
   return (
     <div className="step">
       <div className="done-hero">
         <div className="done-emoji">✨</div>
-        <span className="eyebrow">Setup complete</span>
+        <span className="eyebrow">{eyebrowText}</span>
         <h1 className="step-title">
           NEXUS is <em>ready</em>.
         </h1>
         <p className="step-lead">
-          The service is running in the background. Send your Telegram bot any message
-          to say hi.
+          {leadText} Look for the <strong style={{ color: 'var(--t)' }}>◉</strong> icon in your menu bar —
+          that's NEXUS living in the top-right of your screen, ready whenever you need it.
         </p>
       </div>
       <div className="done-list">

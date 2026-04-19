@@ -10,7 +10,10 @@ import type {
   PermissionCheck,
   InstallProgress,
   ChromeStatus,
+  DetectionResult,
+  ServiceStatus,
 } from '../shared/types';
+import { rmSync } from 'node:fs';
 
 const execFileAsync = promisify(execFile);
 
@@ -22,6 +25,11 @@ const DB_PATH = join(NEXUS_DIR, 'memory.db');
 const REPO_DIR = join(HOME, 'nexus');
 const ENV_PATH = join(REPO_DIR, '.env');
 const REPO_URL = 'https://github.com/blazelucastaco-ai/nexus.git';
+const LAUNCH_AGENTS_DIR = join(HOME, 'Library', 'LaunchAgents');
+const NEXUS_PLIST = join(LAUNCH_AGENTS_DIR, 'com.nexus.ai.plist');
+const MENUBAR_PLIST = join(LAUNCH_AGENTS_DIR, 'com.nexus.menubar.plist');
+const NEXUS_LABEL = 'com.nexus.ai';
+const MENUBAR_LABEL = 'com.nexus.menubar';
 
 const BRIDGE_PORT = 9338;
 
@@ -521,4 +529,197 @@ function runStreamed(
       else reject(new Error(`${cmd} ${args.join(' ')} exited with code ${code}`));
     });
   });
+}
+
+// ── Detection ────────────────────────────────────────────────────────
+
+export async function detectExistingInstall(): Promise<DetectionResult> {
+  const configExists = existsSync(CONFIG_PATH);
+  const repoExists = existsSync(join(REPO_DIR, 'package.json'));
+  const serviceRegistered = existsSync(NEXUS_PLIST);
+  const menubarRegistered = existsSync(MENUBAR_PLIST);
+
+  let serviceRunning = false;
+  try {
+    const { stdout } = await execFileAsync('launchctl', ['list']);
+    serviceRunning = stdout.split('\n').some((line) => {
+      const cols = line.trim().split(/\s+/);
+      // launchctl list format: PID STATUS LABEL. A running service has a numeric PID.
+      return cols[2] === NEXUS_LABEL && /^\d+$/.test(cols[0] ?? '');
+    });
+  } catch {
+    /* leave serviceRunning = false */
+  }
+
+  const result: DetectionResult = {
+    configExists,
+    repoExists,
+    serviceRegistered,
+    serviceRunning,
+    menubarRegistered,
+    configPath: CONFIG_PATH,
+    repoPath: REPO_DIR,
+  };
+
+  if (configExists) {
+    try {
+      const parsed = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
+      if (typeof parsed?.version === 'string') result.version = parsed.version;
+      if (Array.isArray(parsed?.agents?.enabled)) result.existingAgents = parsed.agents.enabled;
+      if (parsed?.personality?.preset && parsed?.personality?.traits) {
+        result.existingPersonality = {
+          preset: parsed.personality.preset,
+          traits: parsed.personality.traits,
+        };
+      }
+    } catch {
+      /* malformed config — ignore */
+    }
+  }
+
+  if (existsSync(ENV_PATH)) {
+    try {
+      const env = readFileSync(ENV_PATH, 'utf-8');
+      const get = (k: string): string | undefined => {
+        const m = env.match(new RegExp(`^${k}=(.*)$`, 'm'));
+        return m?.[1]?.trim();
+      };
+      const botToken = get('TELEGRAM_BOT_TOKEN');
+      const chatId = get('TELEGRAM_CHAT_ID');
+      const anthropicKey = get('ANTHROPIC_API_KEY');
+      if (botToken && chatId) result.existingTelegram = { botToken, chatId };
+      if (anthropicKey) result.existingAnthropicKey = anthropicKey;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return result;
+}
+
+// ── Uninstall ────────────────────────────────────────────────────────
+
+export async function uninstall(options: { removeRepo: boolean }): Promise<void> {
+  // 1. Stop + unload the NEXUS service
+  if (existsSync(NEXUS_PLIST)) {
+    try {
+      await execFileAsync('launchctl', ['unload', NEXUS_PLIST]);
+    } catch {
+      /* already unloaded */
+    }
+    try {
+      rmSync(NEXUS_PLIST);
+    } catch {
+      /* leave it — launchctl unload is the important part */
+    }
+  }
+
+  // 2. Stop + unload the menubar agent
+  if (existsSync(MENUBAR_PLIST)) {
+    try {
+      await execFileAsync('launchctl', ['unload', MENUBAR_PLIST]);
+    } catch {
+      /* ignore */
+    }
+    try {
+      rmSync(MENUBAR_PLIST);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // 3. Wipe ~/.nexus (config, db, logs, screenshots)
+  if (existsSync(NEXUS_DIR)) {
+    rmSync(NEXUS_DIR, { recursive: true, force: true });
+  }
+
+  // 4. Optionally remove the cloned repo at ~/nexus/
+  if (options.removeRepo && existsSync(REPO_DIR)) {
+    rmSync(REPO_DIR, { recursive: true, force: true });
+  }
+}
+
+// ── Service control ──────────────────────────────────────────────────
+
+export async function getServiceStatus(): Promise<ServiceStatus> {
+  const registered = existsSync(NEXUS_PLIST);
+  let running = false;
+  let pid: number | undefined;
+  try {
+    const { stdout } = await execFileAsync('launchctl', ['list']);
+    for (const line of stdout.split('\n')) {
+      const cols = line.trim().split(/\s+/);
+      if (cols[2] === NEXUS_LABEL) {
+        running = /^\d+$/.test(cols[0] ?? '');
+        if (running) pid = Number.parseInt(cols[0]!, 10);
+        break;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  const bridgeConnected = await testExtensionConnection(500);
+  return { registered, running, pid, bridgeConnected };
+}
+
+export async function startService(): Promise<void> {
+  if (existsSync(NEXUS_PLIST)) {
+    try { await execFileAsync('launchctl', ['load', NEXUS_PLIST]); } catch { /* may already be loaded */ }
+  }
+  try { await execFileAsync('launchctl', ['start', NEXUS_LABEL]); } catch { /* ignore */ }
+}
+
+export async function stopService(): Promise<void> {
+  try { await execFileAsync('launchctl', ['stop', NEXUS_LABEL]); } catch { /* ignore */ }
+}
+
+export async function restartService(): Promise<void> {
+  try { await execFileAsync('launchctl', ['kickstart', '-k', `gui/${process.getuid?.() ?? ''}/${NEXUS_LABEL}`]); }
+  catch { await stopService(); await new Promise((r) => setTimeout(r, 500)); await startService(); }
+}
+
+export function openLogs(): Promise<void> {
+  return execFileAsync('open', [join(NEXUS_DIR, 'nexus.log')]).then(() => undefined);
+}
+
+// ── Menubar launchd agent ────────────────────────────────────────────
+
+export async function registerMenubarAgent(appBinary: string): Promise<void> {
+  mkdirSync(LAUNCH_AGENTS_DIR, { recursive: true });
+
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${MENUBAR_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${appBinary}</string>
+    <string>--menubar</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>${join(NEXUS_DIR, 'menubar.log')}</string>
+  <key>StandardErrorPath</key><string>${join(NEXUS_DIR, 'menubar.err')}</string>
+</dict>
+</plist>
+`;
+  writeFileSync(MENUBAR_PLIST, plist, 'utf-8');
+  try { await execFileAsync('launchctl', ['unload', MENUBAR_PLIST]); } catch { /* not loaded */ }
+  await execFileAsync('launchctl', ['load', MENUBAR_PLIST]);
+}
+
+// ── Reconfigure (writes fresh config+env without re-cloning/building) ─
+
+export async function reconfigure(input: ConfigInput, onProgress: ProgressCb): Promise<void> {
+  onProgress({ phase: 'writing-config', label: 'Writing configuration…', pct: 30 });
+  await writeConfig(input);
+  onProgress({ phase: 'registering-service', label: 'Restarting NEXUS service…', pct: 75 });
+  try {
+    await restartService();
+  } catch {
+    /* service may not be registered yet — that's fine */
+  }
+  onProgress({ phase: 'done', label: 'Config updated.', pct: 100 });
 }

@@ -1,4 +1,5 @@
 export type StepKey =
+  | 'detect'
   | 'welcome'
   | 'system-check'
   | 'repo'
@@ -9,7 +10,38 @@ export type StepKey =
   | 'permissions'
   | 'install'
   | 'chrome'
+  | 'uninstall'
   | 'done';
+
+export interface DetectionResult {
+  configExists: boolean;
+  repoExists: boolean;
+  serviceRegistered: boolean;
+  serviceRunning: boolean;
+  menubarRegistered: boolean;
+  version?: string;
+  configPath: string;
+  repoPath: string;
+  existingTelegram?: { botToken: string; chatId: string };
+  existingAnthropicKey?: string;
+  existingAgents?: string[];
+  existingPersonality?: {
+    preset: 'professional' | 'friendly' | 'sarcastic_genius' | 'custom';
+    traits: {
+      humor: number; sarcasm: number; formality: number;
+      assertiveness: number; verbosity: number; empathy: number;
+    };
+  };
+}
+
+export type DetectAction = 'reconfigure' | 'repair' | 'uninstall' | 'fresh';
+
+export interface ServiceStatus {
+  registered: boolean;
+  running: boolean;
+  pid?: number;
+  bridgeConnected: boolean;
+}
 
 export interface SystemCheckResult {
   name: string;
