@@ -42,7 +42,7 @@ export function MainApp(): JSX.Element {
             </button>
           ))}
         </div>
-        <div className="sidebar-footer">v0.1.0 · CONTROL</div>
+        <div className="sidebar-footer">v0.1.0</div>
       </aside>
       <main className="main">
         {tab === 'dashboard' && <DashboardTab />}
@@ -97,8 +97,14 @@ function DashboardTab(): JSX.Element {
       </h1>
       <p className="step-lead">
         {state?.service.running
-          ? `Up for ${formatUptime(state.uptimeSeconds)} on pid ${state.service.pid ?? '—'}.`
-          : 'Service is not currently running. Start it from here or via the menu bar.'}
+          ? state.uptimeSeconds
+            ? `Up for ${formatUptime(state.uptimeSeconds)}${state.service.pid ? ` on pid ${state.service.pid}` : ''}.`
+            : state.service.pid
+              ? `Running on pid ${state.service.pid}.`
+              : 'Running.'
+          : state?.service.registered
+            ? 'Service is registered but stopped. Start it from here or via the menu bar.'
+            : 'NEXUS is not installed. Open the wizard from the Configure tab to set it up.'}
       </p>
 
       <div className="stat-grid">
@@ -174,29 +180,54 @@ function formatUptime(seconds?: number): string {
    CONFIG (opens the wizard window for full reconfigure)
 ═══════════════════════════════════════════════════════════════════ */
 function ConfigTab(): JSX.Element {
+  const [detection, setDetection] = useState<import('../shared/types').DetectionResult | null>(null);
+
+  useEffect(() => {
+    void window.nexus.detect.existing().then(setDetection);
+  }, []);
+
   return (
     <div className="step">
       <span className="eyebrow">Configure</span>
-      <h1 className="step-title">Change <em>settings</em>.</h1>
+      <h1 className="step-title">Current <em>settings</em>.</h1>
       <p className="step-lead">
         Telegram bot, Anthropic API key, agents, and personality all live in{' '}
-        <code>~/.nexus/config.json</code>. Open the full wizard to walk through
-        every option.
+        <code>{detection?.configPath ?? '~/.nexus/config.json'}</code>. Open the
+        wizard below to change anything.
       </p>
+
+      <div className="kv-list" style={{ marginBottom: 24 }}>
+        <KV
+          k="Personality"
+          v={detection?.existingPersonality?.preset
+            ? detection.existingPersonality.preset.replace('_', ' ')
+            : '—'}
+        />
+        <KV
+          k="Agents"
+          v={detection?.existingAgents
+            ? `${detection.existingAgents.length} enabled (${detection.existingAgents.slice(0, 4).join(', ')}${detection.existingAgents.length > 4 ? '…' : ''})`
+            : '—'}
+        />
+        <KV
+          k="Anthropic key"
+          v={detection?.existingAnthropicKey
+            ? `${detection.existingAnthropicKey.slice(0, 12)}…${detection.existingAnthropicKey.slice(-4)}`
+            : 'not set'}
+        />
+        <KV
+          k="Telegram chat"
+          v={detection?.existingTelegram?.chatId ?? 'not set'}
+        />
+      </div>
+
       <div className="btn-row">
         <button
           type="button"
           className="btn-p"
           onClick={() => void window.nexus.main.openWizard()}
         >
-          Open reconfigure wizard →
-        </button>
-        <button
-          type="button"
-          className="btn-g"
-          onClick={() => void window.nexus.service.openLogs()}
-        >
-          Show current config file
+          Change settings →
         </button>
       </div>
     </div>

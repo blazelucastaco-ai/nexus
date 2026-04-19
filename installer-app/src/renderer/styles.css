@@ -568,7 +568,16 @@ h1.step-title em { font-style: italic; color: var(--t); }
    MAIN-APP STYLES (dashboard / logs / etc)
 ───────────────────────────────────────────── */
 .nav-item { cursor: pointer; width: 100%; text-align: left; }
-.nav-item:hover { color: var(--ink); }
+.nav-item:hover:not(.active) { color: var(--ink); background: rgba(196, 101, 74, 0.04); }
+.nav-item.active .step-dot {
+  background: var(--t); border-color: var(--t); color: #fff;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 11px;
+}
+.nav-item:not(.active) .step-dot {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 11px;
+}
 
 /* stat cards grid */
 .stat-grid {

@@ -56,7 +56,7 @@ function createWizardWindow(_route?: 'wizard' | 'dashboard'): void {
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 18, y: 18 },
     backgroundColor: '#FAF6EE',
-    title: 'NEXUS Installer',
+    title: 'NEXUS',
     show: false,
     webPreferences: {
       preload: join(__dirname, '..', 'preload', 'preload.js'),
@@ -349,8 +349,21 @@ app.whenReady().then(() => {
     startMenubarMode();
   } else if (initialRoute === 'dashboard') {
     createDashboardWindow();
-  } else {
+  } else if (initialRoute === 'wizard') {
     createWizardWindow();
+  } else {
+    // No explicit route: if NEXUS is already installed, land on the
+    // dashboard. Only first-time users see the wizard.
+    void detectExistingInstall()
+      .then((d) => {
+        const installed = d.configExists || d.serviceRegistered;
+        if (installed) {
+          createDashboardWindow();
+        } else {
+          createWizardWindow();
+        }
+      })
+      .catch(() => createWizardWindow());
   }
 
   app.on('activate', () => {

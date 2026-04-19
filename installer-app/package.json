@@ -32,8 +32,8 @@
     "react-dom": "^18.3.1"
   },
   "build": {
-    "appId": "com.nexus.installer",
-    "productName": "NEXUS Installer",
+    "appId": "com.nexus.app",
+    "productName": "NEXUS",
     "directories": {
       "output": "release"
     },
@@ -57,7 +57,7 @@
       "identity": null
     },
     "dmg": {
-      "title": "NEXUS Installer",
+      "title": "NEXUS",
       "contents": [
         { "x": 130, "y": 220 },
         { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
