@@ -97,6 +97,17 @@ export function IconAbout(): JSX.Element {
   );
 }
 
+export function IconChat(): JSX.Element {
+  return (
+    <svg {...baseProps}>
+      <title>Chat</title>
+      <path d="M3 5h14v8h-7l-4 3v-3H3Z" />
+      <line x1="6" y1="8.5" x2="12" y2="8.5" />
+      <line x1="6" y1="11" x2="10" y2="11" />
+    </svg>
+  );
+}
+
 export function IconNexusLogo(): JSX.Element {
   return (
     <svg width="44" height="44" viewBox="0 0 44 44" fill="none" aria-hidden="true" focusable="false">

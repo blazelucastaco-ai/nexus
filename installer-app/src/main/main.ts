@@ -25,6 +25,11 @@ import {
   checkForUpdates,
   runUpdate,
   listMemories,
+  deleteMemory,
+  chatSend,
+  takeScreenshot,
+  triggerDream,
+  runHealthCheck,
   getAboutInfo,
 } from './installer-core';
 import type { ConfigInput, InstallProgress, UpdateProgress } from '../shared/types';
@@ -462,6 +467,18 @@ app.whenReady().then(() => {
 
   ipcMain.handle('main:open-dashboard', () => { createDashboardWindow(); });
   ipcMain.handle('main:open-wizard', () => { createWizardWindow('wizard'); });
+
+  ipcMain.handle('main:memory-delete', async (_e, id: unknown) => {
+    if (typeof id !== 'string') return { ok: false, error: 'invalid id' };
+    return deleteMemory(id);
+  });
+  ipcMain.handle('main:chat-send', async (_e, prompt: unknown) => {
+    if (typeof prompt !== 'string') return { ok: false, error: 'prompt must be a string' };
+    return chatSend(prompt);
+  });
+  ipcMain.handle('main:action-screenshot', async () => takeScreenshot());
+  ipcMain.handle('main:action-dream', async () => triggerDream());
+  ipcMain.handle('main:action-health', async () => runHealthCheck());
 
   if (isMenubarMode) {
     startMenubarMode();

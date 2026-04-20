@@ -126,7 +126,26 @@ export const PERSONALITY_PRESETS = {
 
 // ─── Main-app types (post-install management UI) ──────────────────────
 
-export type MainTab = 'dashboard' | 'config' | 'logs' | 'chrome' | 'updates' | 'memory' | 'about';
+export type MainTab = 'dashboard' | 'chat' | 'config' | 'logs' | 'chrome' | 'updates' | 'memory' | 'about';
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'nexus' | 'system';
+  text: string;
+  ts: string;
+  durationMs?: number;
+}
+
+export interface ChatSendResult {
+  ok: boolean;
+  reply?: string;
+  error?: string;
+}
+
+export interface QuickActionResult {
+  ok: boolean;
+  output: string;
+}
 
 export interface DashboardState {
   service: ServiceStatus;

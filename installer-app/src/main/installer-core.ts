@@ -1057,6 +1057,115 @@ export async function listMemories(opts: {
   }
 }
 
+// ── Memory delete ────────────────────────────────────────────────────
+
+export async function deleteMemory(id: string): Promise<{ ok: boolean; error?: string }> {
+  if (!existsSync(DB_PATH)) return { ok: false, error: 'memory.db not found' };
+  const bsqlPath = join(REPO_DIR, 'node_modules', 'better-sqlite3');
+  if (!existsSync(bsqlPath)) return { ok: false, error: 'better-sqlite3 not available' };
+  // UUIDs only — silently reject anything else so we never pass user input
+  // into a query path that could surprise us.
+  if (!/^[0-9a-f-]{8,64}$/i.test(id)) return { ok: false, error: 'invalid id' };
+  const nodeBin = (await resolveBinary('node')) ?? 'node';
+  const payload = JSON.stringify({ id });
+  const script = `
+    const Database = require(${JSON.stringify(bsqlPath)});
+    const args = JSON.parse(process.env.__NEXUS_ARGS__ || '{}');
+    const db = new Database(${JSON.stringify(DB_PATH)});
+    try {
+      const info = db.prepare('DELETE FROM memories WHERE id = ?').run(args.id);
+      console.log(JSON.stringify({ changes: info.changes }));
+    } catch (e) {
+      console.log(JSON.stringify({ error: String(e?.message || e) }));
+    } finally {
+      db.close();
+    }
+  `;
+  try {
+    const { stdout } = await execFileAsync(nodeBin, ['-e', script], {
+      timeout: 5000,
+      env: { ...process.env, __NEXUS_ARGS__: payload },
+    });
+    const result = JSON.parse(stdout) as { changes?: number; error?: string };
+    if (result.error) return { ok: false, error: result.error };
+    if (!result.changes) return { ok: false, error: 'no memory deleted' };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String((e as Error).message || e) };
+  }
+}
+
+// ── Chat (one-shot via dev-chat.ts) ──────────────────────────────────
+
+export async function chatSend(prompt: string): Promise<{ ok: boolean; reply?: string; error?: string }> {
+  const trimmed = prompt.trim();
+  if (!trimmed) return { ok: false, error: 'empty prompt' };
+  if (trimmed.length > 4000) return { ok: false, error: 'prompt too long (4000 chars max)' };
+  if (!existsSync(REPO_DIR)) return { ok: false, error: 'NEXUS repo not found' };
+  const pnpm = (await resolveBinary('pnpm')) ?? 'pnpm';
+  return new Promise((resolve) => {
+    const proc = spawn(
+      pnpm,
+      ['--silent', 'exec', 'tsx', 'scripts/dev-chat.ts', trimmed],
+      { cwd: REPO_DIR, stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    let out = '';
+    proc.stdout.on('data', (d) => { out += String(d); });
+    proc.stderr.on('data', () => {});
+    const kill = setTimeout(() => { proc.kill('SIGKILL'); }, 150_000);
+    proc.on('exit', () => {
+      clearTimeout(kill);
+      const clean = out.replace(/\x1b\[[0-9;]*m/g, '');
+      const idx = clean.lastIndexOf('nexus > ');
+      if (idx < 0) return resolve({ ok: false, error: 'no reply captured' });
+      const after = clean.slice(idx + 'nexus > '.length);
+      const reply = after
+        .split('\n')
+        .filter((l) => !l.startsWith('{"level"'))
+        .join('\n')
+        .trim();
+      resolve({ ok: true, reply });
+    });
+    proc.on('error', (err) => {
+      clearTimeout(kill);
+      resolve({ ok: false, error: String(err.message || err) });
+    });
+  });
+}
+
+// ── Quick-action helpers (run real nexus CLI commands) ───────────────
+
+async function runNexusCli(args: string[], timeoutMs = 60_000): Promise<{ ok: boolean; output: string }> {
+  const nexusBin = (await resolveBinary('nexus')) ?? 'nexus';
+  return new Promise((resolve) => {
+    const proc = spawn(nexusBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    proc.stdout.on('data', (d) => { out += String(d); });
+    proc.stderr.on('data', (d) => { out += String(d); });
+    const kill = setTimeout(() => proc.kill('SIGKILL'), timeoutMs);
+    proc.on('exit', (code) => {
+      clearTimeout(kill);
+      resolve({ ok: code === 0, output: out.replace(/\x1b\[[0-9;]*m/g, '').trim() });
+    });
+    proc.on('error', () => {
+      clearTimeout(kill);
+      resolve({ ok: false, output: 'failed to spawn nexus CLI' });
+    });
+  });
+}
+
+export async function takeScreenshot(): Promise<{ ok: boolean; output: string }> {
+  return runNexusCli(['screenshot']);
+}
+
+export async function triggerDream(): Promise<{ ok: boolean; output: string }> {
+  return runNexusCli(['dream'], 180_000);
+}
+
+export async function runHealthCheck(): Promise<{ ok: boolean; output: string }> {
+  return runNexusCli(['health']);
+}
+
 // ── About / system info ──────────────────────────────────────────────
 
 export async function getAboutInfo(appPath: string): Promise<import('../shared/types').AboutInfo> {

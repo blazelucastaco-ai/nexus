@@ -12,6 +12,8 @@ import type {
   AboutInfo,
   MemoryEntry,
   UpdateProgress,
+  ChatSendResult,
+  QuickActionResult,
 } from '../shared/types';
 
 const api = {
@@ -83,6 +85,13 @@ const api = {
     },
     openDashboard: (): Promise<void> => ipcRenderer.invoke('main:open-dashboard'),
     openWizard: (): Promise<void> => ipcRenderer.invoke('main:open-wizard'),
+    memoryDelete: (id: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('main:memory-delete', id),
+    chatSend: (prompt: string): Promise<ChatSendResult> =>
+      ipcRenderer.invoke('main:chat-send', prompt),
+    actionScreenshot: (): Promise<QuickActionResult> => ipcRenderer.invoke('main:action-screenshot'),
+    actionDream: (): Promise<QuickActionResult> => ipcRenderer.invoke('main:action-dream'),
+    actionHealth: (): Promise<QuickActionResult> => ipcRenderer.invoke('main:action-health'),
   },
 };
 
