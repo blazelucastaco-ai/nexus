@@ -20,10 +20,52 @@ const execFileAsync = promisify(execFile);
 const VERSION = '0.1.0';
 const HOME = homedir();
 const NEXUS_DIR = join(HOME, '.nexus');
-// Wizard writes config.json; older installs (and the legacy setup.yaml flow)
-// use config.yaml. Detection accepts either; writes always go to .json.
+// NEXUS daemon reads ONLY from config.yaml (see src/config.ts). Detection
+// reads config.json first (easier to parse without a YAML dep) and falls back
+// to .yaml. Writes must go to BOTH — otherwise reconfigure silently no-ops
+// the daemon's view of the world. (See the bug hit on 2026-04-20 where
+// personality changes were saved to json but the daemon kept reading the
+// stale yaml.)
 const CONFIG_PATH = join(NEXUS_DIR, 'config.json');
 const CONFIG_PATH_YAML = join(NEXUS_DIR, 'config.yaml');
+
+// Minimal YAML emitter for the fixed NexusConfig shape we write. Not a
+// general-purpose serializer — it assumes objects with string keys, arrays
+// of primitives (or objects), and primitive scalars (string | number |
+// bool). Strings are quoted when they contain YAML specials.
+function toYaml(value: unknown, indent = 0): string {
+  const pad = '  '.repeat(indent);
+  if (value === null || value === undefined) return 'null';
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'string') {
+    // Quote if contains YAML-sensitive chars, starts with a number/digit,
+    // or could be ambiguous.
+    if (/^[0-9\-+]|[:#{}\[\],&*!|>'"%@`?\n]/.test(value) || value === '' || /^(true|false|null|yes|no|on|off)$/i.test(value)) {
+      return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]';
+    return '\n' + value.map((v) => `${pad}- ${toYaml(v, indent + 1).replace(/^\n/, '')}`).join('\n');
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) return '{}';
+    return '\n' + entries.map(([k, v]) => {
+      const rendered = toYaml(v, indent + 1);
+      if (rendered.startsWith('\n')) return `${pad}${k}:${rendered}`;
+      return `${pad}${k}: ${rendered}`;
+    }).join('\n');
+  }
+  return String(value);
+}
+
+function stringifyConfigYaml(obj: unknown): string {
+  const body = toYaml(obj, 0);
+  return (body.startsWith('\n') ? body.slice(1) : body) + '\n';
+}
 const DB_PATH = join(NEXUS_DIR, 'memory.db');
 const REPO_DIR = join(HOME, 'nexus');
 const ENV_PATH = join(REPO_DIR, '.env');
@@ -288,6 +330,9 @@ function writeConfig(input: ConfigInput): Promise<void> {
   };
 
   writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+  // Also write YAML — the NEXUS daemon only reads config.yaml. Writing
+  // both keeps detection fast (json) and the runtime correct (yaml).
+  writeFileSync(CONFIG_PATH_YAML, stringifyConfigYaml(config), 'utf-8');
 
   const envLines = [
     '# ─── NEXUS Environment ────────────────────────────────',
