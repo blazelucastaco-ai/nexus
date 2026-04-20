@@ -8,17 +8,14 @@ import type {
   MemoryEntry,
   AboutInfo,
   ChromeStatus,
-  ChatMessage,
 } from '../shared/types';
 import {
   IconDashboard, IconConfig, IconLogs, IconChrome, IconUpdate, IconMemory, IconAbout,
-  IconChat,
   IconNexusLogo, IconEmptyMemory, IconExternal,
 } from './icons';
 
 const TABS: Array<{ key: MainTab; label: string; Icon: () => JSX.Element }> = [
   { key: 'dashboard', label: 'Dashboard', Icon: IconDashboard },
-  { key: 'chat',      label: 'Chat',      Icon: IconChat },
   { key: 'config',    label: 'Configure', Icon: IconConfig },
   { key: 'logs',      label: 'Logs',      Icon: IconLogs },
   { key: 'chrome',    label: 'Chrome',    Icon: IconChrome },
@@ -75,8 +72,7 @@ export function MainApp(): JSX.Element {
         <div className="sidebar-footer">v0.1.0</div>
       </aside>
       <main className="main">
-        {tab === 'dashboard' && <DashboardTab onOpenChat={() => setTab('chat')} />}
-        {tab === 'chat' && <ChatTab />}
+        {tab === 'dashboard' && <DashboardTab />}
         {tab === 'config' && <ConfigTab />}
         {tab === 'logs' && <LogsTab />}
         {tab === 'chrome' && <ChromeTab />}
@@ -91,7 +87,7 @@ export function MainApp(): JSX.Element {
 /* ═══════════════════════════════════════════════════════════════════
    DASHBOARD
 ═══════════════════════════════════════════════════════════════════ */
-function DashboardTab({ onOpenChat }: { onOpenChat: () => void }): JSX.Element {
+function DashboardTab(): JSX.Element {
   const [state, setState] = useState<DashboardState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [recent, setRecent] = useState<LogEntry[]>([]);
@@ -227,11 +223,10 @@ function DashboardTab({ onOpenChat }: { onOpenChat: () => void }): JSX.Element {
       </div>
       <div className="action-grid">
         <ActionTile
-          icon="💬"
-          title="Chat with NEXUS"
-          subtitle="Open the in-app conversation pane"
-          onClick={onOpenChat}
-          disabled={!state?.service.running}
+          icon="✈"
+          title="Message on Telegram"
+          subtitle="The one way to talk to NEXUS"
+          onClick={() => void window.nexus.external.open('https://t.me')}
         />
         <ActionTile
           icon="📸"
@@ -363,172 +358,6 @@ function formatUptime(seconds?: number): string {
   if (h < 24) return `${h}h ${m}m`;
   const d = Math.floor(h / 24);
   return `${d}d ${h % 24}h`;
-}
-
-/* ═══════════════════════════════════════════════════════════════════
-   CHAT (in-app conversation with the local NEXUS)
-═══════════════════════════════════════════════════════════════════ */
-const CHAT_SUGGESTIONS = [
-  'What did we work on yesterday?',
-  'Summarize my recent commits',
-  'Take a screenshot and tell me what you see',
-  'What are my top recurring mistakes?',
-  'List my active projects',
-];
-
-function ChatTab(): JSX.Element {
-  const [messages, setMessages] = useState<ChatMessage[]>(() => [
-    {
-      id: 'welcome',
-      role: 'system',
-      text: 'Direct line to NEXUS. Messages here bypass Telegram — they go straight to the local brain.',
-      ts: new Date().toISOString(),
-    },
-  ]);
-  const [input, setInput] = useState('');
-  const [sending, setSending] = useState(false);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-
-  // Auto-scroll to bottom whenever the message list grows or a send completes.
-  // The read of messages.length + sending inside the effect body is what biome
-  // wants to see so it can track the dependencies.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    // intentional reads so the effect re-runs when either changes
-    void messages.length;
-    void sending;
-    el.scrollTop = el.scrollHeight;
-  }, [messages.length, sending]);
-
-  const send = async (): Promise<void> => {
-    const text = input.trim();
-    if (!text || sending) return;
-    const userMsg: ChatMessage = {
-      id: `u-${Date.now()}`,
-      role: 'user',
-      text,
-      ts: new Date().toISOString(),
-    };
-    setMessages((m) => [...m, userMsg]);
-    setInput('');
-    setSending(true);
-    const started = Date.now();
-    try {
-      const r = await window.nexus.main.chatSend(text);
-      const ms = Date.now() - started;
-      if (r.ok && r.reply) {
-        setMessages((m) => [...m, {
-          id: `n-${Date.now()}`,
-          role: 'nexus',
-          text: r.reply!,
-          ts: new Date().toISOString(),
-          durationMs: ms,
-        }]);
-      } else {
-        setMessages((m) => [...m, {
-          id: `e-${Date.now()}`,
-          role: 'system',
-          text: `✗ ${r.error ?? 'Unknown error. Check that NEXUS is running and the repo is intact.'}`,
-          ts: new Date().toISOString(),
-        }]);
-      }
-    } finally {
-      setSending(false);
-    }
-  };
-
-  const clear = (): void => {
-    setMessages([{
-      id: 'welcome-2',
-      role: 'system',
-      text: 'Cleared. Start a new conversation.',
-      ts: new Date().toISOString(),
-    }]);
-  };
-
-  return (
-    <div className="step chat-tab">
-      <div className="chat-head">
-        <div>
-          <span className="eyebrow">Chat</span>
-          <h1 className="step-title">Talk to <em>NEXUS</em>.</h1>
-        </div>
-        <button type="button" className="btn-g" style={{ padding: '8px 14px' }} onClick={clear} disabled={sending}>
-          Clear
-        </button>
-      </div>
-      <p className="step-lead" style={{ marginTop: -4 }}>
-        In-app dev chat — same path as <code>nexus chat</code> in the terminal. The full orchestrator, memory, and personality stack runs on every message.
-      </p>
-
-      <div className="chat-scroll" ref={scrollRef}>
-        {messages.map((m) => (
-          <div key={m.id} className={`chat-msg chat-msg-${m.role}`}>
-            {m.role !== 'system' && (
-              <div className="chat-msg-head">
-                <span className="chat-role">{m.role === 'user' ? 'you' : 'nexus'}</span>
-                {m.durationMs && <span className="chat-ms">{(m.durationMs / 1000).toFixed(1)}s</span>}
-              </div>
-            )}
-            <div className="chat-body">{m.text}</div>
-          </div>
-        ))}
-        {sending && (
-          <div className="chat-msg chat-msg-nexus pending">
-            <div className="chat-msg-head">
-              <span className="chat-role">nexus</span>
-              <span className="chat-ms">thinking…</span>
-            </div>
-            <div className="chat-body"><span className="typing-dot" /><span className="typing-dot" /><span className="typing-dot" /></div>
-          </div>
-        )}
-      </div>
-
-      {messages.filter((m) => m.role !== 'system').length === 0 && !sending && (
-        <div className="chat-suggestions">
-          <div className="chat-sugg-label">Try one of these:</div>
-          <div className="chat-sugg-row">
-            {CHAT_SUGGESTIONS.map((s) => (
-              <button
-                key={s}
-                type="button"
-                className="chat-sugg"
-                onClick={() => setInput(s)}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="chat-input-row">
-        <textarea
-          className="chat-input"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Message NEXUS…"
-          rows={2}
-          disabled={sending}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-        />
-        <button
-          type="button"
-          className="btn-p chat-send-btn"
-          onClick={() => void send()}
-          disabled={sending || input.trim().length === 0}
-        >
-          {sending ? 'Sending…' : 'Send ↵'}
-        </button>
-      </div>
-    </div>
-  );
 }
 
 /* ═══════════════════════════════════════════════════════════════════

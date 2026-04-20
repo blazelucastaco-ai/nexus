@@ -1095,44 +1095,6 @@ export async function deleteMemory(id: string): Promise<{ ok: boolean; error?: s
   }
 }
 
-// ── Chat (one-shot via dev-chat.ts) ──────────────────────────────────
-
-export async function chatSend(prompt: string): Promise<{ ok: boolean; reply?: string; error?: string }> {
-  const trimmed = prompt.trim();
-  if (!trimmed) return { ok: false, error: 'empty prompt' };
-  if (trimmed.length > 4000) return { ok: false, error: 'prompt too long (4000 chars max)' };
-  if (!existsSync(REPO_DIR)) return { ok: false, error: 'NEXUS repo not found' };
-  const pnpm = (await resolveBinary('pnpm')) ?? 'pnpm';
-  return new Promise((resolve) => {
-    const proc = spawn(
-      pnpm,
-      ['--silent', 'exec', 'tsx', 'scripts/dev-chat.ts', trimmed],
-      { cwd: REPO_DIR, stdio: ['ignore', 'pipe', 'pipe'] },
-    );
-    let out = '';
-    proc.stdout.on('data', (d) => { out += String(d); });
-    proc.stderr.on('data', () => {});
-    const kill = setTimeout(() => { proc.kill('SIGKILL'); }, 150_000);
-    proc.on('exit', () => {
-      clearTimeout(kill);
-      const clean = out.replace(/\x1b\[[0-9;]*m/g, '');
-      const idx = clean.lastIndexOf('nexus > ');
-      if (idx < 0) return resolve({ ok: false, error: 'no reply captured' });
-      const after = clean.slice(idx + 'nexus > '.length);
-      const reply = after
-        .split('\n')
-        .filter((l) => !l.startsWith('{"level"'))
-        .join('\n')
-        .trim();
-      resolve({ ok: true, reply });
-    });
-    proc.on('error', (err) => {
-      clearTimeout(kill);
-      resolve({ ok: false, error: String(err.message || err) });
-    });
-  });
-}
-
 // ── Quick-action helpers (run real nexus CLI commands) ───────────────
 
 async function runNexusCli(args: string[], timeoutMs = 60_000): Promise<{ ok: boolean; output: string }> {

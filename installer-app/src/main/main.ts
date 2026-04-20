@@ -26,7 +26,6 @@ import {
   runUpdate,
   listMemories,
   deleteMemory,
-  chatSend,
   takeScreenshot,
   triggerDream,
   runHealthCheck,
@@ -471,10 +470,6 @@ app.whenReady().then(() => {
   ipcMain.handle('main:memory-delete', async (_e, id: unknown) => {
     if (typeof id !== 'string') return { ok: false, error: 'invalid id' };
     return deleteMemory(id);
-  });
-  ipcMain.handle('main:chat-send', async (_e, prompt: unknown) => {
-    if (typeof prompt !== 'string') return { ok: false, error: 'prompt must be a string' };
-    return chatSend(prompt);
   });
   ipcMain.handle('main:action-screenshot', async () => takeScreenshot());
   ipcMain.handle('main:action-dream', async () => triggerDream());
