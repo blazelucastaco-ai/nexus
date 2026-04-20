@@ -200,6 +200,11 @@ export class ClaudeProvider {
     const model = options.model ?? DEFAULT_MODEL;
     const maxTokens = options.maxTokens ?? 32768;
     const temperature = options.temperature ?? 0.4;
+    // Anthropic deprecated the `temperature` parameter on Opus 4.7+; sending it
+    // returns HTTP 400. Strip it only for those models; older Opus/Sonnet/Haiku
+    // still accept it. If the model list grows, keep this set updated.
+    const NO_TEMPERATURE_MODELS = /^claude-opus-4-[7-9]|^claude-opus-[5-9]/;
+    const supportsTemperature = !NO_TEMPERATURE_MODELS.test(model);
 
     // Build system prompt (top-level Anthropic param)
     const inlineSystem = options.messages
@@ -250,7 +255,7 @@ export class ClaudeProvider {
         const params: Anthropic.MessageStreamParams = {
           model,
           max_tokens: maxTokens,
-          temperature,
+          ...(supportsTemperature ? { temperature } : {}),
           messages: anthropicMessages,
           ...(fullSystem ? { system: [{ type: 'text' as const, text: fullSystem, cache_control: { type: 'ephemeral' as const } }] } : {}),
           ...(anthropicTools.length > 0 ? { tools: anthropicTools } : {}),
