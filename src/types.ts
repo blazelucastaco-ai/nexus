@@ -208,6 +208,7 @@ export const NexusConfigSchema = z.object({
   personality: z
     .object({
       name: z.string().default('NEXUS'),
+      preset: z.enum(['professional', 'friendly', 'sarcastic_genius', 'custom']).default('friendly'),
       traits: z
         .object({
           humor: z.number().min(0).max(1).default(0.7),

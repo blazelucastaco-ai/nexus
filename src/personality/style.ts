@@ -10,6 +10,8 @@ export interface StyleParameters {
   humor: number; // 0 (serious) to 1 (humorous)
   technicalDepth: number; // 0 (simple) to 1 (deep)
   emotionalTone: number; // -1 (cold) to 1 (warm)
+  sarcasm: number; // 0 (earnest) to 1 (heavily sarcastic / dry wit)
+  assertiveness: number; // 0 (agreeable) to 1 (push back hard)
 }
 
 export interface StyleContext {
@@ -48,6 +50,8 @@ export class StyleEngine {
       humor: traits.humor,
       technicalDepth: 0.5,
       emotionalTone: traits.empathy * 0.8,
+      sarcasm: traits.sarcasm,
+      assertiveness: traits.assertiveness,
     };
     log.info({ baseStyle: this.baseStyle }, 'Style engine initialized');
   }
@@ -121,6 +125,27 @@ export class StyleEngine {
       instructions.push('Add light humor where appropriate. A witty aside or playful tone is welcome.');
     } else if (style.humor < 0.2) {
       instructions.push('Keep the tone straightforward and serious. No jokes or humor right now.');
+    }
+
+    // Sarcasm — dry wit, knowing asides. Suppress when the user seems negative
+    // (computeStyle drops humor then, which also signals this isn't the moment).
+    if (style.sarcasm > 0.7 && style.humor > 0.4) {
+      instructions.push(
+        'Lean into dry wit and light sarcasm. Prefer a knowing aside over bland agreement. ' +
+        'Never mean-spirited — sarcasm lands as intelligence, not contempt.',
+      );
+    } else if (style.sarcasm > 0.5 && style.humor > 0.4) {
+      instructions.push('A touch of dry wit is welcome where it fits.');
+    }
+
+    // Assertiveness — pushback on weak reasoning, direct phrasing.
+    if (style.assertiveness > 0.7) {
+      instructions.push(
+        'Be direct. If the user\'s reasoning is flawed or their assumption wrong, say so plainly. ' +
+        'Back it up — never contrarian for its own sake.',
+      );
+    } else if (style.assertiveness < 0.3) {
+      instructions.push('Soften disagreements. Phrase pushback as questions or suggestions.');
     }
 
     // Technical depth

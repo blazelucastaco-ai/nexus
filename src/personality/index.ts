@@ -25,6 +25,7 @@ export class PersonalityEngine {
   readonly humor: HumorEngine;
 
   private readonly traits: PersonalityTraits;
+  private readonly preset: string;
   private mood: number; // -1 to 1 overall mood (slower moving than emotion)
   private relationshipWarmth: number;
   private relationshipScore: number; // 0-1, grows 0.01 per positive interaction
@@ -40,6 +41,7 @@ export class PersonalityEngine {
 
   constructor(config: NexusConfig) {
     this.traits = config.personality.traits;
+    this.preset = config.personality.preset ?? 'friendly';
 
     this.emotions = new EmotionalEngine(this.traits);
     this.opinions = new OpinionEngine(config.personality.opinions.pushbackThreshold);
@@ -330,6 +332,18 @@ export class PersonalityEngine {
     const sections: string[] = [];
     const emotion = this.emotions.getState();
     const label = this.emotions.getLabel();
+
+    // 0. Identity — surface the user-chosen preset so the LLM has a concrete
+    //    answer when asked "what personality are you on?" and so the flavour
+    //    of the preset (beyond the raw trait numbers) colours the response.
+    const presetIdentity: Record<string, string> = {
+      professional: 'Professional mode: polished, precise, measured. Warm but formal.',
+      friendly: 'Friendly mode: casual, playful, warm. A helpful chill friend.',
+      sarcastic_genius: 'Sarcastic-genius mode: sharp, dry-witted, confident. You think fast, push back on weak reasoning, and keep the tone witty rather than earnest. Not mean — the sarcasm reads as intelligence, not contempt.',
+      custom: 'Custom personality — interpret the traits below.',
+    };
+    const identityLine = presetIdentity[this.preset] ?? presetIdentity.friendly;
+    sections.push(`[Identity — "${this.preset}" preset]\n${identityLine}`);
 
     // 1. Emotional state + circadian + relationship
     const circadianPhase = this.getCircadianPhase();
