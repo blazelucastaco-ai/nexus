@@ -565,6 +565,7 @@ export function PersonalityStep(props: {
 export function PermissionsStep(props: { onNext: () => void; onBack: () => void }): JSX.Element {
   const [checks, setChecks] = useState<PermissionCheck[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [requesting, setRequesting] = useState<string | null>(null);
 
   const refresh = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -577,6 +578,29 @@ export function PermissionsStep(props: { onNext: () => void; onBack: () => void 
     void refresh();
   }, [refresh]);
 
+  // Permissions that auto-prompt via TCC when the probe runs. Others
+  // (Screen Recording, Accessibility) need the user to tick NEXUS.app
+  // manually in System Settings — no silent prompt is possible.
+  const AUTO_PROMPT = new Set(['contacts', 'automation']);
+
+  const request = async (perm: PermissionCheck): Promise<void> => {
+    setRequesting(perm.key);
+    try {
+      if (AUTO_PROMPT.has(perm.key)) {
+        // Re-running the check triggers the underlying osascript probe again.
+        // First time in the app's life, macOS will show the TCC dialog.
+        await window.nexus.permissions.check();
+      }
+      // Always open Settings as a fallback — needed for Screen Recording /
+      // Accessibility, harmless for the auto-prompt ones.
+      await window.nexus.permissions.open(perm.prefsUrl);
+      await new Promise((r) => setTimeout(r, 400));
+      await refresh();
+    } finally {
+      setRequesting(null);
+    }
+  };
+
   return (
     <div className="step">
       <span className="eyebrow">Step 6 / 9</span>
@@ -585,7 +609,9 @@ export function PermissionsStep(props: { onNext: () => void; onBack: () => void 
       </h1>
       <p className="step-lead">
         NEXUS needs a handful of permissions to see your screen, control apps, and
-        look up contacts. Click "Open Settings" to grant any that are missing.
+        look up contacts. Click <strong>Grant</strong> on each — Contacts will
+        prompt in-place; Screen Recording and Accessibility open System Settings
+        where you tick NEXUS.app manually.
       </p>
 
       <div className="checklist">
@@ -603,9 +629,10 @@ export function PermissionsStep(props: { onNext: () => void; onBack: () => void 
               <button
                 type="button"
                 className="check-action"
-                onClick={() => void window.nexus.permissions.open(c.prefsUrl)}
+                onClick={() => void request(c)}
+                disabled={requesting !== null}
               >
-                Open Settings
+                {requesting === c.key ? 'Requesting…' : 'Grant'}
               </button>
             )}
           </div>

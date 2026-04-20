@@ -54,7 +54,16 @@
       "darkModeSupport": false,
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
-      "identity": null
+      "identity": null,
+      "extendInfo": {
+        "NSContactsUsageDescription": "NEXUS uses Contacts to look up people when you ask about someone by name.",
+        "NSScreenCaptureUsageDescription": "NEXUS takes screenshots when you ask it to see what's on your screen.",
+        "NSAppleEventsUsageDescription": "NEXUS controls Finder, Contacts, and other apps via AppleScript to run tasks for you.",
+        "NSCameraUsageDescription": "NEXUS never captures camera input; this key is required only to prevent macOS from mistakenly blocking unrelated media APIs.",
+        "NSMicrophoneUsageDescription": "NEXUS never captures microphone input; this key is present only to satisfy Electron's media-API requirements.",
+        "NSCalendarsUsageDescription": "NEXUS can look up your schedule when you ask about your day or upcoming events.",
+        "NSRemindersUsageDescription": "NEXUS can read and create reminders when you ask it to schedule something."
+      }
     },
     "dmg": {
       "title": "NEXUS",

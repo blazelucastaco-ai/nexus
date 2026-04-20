@@ -7,30 +7,29 @@
   <style>
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
+    /* NEXUS palette — matches docs/index.html + installer-app */
     :root {
-      --bg:      #0b0b11;
-      --surface: #111118;
-      --card:    #16161f;
-      --border:  #1e1e2c;
-      --border2: #252535;
-      --violet:  #8B5CF6;
-      --violet2: #6D28D9;
-      --emerald: #34D399;
-      --rose:    #F87171;
-      --amber:   #FBBF24;
-      --sky:     #38BDF8;
-      --t1:      #f1f5f9;
-      --t2:      #94a3b8;
-      --t3:      #475569;
-      --t4:      #2d3548;
+      --p1:      #FAF6EE;
+      --p2:      #F5EFE2;
+      --p3:      #EEE6D2;
+      --div:     #E2D9C4;
+      --t:       #C4654A;
+      --td:      #A54E35;
+      --tl:      #D17A60;
+      --ink:     #2A1F1A;
+      --mid:     #5C4A3E;
+      --soft:    #9B8B82;
+      --ok:      #5A8C54;
+      --warn:    #C89D5E;
+      --alert:   #C4654A;
     }
 
     body {
       width: 310px;
-      background: var(--bg);
-      color: var(--t1);
-      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Segoe UI', sans-serif;
-      font-size: 12px;
+      background: var(--p1);
+      color: var(--ink);
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+      font-size: 12.5px;
       user-select: none;
       overflow: hidden;
     }
@@ -40,46 +39,48 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 13px 14px 11px;
-      border-bottom: 1px solid var(--border);
-      background: linear-gradient(180deg, #13131c 0%, var(--bg) 100%);
+      padding: 14px 14px 12px;
+      border-bottom: 1px solid var(--div);
+      background: var(--p2);
     }
 
     .logo {
       display: flex;
       align-items: center;
-      gap: 7px;
+      gap: 9px;
     }
 
     .logo-icon {
       width: 22px;
       height: 22px;
       border-radius: 5px;
-      background: linear-gradient(135deg, var(--violet) 0%, var(--violet2) 100%);
+      background: var(--t);
       display: flex;
       align-items: center;
       justify-content: center;
       font-size: 11px;
-      font-weight: 800;
+      font-weight: 700;
       color: #fff;
-      letter-spacing: -0.5px;
-      box-shadow: 0 0 10px #8B5CF640;
+      letter-spacing: -0.2px;
+      font-family: 'Libre Baskerville', Georgia, serif;
     }
 
     .logo-name {
-      font-size: 14px;
-      font-weight: 700;
-      color: var(--t1);
-      letter-spacing: 0.04em;
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--ink);
+      letter-spacing: 0.12em;
     }
 
     .logo-bridge {
-      font-size: 10px;
-      color: var(--t3);
+      font-size: 9.5px;
+      color: var(--soft);
       font-weight: 500;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.12em;
       text-transform: uppercase;
-      margin-left: -3px;
+      margin-top: 1px;
+      font-family: 'JetBrains Mono', monospace;
     }
 
     .header-right {
@@ -89,41 +90,42 @@
     }
 
     .version-badge {
-      font-size: 9.5px;
-      color: var(--t3);
-      background: var(--surface);
-      border: 1px solid var(--border);
+      font-size: 10px;
+      color: var(--soft);
+      background: var(--p1);
+      border: 1px solid var(--div);
       border-radius: 4px;
-      padding: 2px 6px;
+      padding: 3px 7px;
       font-weight: 500;
-      letter-spacing: 0.03em;
+      letter-spacing: 0.04em;
+      font-family: 'JetBrains Mono', monospace;
     }
 
     /* ── Status hero ─────────────────────────────── */
     .status-hero {
       padding: 14px 14px 12px;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--div);
     }
 
     .status-pill {
       display: flex;
       align-items: center;
-      gap: 9px;
-      padding: 9px 12px;
-      border-radius: 9px;
-      border: 1px solid var(--border);
-      background: var(--card);
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--div);
+      background: var(--p2);
       transition: border-color 0.3s, background 0.3s;
     }
 
     .status-pill.connected {
-      border-color: #34D39930;
-      background: #0d1f18;
+      border-color: #B5D1B0;
+      background: #EDF4EA;
     }
 
     .status-pill.disconnected {
-      border-color: #F8717130;
-      background: #1a0f0f;
+      border-color: var(--tl);
+      background: #FBEDE7;
     }
 
     .status-dot {
@@ -135,25 +137,25 @@
     }
 
     .status-dot.connected {
-      background: var(--emerald);
-      box-shadow: 0 0 8px #34D39980;
+      background: var(--ok);
+      box-shadow: 0 0 6px rgba(90, 140, 84, 0.5);
       animation: breathe 2.5s ease-in-out infinite;
     }
 
     .status-dot.disconnected {
-      background: var(--rose);
-      box-shadow: 0 0 6px #F8717150;
+      background: var(--t);
+      box-shadow: 0 0 6px rgba(196, 101, 74, 0.4);
     }
 
     .status-dot.connecting {
-      background: var(--amber);
-      box-shadow: 0 0 6px #FBBF2460;
+      background: var(--warn);
+      box-shadow: 0 0 6px rgba(200, 157, 94, 0.5);
       animation: blink 1s ease-in-out infinite;
     }
 
     @keyframes breathe {
-      0%, 100% { box-shadow: 0 0 6px #34D39970; }
-      50%       { box-shadow: 0 0 12px #34D399b0; }
+      0%, 100% { box-shadow: 0 0 5px rgba(90, 140, 84, 0.45); }
+      50%       { box-shadow: 0 0 11px rgba(90, 140, 84, 0.75); }
     }
 
     @keyframes blink {
@@ -164,42 +166,44 @@
     .status-info { flex: 1; }
 
     .status-label {
-      font-size: 12px;
+      font-size: 12.5px;
       font-weight: 600;
-      color: var(--t1);
+      color: var(--ink);
     }
 
     .status-sub {
       font-size: 10.5px;
-      color: var(--t3);
-      margin-top: 1px;
+      color: var(--soft);
+      margin-top: 2px;
     }
 
     .uptime-badge {
       font-size: 10px;
       font-weight: 600;
-      padding: 3px 7px;
+      padding: 3px 8px;
       border-radius: 5px;
-      background: #1a2e22;
-      color: var(--emerald);
-      border: 1px solid #34D39930;
+      background: #E6EFE3;
+      color: var(--ok);
+      border: 1px solid #B5D1B0;
       white-space: nowrap;
+      font-family: 'JetBrains Mono', monospace;
     }
 
     /* ── Stats row ───────────────────────────────── */
     .stats-row {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--div);
+      background: var(--p2);
     }
 
     .stat {
-      padding: 10px 0;
+      padding: 11px 0;
       display: flex;
       flex-direction: column;
       align-items: center;
       gap: 3px;
-      border-right: 1px solid var(--border);
+      border-right: 1px solid var(--div);
     }
 
     .stat:last-child { border-right: none; }
@@ -207,46 +211,49 @@
     .stat-value {
       font-size: 16px;
       font-weight: 700;
-      color: var(--t1);
+      color: var(--ink);
       line-height: 1;
       font-variant-numeric: tabular-nums;
+      font-family: 'Libre Baskerville', Georgia, serif;
     }
 
-    .stat-value.accent { color: var(--violet); }
+    .stat-value.accent { color: var(--t); }
 
     .stat-label {
       font-size: 9.5px;
-      color: var(--t3);
+      color: var(--soft);
       text-transform: uppercase;
-      letter-spacing: 0.07em;
+      letter-spacing: 0.1em;
       font-weight: 500;
+      font-family: 'JetBrains Mono', monospace;
     }
 
     /* ── Section ─────────────────────────────────── */
     .section {
-      padding: 10px 14px 0;
+      padding: 11px 14px 0;
     }
 
     .section-header {
       font-size: 9.5px;
-      font-weight: 600;
-      color: var(--t3);
+      font-weight: 500;
+      color: var(--t);
       text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin-bottom: 7px;
+      letter-spacing: 0.14em;
+      margin-bottom: 8px;
+      font-family: 'JetBrains Mono', monospace;
     }
 
     /* ── Active tab card ─────────────────────────── */
     .tab-card {
       display: flex;
       align-items: center;
-      gap: 9px;
-      padding: 8px 10px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 7px;
+      gap: 10px;
+      padding: 9px 11px;
+      background: var(--p2);
+      border: 1px solid var(--div);
+      border-radius: 8px;
       margin-bottom: 10px;
-      min-height: 38px;
+      min-height: 40px;
     }
 
     .tab-favicon {
@@ -254,7 +261,7 @@
       height: 14px;
       border-radius: 3px;
       flex-shrink: 0;
-      background: var(--border2);
+      background: var(--p3);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -270,9 +277,9 @@
     .tab-info { flex: 1; overflow: hidden; }
 
     .tab-title {
-      font-size: 11.5px;
+      font-size: 12px;
       font-weight: 500;
-      color: var(--t1);
+      color: var(--ink);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -280,40 +287,43 @@
 
     .tab-url {
       font-size: 10px;
-      color: var(--t3);
+      color: var(--soft);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      margin-top: 1px;
+      margin-top: 2px;
+      font-family: 'JetBrains Mono', monospace;
     }
 
     .tab-count-badge {
-      font-size: 9.5px;
-      color: var(--violet);
-      background: #8B5CF615;
-      border: 1px solid #8B5CF625;
+      font-size: 10px;
+      color: var(--t);
+      background: rgba(196, 101, 74, 0.09);
+      border: 1px solid rgba(196, 101, 74, 0.22);
       border-radius: 4px;
-      padding: 2px 6px;
+      padding: 2px 7px;
       white-space: nowrap;
       flex-shrink: 0;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 500;
     }
 
     /* ── Recent commands ─────────────────────────── */
     .activity-list {
       display: flex;
       flex-direction: column;
-      gap: 3px;
+      gap: 4px;
       margin-bottom: 12px;
     }
 
     .activity-item {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 5px 8px;
-      border-radius: 5px;
-      background: var(--card);
-      border: 1px solid var(--border);
+      gap: 9px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      background: var(--p2);
+      border: 1px solid var(--div);
     }
 
     .activity-dot {
@@ -323,50 +333,51 @@
       flex-shrink: 0;
     }
 
-    .activity-dot.ok   { background: var(--emerald); }
-    .activity-dot.fail { background: var(--rose); }
+    .activity-dot.ok   { background: var(--ok); }
+    .activity-dot.fail { background: var(--t); }
 
     .activity-action {
       flex: 1;
       font-size: 11px;
       font-weight: 500;
-      color: var(--t2);
-      font-family: 'SF Mono', 'Menlo', monospace;
+      color: var(--mid);
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
     }
 
     .activity-time {
       font-size: 10px;
-      color: var(--t4);
+      color: var(--soft);
       white-space: nowrap;
+      font-family: 'JetBrains Mono', monospace;
     }
 
     /* ── Empty / offline states ──────────────────── */
     .empty-state {
       font-size: 10.5px;
-      color: var(--t4);
+      color: var(--soft);
       text-align: center;
-      padding: 8px 0 12px;
+      padding: 10px 0 14px;
       font-style: italic;
     }
 
     .offline-card {
       margin: 0 0 12px;
-      padding: 10px 12px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 7px;
-      font-size: 11px;
-      color: var(--t3);
-      line-height: 1.6;
+      padding: 11px 13px;
+      background: var(--p2);
+      border: 1px solid var(--div);
+      border-radius: 8px;
+      font-size: 11.5px;
+      color: var(--mid);
+      line-height: 1.65;
     }
 
     .offline-card code {
-      font-family: 'SF Mono', Menlo, monospace;
-      color: var(--violet);
-      background: #8B5CF610;
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+      color: var(--t);
+      background: rgba(196, 101, 74, 0.08);
       padding: 1px 5px;
       border-radius: 3px;
-      font-size: 10.5px;
+      font-size: 11px;
     }
 
     /* ── Footer ──────────────────────────────────── */
@@ -374,35 +385,38 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 8px 14px;
-      border-top: 1px solid var(--border);
-      background: var(--surface);
+      padding: 9px 14px;
+      border-top: 1px solid var(--div);
+      background: var(--p2);
     }
 
     .footer-addr {
       font-size: 10px;
-      color: var(--t4);
-      font-family: 'SF Mono', Menlo, monospace;
+      color: var(--soft);
+      font-family: 'JetBrains Mono', Menlo, monospace;
     }
 
     .footer-indicator {
       display: flex;
       align-items: center;
-      gap: 4px;
+      gap: 5px;
       font-size: 10px;
-      color: var(--t3);
+      color: var(--soft);
+      font-family: 'JetBrains Mono', monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
 
     .footer-dot {
       width: 5px;
       height: 5px;
       border-radius: 50%;
-      background: var(--t4);
+      background: var(--soft);
     }
 
     .footer-dot.live {
-      background: var(--emerald);
-      box-shadow: 0 0 4px #34D39970;
+      background: var(--ok);
+      box-shadow: 0 0 4px rgba(90, 140, 84, 0.6);
     }
   </style>
 </head>
@@ -452,12 +466,12 @@
 
   <!-- Active tab (shown when connected) -->
   <div id="connected-content">
-    <div class="section" style="padding-top:11px">
+    <div class="section" style="padding-top:12px">
       <div class="section-header">Active Tab</div>
       <div class="tab-card" id="tab-card">
         <div class="tab-favicon" id="tab-favicon">
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-            <circle cx="5" cy="5" r="4" stroke="#475569" stroke-width="1.2"/>
+            <circle cx="5" cy="5" r="4" stroke="#9B8B82" stroke-width="1.2"/>
           </svg>
         </div>
         <div class="tab-info">
@@ -478,7 +492,7 @@
 
   <!-- Offline hint (shown when disconnected) -->
   <div id="offline-content" style="display:none">
-    <div class="section" style="padding-top:11px; padding-bottom:2px">
+    <div class="section" style="padding-top:12px; padding-bottom:2px">
       <div class="offline-card">
         NEXUS is not running.<br>
         Start it with <code>nexus start</code> or check that the service is active.
