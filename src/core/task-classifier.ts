@@ -21,8 +21,11 @@ const TASK_TRIGGERS: RegExp[] = [
   // "help me [work verb]..."
   new RegExp(`\\bhelp\\s+me\\s+(?:to\\s+)?${WORK_VERBS}\\b`, 'i'),
 
-  // Project type keywords (strong signal even without explicit verb)
-  /\b(?:website|web\s*site|landing\s*page|app(?:lication)?|script|program|bot|api|server|cli|tool|plugin|dashboard|portfolio|game|service|library|package|module)\b/i,
+  // Project type keyword paired with an intent signal. Without the intent
+  // gate, compliments like "this website is amazing bro" match because the
+  // noun alone is enough — and then the classifier routes to TaskEngine,
+  // which misfires disastrously.
+  /\b(?:need|want|would\s+like|looking\s+for|make\s+me|build\s+me|gimme|give\s+me|set\s+up|i'?d\s+like|let'?s\s+do|let'?s\s+build)\b[^.!?]{0,60}?\b(?:website|web\s*site|landing\s*page|app(?:lication)?|script|program|bot|api|server|cli|tool|plugin|dashboard|portfolio|game|service|library|package|module)\b/i,
 
   // Multi-step signal
   /\b(?:and\s+(?:then|also)|then\s+(?:run|test|deploy)|with\s+(?:a|an|the)\s+\w+\s+and)\b/i,

@@ -206,8 +206,12 @@ function commandTargetsNexusSource(command: string): boolean {
   if (!command) return false;
   const sourceDir = getNexusSourceDir();
   if (sourceDir && sourceDir !== '__NEXUS_SOURCE_UNKNOWN__') {
-    // Absolute path reference
-    if (command.includes(sourceDir)) return true;
+    // Absolute path reference — require a path separator or word boundary
+    // AFTER the source dir, otherwise sibling folders like
+    // `/Users/you/nexus-workspace/` would falsely match `/Users/you/nexus`.
+    const escaped = sourceDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const sourceDirRegex = new RegExp(`${escaped}(?:/|\\s|$|['"\`])`);
+    if (sourceDirRegex.test(command)) return true;
     // ~/<last-segment-of-source> reference, e.g. ~/nexus or ~/nexus/src
     const base = sourceDir.split('/').pop();
     if (base && new RegExp(`(?:^|[\\s'"\`])~?\\/?${base}(?:\\/|[\\s'"\`$]|$)`).test(command)) {
