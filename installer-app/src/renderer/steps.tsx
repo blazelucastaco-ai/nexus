@@ -902,11 +902,19 @@ interface DetectedSourceView {
   estimatedItems: number;
 }
 
+interface ImportResultView {
+  imported: number;
+  skipped: number;
+  skillsWritten?: number;
+  sources: Record<string, number>;
+  llmUsed?: boolean;
+}
+
 export function MemoryImportStep(props: { onNext: () => void; onBack: () => void }): JSX.Element {
   const [sources, setSources] = useState<DetectedSourceView[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<{ imported: number; skipped: number; sources: Record<string, number> } | null>(null);
+  const [result, setResult] = useState<ImportResultView | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -932,7 +940,7 @@ export function MemoryImportStep(props: { onNext: () => void; onBack: () => void
     setRunning(true);
     try {
       const r = await window.nexus.main.memoryImport([...selected]);
-      setResult(r);
+      setResult(r as ImportResultView);
     } finally {
       setRunning(false);
     }
@@ -947,10 +955,11 @@ export function MemoryImportStep(props: { onNext: () => void; onBack: () => void
         Start with a <em>head start</em>.
       </h1>
       <p className="step-lead">
-        NEXUS can pull in context from other AI agents on this Mac — memory notes,
-        preferences, project info, workflow habits. You get a brain that already knows
-        who you are instead of starting from zero. Everything imported is tagged so you
-        can audit or delete it later in the Memory tab.
+        NEXUS can read the context you've built up in other AI agents on this Mac
+        — memory notes, preferences, project info, workflow habits — and distil
+        it through Claude into <strong>its own</strong> memories and skills. Not a
+        mechanical copy. An actual synthesis in NEXUS's voice. Everything is tagged
+        so you can audit or delete it later in the Memory tab.
       </p>
 
       {sources === null && (
@@ -1009,13 +1018,13 @@ export function MemoryImportStep(props: { onNext: () => void; onBack: () => void
       {result && (
         <div className="card" style={{ marginTop: 18, borderColor: '#A8C49F' }}>
           <h3 style={{ marginTop: 0, marginBottom: 8 }}>
-            Imported {result.imported} memor{result.imported === 1 ? 'y' : 'ies'}
+            {result.llmUsed ? 'NEXUS read it and wrote its own memory' : 'Imported'}
           </h3>
-          {result.skipped > 0 && (
-            <p className="subtle" style={{ margin: '0 0 8px' }}>
-              Skipped {result.skipped} item{result.skipped === 1 ? '' : 's'} that were already present.
-            </p>
-          )}
+          <p className="subtle" style={{ margin: '0 0 8px' }}>
+            {result.imported} memor{result.imported === 1 ? 'y' : 'ies'}
+            {result.skillsWritten ? ` + ${result.skillsWritten} skill${result.skillsWritten === 1 ? '' : 's'}` : ''}
+            {result.skipped > 0 ? ` · ${result.skipped} already present` : ''}
+          </p>
           {Object.entries(result.sources).length > 0 && (
             <ul className="subtle" style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.7 }}>
               {Object.entries(result.sources).map(([src, n]) => (
@@ -1024,7 +1033,9 @@ export function MemoryImportStep(props: { onNext: () => void; onBack: () => void
             </ul>
           )}
           <p className="subtle" style={{ marginTop: 12, marginBottom: 0 }}>
-            NEXUS will surface these automatically in future conversations.
+            {result.llmUsed
+              ? 'Synthesized memories are live. Skills were written to ~/.nexus/skills/ and will load on next restart.'
+              : 'NEXUS will surface these automatically in future conversations.'}
           </p>
         </div>
       )}

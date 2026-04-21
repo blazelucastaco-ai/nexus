@@ -1272,15 +1272,22 @@ export async function runMemoryImport(sourceIds: string[]): Promise<MemoryImport
   if (filtered.length === 0) return { imported: 0, skipped: 0, sources: {} };
   const pnpm = (await resolveBinary('pnpm')) ?? 'pnpm';
   // Selected IDs become env var so the CLI can filter them. Simpler than
-  // adding positional args.
+  // adding positional args. Also forward ANTHROPIC_API_KEY from .env so the
+  // LLM synthesis path can actually call Claude (otherwise it falls back to
+  // the deterministic extractor).
+  const envKey = readAnthropicKeyFromRepoEnv();
   try {
     const { stdout } = await execFileAsync(
       pnpm,
       ['--silent', 'exec', 'tsx', 'scripts/run-import.ts'],
       {
         cwd: REPO_DIR,
-        timeout: 60_000,
-        env: { ...process.env, __NEXUS_IMPORT_SOURCES__: filtered.join(',') },
+        timeout: 180_000,
+        env: {
+          ...process.env,
+          ...(envKey ? { ANTHROPIC_API_KEY: envKey } : {}),
+          __NEXUS_IMPORT_SOURCES__: filtered.join(','),
+        },
       },
     );
     const result = JSON.parse(stdout.trim());
@@ -1288,6 +1295,16 @@ export async function runMemoryImport(sourceIds: string[]): Promise<MemoryImport
   } catch (err) {
     return { imported: 0, skipped: 0, sources: {} };
   }
+}
+
+function readAnthropicKeyFromRepoEnv(): string | null {
+  const envPath = join(REPO_DIR, '.env');
+  if (!existsSync(envPath)) return null;
+  try {
+    const text = readFileSync(envPath, 'utf-8');
+    const m = text.match(/^ANTHROPIC_API_KEY\s*=\s*(.+)$/m);
+    return m ? m[1]!.trim() : null;
+  } catch { return null; }
 }
 
 // ── About / system info ──────────────────────────────────────────────

@@ -890,9 +890,23 @@ program
     section('Memory Import');
     console.log('');
 
-    const { detectAllSources, extractMemories, importMemories } = await import('./memory/import.js');
+    const { detectAllSources, gatherRaw, synthesizeWithLLM, writeSkills, importMemories } = await import('./memory/import.js');
     const { getDatabase } = await import('./memory/database.js');
+    const { AIManager } = await import('./ai/index.js');
     const { confirm } = await import('@inquirer/prompts');
+
+    // If the key isn't already in env (common when running from a shell that
+    // didn't export it), pick it up from the .env the installer wrote.
+    if (!process.env.ANTHROPIC_API_KEY) {
+      try {
+        const envPath = join(PROJECT_DIR, '.env');
+        if (existsSync(envPath)) {
+          const envText = readFileSync(envPath, 'utf-8');
+          const m = envText.match(/^ANTHROPIC_API_KEY\s*=\s*(.+)$/m);
+          if (m) process.env.ANTHROPIC_API_KEY = m[1]!.trim();
+        }
+      } catch { /* ignore */ }
+    }
 
     const sources = await detectAllSources();
     if (sources.length === 0) {
@@ -939,28 +953,44 @@ program
     }
 
     console.log('');
-    console.log(chalk.dim(`${PAD}Extracting…`));
-    const allCandidates = (await Promise.all(toImport.map((s) => extractMemories(s)))).flat();
-    console.log(`${PAD}${EMERALD('✓')} ${chalk.bold(String(allCandidates.length))} item${allCandidates.length === 1 ? '' : 's'} ready to merge`);
+    console.log(chalk.dim(`${PAD}Reading each source and synthesizing with Claude…`));
+    const ai = new AIManager('anthropic');
+    const allMemories = [] as import('./memory/import.js').ImportCandidate[];
+    const allSkills = [] as import('./memory/import.js').SkillCandidate[];
+    for (const src of toImport) {
+      const bundle = gatherRaw(src);
+      if (!bundle) continue;
+      process.stdout.write(`${PAD}  ${chalk.dim(src.name + ' …')}`);
+      const { memories, skills } = await synthesizeWithLLM(bundle, ai);
+      allMemories.push(...memories);
+      allSkills.push(...skills);
+      console.log(`  ${EMERALD('✓')} ${memories.length} memor${memories.length === 1 ? 'y' : 'ies'} · ${skills.length} skill${skills.length === 1 ? '' : 's'}`);
+    }
+    console.log('');
+    console.log(`${PAD}${EMERALD('✓')} ${chalk.bold(String(allMemories.length))} memory item${allMemories.length === 1 ? '' : 's'} + ${chalk.bold(String(allSkills.length))} skill${allSkills.length === 1 ? '' : 's'} ready`);
 
     if (opts.dryRun) {
       console.log('');
       console.log(chalk.dim(`${PAD}(dry run — nothing written)`));
       console.log('');
-      for (const c of allCandidates.slice(0, 8)) {
+      for (const c of allMemories.slice(0, 8)) {
         console.log(chalk.dim(`${PAD}  · ${c.layer}/${c.type} · ${c.summary ?? c.content.slice(0, 60)}`));
       }
-      if (allCandidates.length > 8) {
-        console.log(chalk.dim(`${PAD}  … ${allCandidates.length - 8} more`));
+      if (allMemories.length > 8) console.log(chalk.dim(`${PAD}  … ${allMemories.length - 8} more`));
+      if (allSkills.length > 0) {
+        console.log('');
+        console.log(chalk.dim(`${PAD}Skills that would be written:`));
+        for (const s of allSkills) console.log(chalk.dim(`${PAD}  · ${s.name}.md — ${s.description}`));
       }
       showPhrase();
       return;
     }
 
     const db = getDatabase();
-    const result = await importMemories(allCandidates, db);
+    const result = await importMemories(allMemories, db);
+    const skillsWritten = writeSkills(allSkills);
     console.log('');
-    console.log(`${PAD}${EMERALD('◆')} ${chalk.bold(`Imported ${result.imported} memor${result.imported === 1 ? 'y' : 'ies'}`)}`);
+    console.log(`${PAD}${EMERALD('◆')} ${chalk.bold(`Imported ${result.imported} memor${result.imported === 1 ? 'y' : 'ies'}`)}  ${chalk.dim(`+ ${skillsWritten} skill${skillsWritten === 1 ? '' : 's'} written to ~/.nexus/skills/`)}`);
     if (result.skipped > 0) console.log(chalk.dim(`${PAD}  ${result.skipped} skipped (already present)`));
     for (const [src, n] of Object.entries(result.sources)) {
       console.log(chalk.dim(`${PAD}  ${src}: ${n}`));

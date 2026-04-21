@@ -1291,15 +1291,16 @@ async function main(): Promise<void> {
 
 async function offerMemoryImport(): Promise<void> {
   try {
-    const { detectAllSources, extractMemories, importMemories } = await import('../src/memory/import.js');
+    const { detectAllSources, gatherRaw, synthesizeWithLLM, writeSkills, importMemories } = await import('../src/memory/import.js');
     const { getDatabase } = await import('../src/memory/database.js');
+    const { AIManager } = await import('../src/ai/index.js');
 
     const sources = await detectAllSources();
     if (sources.length === 0) return;
 
     console.log('');
     console.log(chalk.bold('  Other AI agents detected'));
-    console.log(chalk.dim('  You can merge their memory into NEXUS so it starts with context about you.'));
+    console.log(chalk.dim('  NEXUS will read their context and write its own memories and skills based on what it learns.'));
     console.log('');
     for (const s of sources) {
       const marker = s.status === 'ready' ? chalk.green('●') : s.status === 'coming-soon' ? chalk.yellow('●') : chalk.dim('●');
@@ -1311,21 +1312,31 @@ async function offerMemoryImport(): Promise<void> {
     if (ready.length === 0) return;
 
     const shouldImport = await confirm({
-      message: `Merge memory from ${ready.length === 1 ? ready[0]!.name : ready.length + ' agents'} into NEXUS now?`,
+      message: `Let NEXUS study and learn from ${ready.length === 1 ? ready[0]!.name : ready.length + ' agents'} now?`,
       default: true,
     });
     if (!shouldImport) return;
 
-    const spinner = ora({ text: 'Extracting and merging…', color: 'cyan' }).start();
-    const candidates = (await Promise.all(ready.map((s) => extractMemories(s)))).flat();
+    const spinner = ora({ text: 'Reading and synthesizing with Claude…', color: 'cyan' }).start();
+    const ai = new AIManager('anthropic');
+    const allMemories = [];
+    const allSkills = [];
+    for (const s of ready) {
+      const bundle = gatherRaw(s);
+      if (!bundle) continue;
+      spinner.text = `Synthesizing ${s.name}…`;
+      const { memories, skills } = await synthesizeWithLLM(bundle, ai);
+      allMemories.push(...memories);
+      allSkills.push(...skills);
+    }
     const db = getDatabase();
-    const result = await importMemories(candidates, db);
+    const result = await importMemories(allMemories, db);
+    const skillsWritten = writeSkills(allSkills);
     spinner.succeed(
-      `Imported ${result.imported} memor${result.imported === 1 ? 'y' : 'ies'}` +
+      `Imported ${result.imported} memor${result.imported === 1 ? 'y' : 'ies'} + ${skillsWritten} skill${skillsWritten === 1 ? '' : 's'}` +
         (result.skipped > 0 ? ` · skipped ${result.skipped}` : ''),
     );
   } catch (err) {
-    // Never let memory import break the setup flow.
     console.log(chalk.dim(`  Memory import skipped: ${(err as Error).message}`));
   }
 }
