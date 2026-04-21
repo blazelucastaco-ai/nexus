@@ -676,6 +676,126 @@ footer {
 .hero-card { animation: up .7s .3s ease both; }
 
 /* ─────────────────────────────────────────────
+   ACTIVITY — live commit feed
+───────────────────────────────────────────── */
+.commit-feed {
+  margin-top: 32px;
+  max-width: 820px;
+  border: 1px solid var(--div);
+  border-radius: var(--r12);
+  background: var(--p2);
+  overflow: hidden;
+}
+.commit-loading {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 40px 20px;
+  color: var(--soft);
+  font-size: 13.5px;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: .05em;
+}
+.spin-dot {
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid var(--div);
+  border-top-color: var(--t);
+  animation: spin .9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.commit-row {
+  display: grid;
+  grid-template-columns: 94px 1fr auto;
+  gap: 16px;
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--div);
+  transition: background .15s;
+  align-items: flex-start;
+}
+.commit-row:last-child { border-bottom: none; }
+.commit-row:hover { background: var(--p3); }
+
+.commit-hash {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--t);
+  background: var(--p1);
+  border: 1px solid var(--div);
+  border-radius: 4px;
+  padding: 3px 8px;
+  text-align: center;
+  letter-spacing: .03em;
+  align-self: flex-start;
+  margin-top: 1px;
+}
+.commit-row:hover .commit-hash {
+  border-color: var(--tl);
+  color: var(--td);
+}
+
+.commit-body { min-width: 0; }
+.commit-msg {
+  font-family: 'Libre Baskerville', Georgia, serif;
+  font-size: 15.5px;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1.4;
+  margin-bottom: 5px;
+  overflow-wrap: anywhere;
+}
+.commit-msg em { font-style: italic; color: var(--t); font-weight: 400; }
+.commit-type {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 3px;
+  margin-right: 8px;
+  vertical-align: 2px;
+  white-space: nowrap;
+}
+.commit-type.feat { background: #E6EFE3; color: #5A8C54; border: 1px solid #B5D1B0; }
+.commit-type.fix { background: #FBEDE7; color: var(--td); border: 1px solid var(--tl); }
+.commit-type.chore { background: #F2EEE2; color: var(--mid); border: 1px solid var(--div); }
+.commit-type.docs { background: #EDE9F0; color: #6B5584; border: 1px solid #C9BEDC; }
+.commit-type.refactor,
+.commit-type.revert { background: #F4EAE2; color: #8A6A4A; border: 1px solid #D5BEA3; }
+
+.commit-meta {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 12.5px;
+  color: var(--soft);
+}
+.commit-meta .commit-author { color: var(--mid); font-weight: 500; }
+
+.commit-link {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--soft);
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: color .15s, background .15s;
+  align-self: center;
+}
+.commit-link:hover { color: var(--t); background: var(--p1); }
+
+.commit-foot {
+  margin-top: 20px;
+  display: flex;
+  justify-content: center;
+}
+.commit-error {
+  padding: 32px 24px;
+  text-align: center;
+  color: var(--soft);
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+.commit-error a { color: var(--t); font-weight: 600; }
+.commit-error a:hover { color: var(--td); }
+
+/* ─────────────────────────────────────────────
    RESPONSIVE
 ───────────────────────────────────────────── */
 @media (max-width: 960px) {
@@ -695,6 +815,9 @@ footer {
   .arch-grid { grid-template-columns:1fr; }
   .hero-btns { flex-direction:column; }
   .cta-btns  { flex-direction:column; align-items:center; }
+  .commit-row { grid-template-columns: 1fr; gap: 8px; padding: 14px 16px; }
+  .commit-hash { justify-self: start; }
+  .commit-link { justify-self: start; }
 }
 </style>
 </head>
@@ -711,6 +834,7 @@ footer {
     <li><a href="#features">Features</a></li>
     <li><a href="#pipeline">How It Works</a></li>
     <li><a href="#perf">Benchmarks</a></li>
+    <li><a href="#activity">Activity</a></li>
   </ul>
   <div class="nav-end">
     <a href="https://github.com/blazelucastaco-ai/nexus" class="nav-gh">GitHub ↗</a>
@@ -915,6 +1039,26 @@ footer {
   </div>
 </section>
 
+<!-- ACTIVITY — live commit feed from GitHub -->
+<section id="activity" class="sec">
+  <span class="eyebrow">Activity · Built in public</span>
+  <h2>Every commit, <em>out in the open.</em></h2>
+  <p class="lead">Live feed from the <code>main</code> branch of <code>blazelucastaco-ai/nexus</code>. Fetched straight from GitHub on page load — what you see below is what shipped.</p>
+
+  <div class="commit-feed" id="commit-feed">
+    <div class="commit-loading">
+      <div class="spin-dot"></div>
+      <span>Fetching recent commits…</span>
+    </div>
+  </div>
+
+  <div class="commit-foot">
+    <a class="btn-g" href="https://github.com/blazelucastaco-ai/nexus/commits/main" style="padding:10px 18px;font-size:13px;">
+      See full history on GitHub ↗
+    </a>
+  </div>
+</section>
+
 <!-- INSTALL -->
 <section id="install" class="sec">
   <span class="eyebrow">Installation</span>
@@ -1006,6 +1150,94 @@ footer {
   </div>
   <span class="foot-copy">MIT License · Powered by Anthropic Claude</span>
 </footer>
+
+<script>
+(function(){
+  const REPO = 'blazelucastaco-ai/nexus';
+  const LIMIT = 15;
+  const feed = document.getElementById('commit-feed');
+  if (!feed) return;
+
+  // Parse conventional-commit prefix out of the subject line.
+  // "fix(installer-app): ..." -> { type: "fix", scope: "installer-app", rest: "..." }
+  function splitCommit(subject) {
+    const m = subject.match(/^(feat|fix|chore|docs|refactor|revert|style|perf|test|build|ci)(?:\(([^)]+)\))?:\s*(.+)$/i);
+    if (!m) return { type: null, scope: null, rest: subject };
+    return { type: m[1].toLowerCase(), scope: m[2] || null, rest: m[3] };
+  }
+
+  function relTime(iso) {
+    const then = new Date(iso).getTime();
+    const now = Date.now();
+    const s = Math.max(0, Math.round((now - then) / 1000));
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.round(s / 60) + 'm ago';
+    if (s < 86400) return Math.round(s / 3600) + 'h ago';
+    if (s < 86400 * 7) return Math.round(s / 86400) + 'd ago';
+    return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function render(commits) {
+    feed.innerHTML = commits.map(function(c) {
+      const subject = (c.commit.message || '').split('\n')[0];
+      const parts = splitCommit(subject);
+      const typeBadge = parts.type
+        ? '<span class="commit-type ' + parts.type + '">' + parts.type + '</span>'
+        : '';
+      const scopeText = parts.scope
+        ? '<em>(' + escapeHtml(parts.scope) + ')</em> '
+        : '';
+      const author = c.author && c.author.login
+        ? c.author.login
+        : (c.commit.author && c.commit.author.name) || 'unknown';
+      return (
+        '<div class="commit-row">' +
+          '<a class="commit-hash" href="' + escapeHtml(c.html_url) + '" target="_blank" rel="noopener">' +
+            escapeHtml(c.sha.slice(0, 7)) +
+          '</a>' +
+          '<div class="commit-body">' +
+            '<div class="commit-msg">' + typeBadge + scopeText + escapeHtml(parts.rest) + '</div>' +
+            '<div class="commit-meta"><span class="commit-author">' + escapeHtml(author) + '</span> · ' + relTime(c.commit.author.date) + '</div>' +
+          '</div>' +
+          '<a class="commit-link" href="' + escapeHtml(c.html_url) + '" target="_blank" rel="noopener" title="View on GitHub">↗</a>' +
+        '</div>'
+      );
+    }).join('');
+  }
+
+  function fail(msg) {
+    feed.innerHTML = '<div class="commit-error">' + msg +
+      '<br><br><a href="https://github.com/' + REPO + '/commits/main" target="_blank" rel="noopener">View history on GitHub →</a></div>';
+  }
+
+  fetch('https://api.github.com/repos/' + REPO + '/commits?per_page=' + LIMIT, {
+    headers: { 'Accept': 'application/vnd.github+json' },
+  })
+    .then(function(r) {
+      if (r.status === 403) throw new Error('GitHub API rate limit hit. Try again in a few minutes.');
+      if (!r.ok) throw new Error('GitHub returned ' + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      if (!Array.isArray(data) || data.length === 0) {
+        fail('No commits to show.');
+        return;
+      }
+      render(data);
+    })
+    .catch(function(err) {
+      fail('Couldn\'t load commits — ' + (err && err.message ? err.message : 'network error') + '.');
+    });
+})();
+</script>
 
 </body>
 </html>
