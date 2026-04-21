@@ -1036,6 +1036,75 @@ footer {
   </div>
 </section>
 
+<!-- INSTALL -->
+<section id="install" class="sec sec-alt">
+  <span class="eyebrow">Installation</span>
+  <h2>Pick your <em>path.</em></h2>
+  <p class="lead">Download the Mac installer for a click-through setup, or paste one command into your terminal.</p>
+
+  <!-- TWO-PATH HERO -->
+  <div style="margin:40px 0 0 0;display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+
+    <!-- OPTION A: DOWNLOAD -->
+    <div style="background:var(--p2);border:1px solid var(--div);border-radius:var(--r12);padding:28px 26px;display:flex;flex-direction:column;">
+      <span style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--t);margin-bottom:10px;">Recommended</span>
+      <h3 style="font-family:'Libre Baskerville',serif;font-size:22px;font-weight:700;color:var(--ink);margin-bottom:8px;line-height:1.2;">Download the <em style="color:var(--t);">installer app.</em></h3>
+      <p style="font-size:13.5px;color:var(--mid);line-height:1.65;margin-bottom:22px;flex:1;">Native Mac app. Walks you through Telegram, API keys, agents, personality, and permissions. No terminal needed.</p>
+      <a href="https://github.com/blazelucastaco-ai/nexus/releases/latest/download/NEXUS-Installer.dmg" class="btn-p" style="justify-content:center;padding:13px 20px;">
+        <span>↓</span><span>Download for Mac</span>
+      </a>
+      <p style="font-size:11.5px;color:var(--soft);margin-top:12px;text-align:center;font-family:'JetBrains Mono',monospace;letter-spacing:.05em;">macOS 12+ · Apple Silicon · ~95 MB</p>
+    </div>
+
+    <!-- OPTION B: CURL -->
+    <div style="background:#1C1310;border-radius:var(--r12);overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.18);display:flex;flex-direction:column;">
+      <div style="padding:12px 18px;background:rgba(255,255,255,.05);border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.35);">For developers</span>
+        <button onclick="navigator.clipboard?.writeText('curl -fsSL https://raw.githubusercontent.com/blazelucastaco-ai/nexus/main/remote-install.sh | bash');this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',2000)" style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#D17A60;letter-spacing:.08em;background:none;border:1px solid rgba(209,122,96,.35);padding:3px 10px;border-radius:3px;cursor:pointer;">Copy</button>
+      </div>
+      <div style="padding:24px 26px;flex:1;display:flex;flex-direction:column;justify-content:center;">
+        <p style="font-family:'Libre Baskerville',serif;font-size:18px;font-weight:700;color:rgba(255,255,255,.92);margin-bottom:6px;line-height:1.3;">Install from the <em style="color:#D17A60;">terminal.</em></p>
+        <p style="font-size:12.5px;color:rgba(255,255,255,.45);margin-bottom:18px;line-height:1.6;">One command. Clones the repo, installs dependencies, opens the same setup wizard.</p>
+        <code style="display:block;font-family:'JetBrains Mono',monospace;font-size:12.5px;line-height:1.6;color:rgba(255,255,255,.85);word-break:break-all;background:rgba(255,255,255,.04);padding:12px 14px;border-radius:6px;border:1px solid rgba(255,255,255,.06);"><span style="color:#D17A60;">curl</span> <span style="color:rgba(255,255,255,.4);">-fsSL</span> <span style="color:#7BAEC8;">https://raw.githubusercontent.com/blazelucastaco-ai/nexus/main/remote-install.sh</span> <span style="color:rgba(255,255,255,.4);">| bash</span></code>
+      </div>
+    </div>
+  </div>
+
+  <div class="inst-grid">
+    <div class="inst-steps">
+      <p style="font-size:13px;color:var(--soft);margin-bottom:18px;font-family:'JetBrains Mono',monospace;letter-spacing:.04em;">Or install manually:</p>
+      <div class="inst-step"><div class="inst-n">1</div><div><h4>Clone the repository</h4><p>Clone from GitHub and enter the project directory.</p></div></div>
+      <div class="inst-step"><div class="inst-n">2</div><div><h4>Run the install script</h4><p>Requires Node.js 22+ and a Mac (macOS 12+). Script handles everything.</p></div></div>
+      <div class="inst-step"><div class="inst-n">3</div><div><h4>Run the setup wizard</h4><p>Configures your Anthropic API key, Telegram bot token, and Chrome extension.</p></div></div>
+      <div class="inst-step"><div class="inst-n">4</div><div><h4>Start NEXUS</h4><p>Run <code>nexus start</code>. NEXUS sends you a "Good morning" briefing on Telegram.</p></div></div>
+      <div class="inst-step"><div class="inst-n">5</div><div><h4>Message NEXUS on Telegram</h4><p>Try <code>/status</code> to confirm everything is running.</p></div></div>
+    </div>
+    <div class="code-box">
+      <div class="cb-bar">
+        <span class="cb-lbl">manual install</span>
+        <button class="cb-copy" onclick="navigator.clipboard?.writeText(this.closest('.code-box').querySelector('.cb-body').innerText);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',2000)">Copy</button>
+      </div>
+      <div class="cb-body">
+        <span class="cc"># Clone</span>
+        <span><span class="cd">git clone</span> <span class="ca">https://github.com/blazelucastaco-ai/nexus.git</span></span>
+        <span><span class="cd">cd</span> <span class="ca">nexus</span></span>
+        <span>&nbsp;</span>
+        <span class="cc"># Run the installer</span>
+        <span><span class="cd">./install.sh</span></span>
+        <span>&nbsp;</span>
+        <span class="cc"># Start NEXUS</span>
+        <span><span class="cd">nexus start</span></span>
+        <span>&nbsp;</span>
+        <span class="cc"># Check status anytime</span>
+        <span><span class="cd">nexus status</span></span>
+        <span><span class="cd">nexus logs</span></span>
+        <span><span class="cd">nexus health</span></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+
 <!-- PERFORMANCE -->
 <section id="perf" class="sec sec-alt2">
   <span class="eyebrow">Performance</span>
@@ -1166,75 +1235,6 @@ footer {
     </a>
   </div>
 </section>
-
-<!-- INSTALL -->
-<section id="install" class="sec">
-  <span class="eyebrow">Installation</span>
-  <h2>Pick your <em>path.</em></h2>
-  <p class="lead">Download the Mac installer for a click-through setup, or paste one command into your terminal.</p>
-
-  <!-- TWO-PATH HERO -->
-  <div style="margin:40px 0 0 0;display:grid;grid-template-columns:1fr 1fr;gap:20px;">
-
-    <!-- OPTION A: DOWNLOAD -->
-    <div style="background:var(--p2);border:1px solid var(--div);border-radius:var(--r12);padding:28px 26px;display:flex;flex-direction:column;">
-      <span style="font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--t);margin-bottom:10px;">Recommended</span>
-      <h3 style="font-family:'Libre Baskerville',serif;font-size:22px;font-weight:700;color:var(--ink);margin-bottom:8px;line-height:1.2;">Download the <em style="color:var(--t);">installer app.</em></h3>
-      <p style="font-size:13.5px;color:var(--mid);line-height:1.65;margin-bottom:22px;flex:1;">Native Mac app. Walks you through Telegram, API keys, agents, personality, and permissions. No terminal needed.</p>
-      <a href="https://github.com/blazelucastaco-ai/nexus/releases/latest/download/NEXUS-Installer.dmg" class="btn-p" style="justify-content:center;padding:13px 20px;">
-        <span>↓</span><span>Download for Mac</span>
-      </a>
-      <p style="font-size:11.5px;color:var(--soft);margin-top:12px;text-align:center;font-family:'JetBrains Mono',monospace;letter-spacing:.05em;">macOS 12+ · Apple Silicon · ~95 MB</p>
-    </div>
-
-    <!-- OPTION B: CURL -->
-    <div style="background:#1C1310;border-radius:var(--r12);overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.18);display:flex;flex-direction:column;">
-      <div style="padding:12px 18px;background:rgba(255,255,255,.05);border-bottom:1px solid rgba(255,255,255,.07);display:flex;align-items:center;justify-content:space-between;">
-        <span style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.35);">For developers</span>
-        <button onclick="navigator.clipboard?.writeText('curl -fsSL https://raw.githubusercontent.com/blazelucastaco-ai/nexus/main/remote-install.sh | bash');this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',2000)" style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#D17A60;letter-spacing:.08em;background:none;border:1px solid rgba(209,122,96,.35);padding:3px 10px;border-radius:3px;cursor:pointer;">Copy</button>
-      </div>
-      <div style="padding:24px 26px;flex:1;display:flex;flex-direction:column;justify-content:center;">
-        <p style="font-family:'Libre Baskerville',serif;font-size:18px;font-weight:700;color:rgba(255,255,255,.92);margin-bottom:6px;line-height:1.3;">Install from the <em style="color:#D17A60;">terminal.</em></p>
-        <p style="font-size:12.5px;color:rgba(255,255,255,.45);margin-bottom:18px;line-height:1.6;">One command. Clones the repo, installs dependencies, opens the same setup wizard.</p>
-        <code style="display:block;font-family:'JetBrains Mono',monospace;font-size:12.5px;line-height:1.6;color:rgba(255,255,255,.85);word-break:break-all;background:rgba(255,255,255,.04);padding:12px 14px;border-radius:6px;border:1px solid rgba(255,255,255,.06);"><span style="color:#D17A60;">curl</span> <span style="color:rgba(255,255,255,.4);">-fsSL</span> <span style="color:#7BAEC8;">https://raw.githubusercontent.com/blazelucastaco-ai/nexus/main/remote-install.sh</span> <span style="color:rgba(255,255,255,.4);">| bash</span></code>
-      </div>
-    </div>
-  </div>
-
-  <div class="inst-grid">
-    <div class="inst-steps">
-      <p style="font-size:13px;color:var(--soft);margin-bottom:18px;font-family:'JetBrains Mono',monospace;letter-spacing:.04em;">Or install manually:</p>
-      <div class="inst-step"><div class="inst-n">1</div><div><h4>Clone the repository</h4><p>Clone from GitHub and enter the project directory.</p></div></div>
-      <div class="inst-step"><div class="inst-n">2</div><div><h4>Run the install script</h4><p>Requires Node.js 22+ and a Mac (macOS 12+). Script handles everything.</p></div></div>
-      <div class="inst-step"><div class="inst-n">3</div><div><h4>Run the setup wizard</h4><p>Configures your Anthropic API key, Telegram bot token, and Chrome extension.</p></div></div>
-      <div class="inst-step"><div class="inst-n">4</div><div><h4>Start NEXUS</h4><p>Run <code>nexus start</code>. NEXUS sends you a "Good morning" briefing on Telegram.</p></div></div>
-      <div class="inst-step"><div class="inst-n">5</div><div><h4>Message NEXUS on Telegram</h4><p>Try <code>/status</code> to confirm everything is running.</p></div></div>
-    </div>
-    <div class="code-box">
-      <div class="cb-bar">
-        <span class="cb-lbl">manual install</span>
-        <button class="cb-copy" onclick="navigator.clipboard?.writeText(this.closest('.code-box').querySelector('.cb-body').innerText);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',2000)">Copy</button>
-      </div>
-      <div class="cb-body">
-        <span class="cc"># Clone</span>
-        <span><span class="cd">git clone</span> <span class="ca">https://github.com/blazelucastaco-ai/nexus.git</span></span>
-        <span><span class="cd">cd</span> <span class="ca">nexus</span></span>
-        <span>&nbsp;</span>
-        <span class="cc"># Run the installer</span>
-        <span><span class="cd">./install.sh</span></span>
-        <span>&nbsp;</span>
-        <span class="cc"># Start NEXUS</span>
-        <span><span class="cd">nexus start</span></span>
-        <span>&nbsp;</span>
-        <span class="cc"># Check status anytime</span>
-        <span><span class="cd">nexus status</span></span>
-        <span><span class="cd">nexus logs</span></span>
-        <span><span class="cd">nexus health</span></span>
-      </div>
-    </div>
-  </div>
-</section>
-
 <!-- CTA -->
 <div class="cta">
   <h2>Your AI. Your machine.<br/><em>Your rules.</em></h2>
