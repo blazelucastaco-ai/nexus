@@ -215,7 +215,13 @@ export class Orchestrator {
   private dreamInterval: ReturnType<typeof setInterval> | null = null;
   private readonly INACTIVITY_MS = 30 * 60 * 1000; // 30 minutes
   private readonly SUMMARY_EVERY_N_TURNS = 5;
-  private readonly DREAM_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+  // Dream cycle runs at night when the user is asleep. Checked every 15 min;
+  // only fires inside the night window (2am–5am local) and at most once per
+  // 20h to avoid double-dipping if the daemon restarts during the window.
+  private readonly DREAM_TICK_MS = 15 * 60 * 1000;
+  private readonly DREAM_NIGHT_WINDOW_START_HOUR = 2; // inclusive
+  private readonly DREAM_NIGHT_WINDOW_END_HOUR = 5;   // exclusive
+  private readonly DREAM_MIN_HOURS_BETWEEN = 20;
 
   // Session-level token usage tracking
   private sessionTokens = { input: 0, output: 0, requests: 0 };
@@ -2034,26 +2040,44 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
       }
     };
 
-    // Check when the last dream ran — only do the startup run if it's been > 4 hours
-    const startupDelay = async () => {
+    // Only fire during the local-time night window, and at most once per
+    // ~day. Checked on each tick; returns true when it's safe to dream.
+    const isDreamWindow = (): boolean => {
+      const hour = new Date().getHours();
+      return (
+        hour >= this.DREAM_NIGHT_WINDOW_START_HOUR &&
+        hour < this.DREAM_NIGHT_WINDOW_END_HOUR
+      );
+    };
+
+    const hoursSinceLastDream = (): number => {
       try {
         const db = getDatabase();
         const row = db
           .prepare(`SELECT created_at FROM memories WHERE source = 'dream-cycle' ORDER BY created_at DESC LIMIT 1`)
           .get() as { created_at: string } | undefined;
-        if (row) {
-          const lastDream = new Date(row.created_at).getTime();
-          const hoursSince = (Date.now() - lastDream) / (1000 * 60 * 60);
-          if (hoursSince < 4) {
-            log.info({ hoursSince: hoursSince.toFixed(1) }, 'Skipping startup dream — ran recently');
-            return;
-          }
-        }
-      } catch { /* DB not ready yet — skip */ }
-      runDream();
+        if (!row) return Number.POSITIVE_INFINITY;
+        return (Date.now() - new Date(row.created_at).getTime()) / 3_600_000;
+      } catch {
+        return Number.POSITIVE_INFINITY; // DB not ready — allow
+      }
     };
-    setTimeout(startupDelay, 60_000);
-    this.dreamInterval = setInterval(runDream, this.DREAM_INTERVAL_MS);
+
+    const tick = async () => {
+      if (!isDreamWindow()) return;
+      const hours = hoursSinceLastDream();
+      if (hours < this.DREAM_MIN_HOURS_BETWEEN) {
+        log.debug({ hoursSince: hours.toFixed(1) }, 'Dream skipped — ran recently');
+        return;
+      }
+      await runDream();
+    };
+
+    // Startup: if the daemon boots inside the night window and hasn't
+    // dreamt recently, do one pass immediately. Otherwise just wait.
+    setTimeout(() => { void tick(); }, 60_000);
+
+    this.dreamInterval = setInterval(() => { void tick(); }, this.DREAM_TICK_MS);
   }
 
   // ── Ultra Mode: strong-model review + approval gate ──────────────────
