@@ -89,6 +89,10 @@ const api = {
     actionScreenshot: (): Promise<QuickActionResult> => ipcRenderer.invoke('main:action-screenshot'),
     actionDream: (): Promise<QuickActionResult> => ipcRenderer.invoke('main:action-dream'),
     actionHealth: (): Promise<QuickActionResult> => ipcRenderer.invoke('main:action-health'),
+    memoryDetectSources: (): Promise<Array<{ id: string; name: string; status: string; summary: string; estimatedItems: number }>> =>
+      ipcRenderer.invoke('main:memory-detect-sources'),
+    memoryImport: (sourceIds: string[]): Promise<{ imported: number; skipped: number; sources: Record<string, number> }> =>
+      ipcRenderer.invoke('main:memory-import', sourceIds),
   },
 };
 

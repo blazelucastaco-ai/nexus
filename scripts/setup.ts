@@ -1282,8 +1282,52 @@ async function main(): Promise<void> {
   // Step 9: Chrome extension
   const extensionConnected = await setupChromeExtension();
 
+  // Step 10: Optional memory import from other agents
+  await offerMemoryImport();
+
   // Celebration
   showCelebration({ agents, ai, personality, extensionConnected });
+}
+
+async function offerMemoryImport(): Promise<void> {
+  try {
+    const { detectAllSources, extractMemories, importMemories } = await import('../src/memory/import.js');
+    const { getDatabase } = await import('../src/memory/database.js');
+
+    const sources = await detectAllSources();
+    if (sources.length === 0) return;
+
+    console.log('');
+    console.log(chalk.bold('  Other AI agents detected'));
+    console.log(chalk.dim('  You can merge their memory into NEXUS so it starts with context about you.'));
+    console.log('');
+    for (const s of sources) {
+      const marker = s.status === 'ready' ? chalk.green('●') : s.status === 'coming-soon' ? chalk.yellow('●') : chalk.dim('●');
+      console.log(`  ${marker} ${chalk.bold(s.name)}  ${chalk.dim('— ' + s.summary)}`);
+    }
+    console.log('');
+
+    const ready = sources.filter((s) => s.status === 'ready');
+    if (ready.length === 0) return;
+
+    const shouldImport = await confirm({
+      message: `Merge memory from ${ready.length === 1 ? ready[0]!.name : ready.length + ' agents'} into NEXUS now?`,
+      default: true,
+    });
+    if (!shouldImport) return;
+
+    const spinner = ora({ text: 'Extracting and merging…', color: 'cyan' }).start();
+    const candidates = (await Promise.all(ready.map((s) => extractMemories(s)))).flat();
+    const db = getDatabase();
+    const result = await importMemories(candidates, db);
+    spinner.succeed(
+      `Imported ${result.imported} memor${result.imported === 1 ? 'y' : 'ies'}` +
+        (result.skipped > 0 ? ` · skipped ${result.skipped}` : ''),
+    );
+  } catch (err) {
+    // Never let memory import break the setup flow.
+    console.log(chalk.dim(`  Memory import skipped: ${(err as Error).message}`));
+  }
 }
 
 main().catch((err: unknown) => {

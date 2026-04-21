@@ -878,6 +878,98 @@ program
     showPhrase();
   });
 
+// ── nexus import-memories ─────────────────────────────────────────────────────
+
+program
+  .command('import-memories')
+  .description('Detect other AI agents (Claude Code, Codex, Gemini) and merge their memory into NEXUS')
+  .option('-y, --yes', 'Import everything ready without asking')
+  .option('--dry-run', 'Show what would be imported without writing anything')
+  .action(async (opts: { yes?: boolean; dryRun?: boolean }) => {
+    showLogo(true);
+    section('Memory Import');
+    console.log('');
+
+    const { detectAllSources, extractMemories, importMemories } = await import('./memory/import.js');
+    const { getDatabase } = await import('./memory/database.js');
+    const { confirm } = await import('@inquirer/prompts');
+
+    const sources = await detectAllSources();
+    if (sources.length === 0) {
+      console.log(`${PAD}${AMBER('◆')} No other AI agents found on this machine.`);
+      console.log(chalk.dim(`${PAD}  Checked: Claude Code, OpenAI Codex, Gemini CLI, Cursor.`));
+      showPhrase();
+      return;
+    }
+
+    console.log(chalk.bold(`${PAD}Detected ${sources.length} source${sources.length === 1 ? '' : 's'}:`));
+    console.log('');
+    for (const s of sources) {
+      const dot = s.status === 'ready' ? EMERALD('●') : s.status === 'coming-soon' ? AMBER('●') : chalk.dim('●');
+      const statusLabel = s.status === 'ready'
+        ? chalk.green('ready')
+        : s.status === 'coming-soon'
+          ? chalk.yellow('coming soon')
+          : chalk.dim('empty');
+      console.log(`${PAD}${dot} ${chalk.bold(s.name)} ${chalk.dim('·')} ${statusLabel}`);
+      console.log(`${PAD}  ${chalk.dim(s.summary)}`);
+      console.log('');
+    }
+
+    const ready = sources.filter((s) => s.status === 'ready');
+    if (ready.length === 0) {
+      console.log(`${PAD}${chalk.dim('Nothing to import right now. Other sources will land in a future release.')}`);
+      showPhrase();
+      return;
+    }
+
+    const toImport: typeof ready = [];
+    for (const s of ready) {
+      if (opts.yes) { toImport.push(s); continue; }
+      const yes = await confirm({
+        message: `Import ${s.estimatedItems} item${s.estimatedItems === 1 ? '' : 's'} from ${s.name}?`,
+        default: true,
+      });
+      if (yes) toImport.push(s);
+    }
+    if (toImport.length === 0) {
+      console.log(`${PAD}${chalk.dim('Nothing selected. Memory left untouched.')}`);
+      showPhrase();
+      return;
+    }
+
+    console.log('');
+    console.log(chalk.dim(`${PAD}Extracting…`));
+    const allCandidates = (await Promise.all(toImport.map((s) => extractMemories(s)))).flat();
+    console.log(`${PAD}${EMERALD('✓')} ${chalk.bold(String(allCandidates.length))} item${allCandidates.length === 1 ? '' : 's'} ready to merge`);
+
+    if (opts.dryRun) {
+      console.log('');
+      console.log(chalk.dim(`${PAD}(dry run — nothing written)`));
+      console.log('');
+      for (const c of allCandidates.slice(0, 8)) {
+        console.log(chalk.dim(`${PAD}  · ${c.layer}/${c.type} · ${c.summary ?? c.content.slice(0, 60)}`));
+      }
+      if (allCandidates.length > 8) {
+        console.log(chalk.dim(`${PAD}  … ${allCandidates.length - 8} more`));
+      }
+      showPhrase();
+      return;
+    }
+
+    const db = getDatabase();
+    const result = await importMemories(allCandidates, db);
+    console.log('');
+    console.log(`${PAD}${EMERALD('◆')} ${chalk.bold(`Imported ${result.imported} memor${result.imported === 1 ? 'y' : 'ies'}`)}`);
+    if (result.skipped > 0) console.log(chalk.dim(`${PAD}  ${result.skipped} skipped (already present)`));
+    for (const [src, n] of Object.entries(result.sources)) {
+      console.log(chalk.dim(`${PAD}  ${src}: ${n}`));
+    }
+    console.log('');
+    console.log(chalk.dim(`${PAD}NEXUS will pick these up on its next response.`));
+    showPhrase();
+  });
+
 // ── nexus dream ───────────────────────────────────────────────────────────────
 
 program

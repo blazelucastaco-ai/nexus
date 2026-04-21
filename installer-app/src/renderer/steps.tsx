@@ -892,7 +892,169 @@ export function ChromeStep(props: { onNext: () => void }): JSX.Element {
 }
 
 /* ──────────────────────────────────────────────────────────────────
-   10. DONE
+   10. MEMORY IMPORT — merge context from other agents
+────────────────────────────────────────────────────────────────── */
+interface DetectedSourceView {
+  id: string;
+  name: string;
+  status: 'ready' | 'empty' | 'coming-soon' | string;
+  summary: string;
+  estimatedItems: number;
+}
+
+export function MemoryImportStep(props: { onNext: () => void; onBack: () => void }): JSX.Element {
+  const [sources, setSources] = useState<DetectedSourceView[] | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<{ imported: number; skipped: number; sources: Record<string, number> } | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      const s = await window.nexus.main.memoryDetectSources();
+      setSources(s as DetectedSourceView[]);
+      // Preselect everything that's actually importable.
+      const preset = new Set<string>();
+      for (const src of s) if (src.status === 'ready') preset.add(src.id);
+      setSelected(preset);
+    })();
+  }, []);
+
+  const toggle = (id: string): void => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const runImport = async (): Promise<void> => {
+    setRunning(true);
+    try {
+      const r = await window.nexus.main.memoryImport([...selected]);
+      setResult(r);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const readyCount = (sources ?? []).filter((s) => s.status === 'ready').length;
+
+  return (
+    <div className="step">
+      <span className="eyebrow">Step 10 / 10</span>
+      <h1 className="step-title">
+        Start with a <em>head start</em>.
+      </h1>
+      <p className="step-lead">
+        NEXUS can pull in context from other AI agents on this Mac — memory notes,
+        preferences, project info, workflow habits. You get a brain that already knows
+        who you are instead of starting from zero. Everything imported is tagged so you
+        can audit or delete it later in the Memory tab.
+      </p>
+
+      {sources === null && (
+        <p className="subtle">Scanning for installed agents…</p>
+      )}
+
+      {sources !== null && sources.length === 0 && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <p className="subtle" style={{ margin: 0 }}>
+            No other AI agents detected on this Mac. You can always run{' '}
+            <code>nexus import-memories</code> later if you install one.
+          </p>
+        </div>
+      )}
+
+      {sources !== null && sources.length > 0 && !result && (
+        <div className="checklist" style={{ marginTop: 18 }}>
+          {sources.map((s) => {
+            const isReady = s.status === 'ready';
+            const isComing = s.status === 'coming-soon';
+            const checked = selected.has(s.id);
+            return (
+              <label
+                key={s.id}
+                className="check-item"
+                style={{
+                  cursor: isReady ? 'pointer' : 'default',
+                  opacity: isReady ? 1 : 0.55,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={!isReady || running}
+                  onChange={() => isReady && toggle(s.id)}
+                  style={{ marginRight: 10 }}
+                />
+                <span className="check-name" style={{ flex: 1 }}>
+                  <strong>{s.name}</strong>{' '}
+                  <span className="subtle" style={{ fontSize: 13 }}>— {s.summary}</span>
+                </span>
+                {isComing && (
+                  <span className="subtle" style={{ fontSize: 12, fontStyle: 'italic' }}>coming soon</span>
+                )}
+                {isReady && (
+                  <span className="subtle" style={{ fontSize: 12 }}>
+                    {s.estimatedItems} item{s.estimatedItems === 1 ? '' : 's'}
+                  </span>
+                )}
+              </label>
+            );
+          })}
+        </div>
+      )}
+
+      {result && (
+        <div className="card" style={{ marginTop: 18, borderColor: '#A8C49F' }}>
+          <h3 style={{ marginTop: 0, marginBottom: 8 }}>
+            Imported {result.imported} memor{result.imported === 1 ? 'y' : 'ies'}
+          </h3>
+          {result.skipped > 0 && (
+            <p className="subtle" style={{ margin: '0 0 8px' }}>
+              Skipped {result.skipped} item{result.skipped === 1 ? '' : 's'} that were already present.
+            </p>
+          )}
+          {Object.entries(result.sources).length > 0 && (
+            <ul className="subtle" style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.7 }}>
+              {Object.entries(result.sources).map(([src, n]) => (
+                <li key={src}><code>{src}</code>: {n}</li>
+              ))}
+            </ul>
+          )}
+          <p className="subtle" style={{ marginTop: 12, marginBottom: 0 }}>
+            NEXUS will surface these automatically in future conversations.
+          </p>
+        </div>
+      )}
+
+      <div className="btn-row" style={{ marginTop: 28 }}>
+        <button type="button" className="btn-g" onClick={props.onBack} disabled={running}>← Back</button>
+        {!result && readyCount > 0 && (
+          <button
+            type="button"
+            className="btn-p"
+            onClick={() => void runImport()}
+            disabled={running || selected.size === 0}
+          >
+            {running
+              ? 'Importing…'
+              : selected.size === 0
+                ? 'Nothing selected'
+                : `Import ${selected.size} source${selected.size === 1 ? '' : 's'}`}
+          </button>
+        )}
+        <button type="button" className="btn-g" onClick={props.onNext} disabled={running}>
+          {result ? 'Continue →' : readyCount === 0 ? 'Skip →' : 'Skip for now →'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   11. DONE
 ────────────────────────────────────────────────────────────────── */
 export function DoneStep(props: { mode: 'install' | 'reconfigure' | 'repair' }): JSX.Element {
   const leadText =

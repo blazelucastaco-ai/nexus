@@ -10,6 +10,7 @@ export type StepKey =
   | 'permissions'
   | 'install'
   | 'chrome'
+  | 'memory-import'
   | 'uninstall'
   | 'done';
 

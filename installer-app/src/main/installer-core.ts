@@ -1173,6 +1173,123 @@ export async function runHealthCheck(): Promise<{ ok: boolean; output: string }>
   return runNexusCli(['health']);
 }
 
+// ── Memory import (detect + merge other agents' memory) ─────────────
+
+export interface DetectedMemorySource {
+  id: string;
+  name: string;
+  status: 'ready' | 'empty' | 'coming-soon';
+  summary: string;
+  estimatedItems: number;
+}
+
+export interface MemoryImportResult {
+  imported: number;
+  skipped: number;
+  sources: Record<string, number>;
+}
+
+/**
+ * Detect which other AI agents (Claude Code, Codex, Gemini, Cursor) are
+ * installed. This is a pure filesystem probe — no NEXUS daemon needed —
+ * so it can run during the wizard before any install has happened.
+ */
+export async function detectMemorySources(): Promise<DetectedMemorySource[]> {
+  // Direct filesystem-level detection — keeps us independent of the running
+  // daemon. Mirrors the logic in src/memory/import.ts.
+  const out: DetectedMemorySource[] = [];
+  // Claude Code
+  try {
+    const root = join(HOME, '.claude', 'projects');
+    if (existsSync(root)) {
+      const { readdirSync } = await import('node:fs');
+      let memoryCount = 0;
+      for (const entry of readdirSync(root)) {
+        const mem = join(root, entry, 'memory');
+        if (!existsSync(mem)) continue;
+        const files = readdirSync(mem).filter((f) => f.endsWith('.md') && f !== 'MEMORY.md');
+        memoryCount = files.length;
+        if (memoryCount > 0) break;
+      }
+      out.push({
+        id: 'claude-code',
+        name: 'Claude Code',
+        status: memoryCount > 0 ? 'ready' : 'empty',
+        summary: memoryCount > 0 ? `${memoryCount} memory notes` : 'Installed, but no memory notes to import',
+        estimatedItems: memoryCount,
+      });
+    }
+  } catch { /* ignore */ }
+  // OpenAI Codex
+  try {
+    const rulesFile = join(HOME, '.codex', 'rules', 'default.rules');
+    if (existsSync(rulesFile)) {
+      const content = readFileSync(rulesFile, 'utf-8');
+      const n = content.split('\n').filter((l) => l.trim().startsWith('prefix_rule')).length;
+      out.push({
+        id: 'openai-codex',
+        name: 'OpenAI Codex',
+        status: n > 0 ? 'ready' : 'empty',
+        summary: n > 0 ? `${n} command allowlist rules — extracted as workflow hints` : 'Rules file present but empty',
+        estimatedItems: Math.min(n, 30),
+      });
+    }
+  } catch { /* ignore */ }
+  // Gemini CLI (coming soon)
+  if (existsSync(join(HOME, '.gemini'))) {
+    out.push({
+      id: 'gemini-cli',
+      name: 'Gemini CLI',
+      status: 'coming-soon',
+      summary: 'Detected — no user-memory format to import yet',
+      estimatedItems: 0,
+    });
+  }
+  // Cursor (coming soon)
+  const cursorRoots = [join(HOME, 'Library', 'Application Support', 'Cursor'), join(HOME, '.cursor')];
+  if (cursorRoots.some((r) => existsSync(r))) {
+    out.push({
+      id: 'cursor',
+      name: 'Cursor',
+      status: 'coming-soon',
+      summary: 'Detected — rule/preference import coming soon',
+      estimatedItems: 0,
+    });
+  }
+  return out;
+}
+
+/**
+ * Run `nexus import-memories --yes` restricted to the selected source IDs.
+ * This shells out to the installed CLI so the import logic stays in one place.
+ */
+export async function runMemoryImport(sourceIds: string[]): Promise<MemoryImportResult> {
+  if (!Array.isArray(sourceIds) || sourceIds.length === 0) {
+    return { imported: 0, skipped: 0, sources: {} };
+  }
+  const safeIds = new Set(['claude-code', 'openai-codex', 'gemini-cli', 'cursor']);
+  const filtered = sourceIds.filter((id) => safeIds.has(id));
+  if (filtered.length === 0) return { imported: 0, skipped: 0, sources: {} };
+  const pnpm = (await resolveBinary('pnpm')) ?? 'pnpm';
+  // Selected IDs become env var so the CLI can filter them. Simpler than
+  // adding positional args.
+  try {
+    const { stdout } = await execFileAsync(
+      pnpm,
+      ['--silent', 'exec', 'tsx', 'scripts/run-import.ts'],
+      {
+        cwd: REPO_DIR,
+        timeout: 60_000,
+        env: { ...process.env, __NEXUS_IMPORT_SOURCES__: filtered.join(',') },
+      },
+    );
+    const result = JSON.parse(stdout.trim());
+    return result;
+  } catch (err) {
+    return { imported: 0, skipped: 0, sources: {} };
+  }
+}
+
 // ── About / system info ──────────────────────────────────────────────
 
 export async function getAboutInfo(appPath: string): Promise<import('../shared/types').AboutInfo> {

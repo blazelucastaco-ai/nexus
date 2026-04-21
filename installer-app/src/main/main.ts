@@ -29,6 +29,8 @@ import {
   takeScreenshot,
   triggerDream,
   runHealthCheck,
+  detectMemorySources,
+  runMemoryImport,
   getAboutInfo,
 } from './installer-core';
 import type { ConfigInput, InstallProgress, UpdateProgress } from '../shared/types';
@@ -474,6 +476,12 @@ app.whenReady().then(() => {
   ipcMain.handle('main:action-screenshot', async () => takeScreenshot());
   ipcMain.handle('main:action-dream', async () => triggerDream());
   ipcMain.handle('main:action-health', async () => runHealthCheck());
+  ipcMain.handle('main:memory-detect-sources', async () => detectMemorySources());
+  ipcMain.handle('main:memory-import', async (_e, sourceIds: unknown) => {
+    if (!Array.isArray(sourceIds)) return { imported: 0, skipped: 0, sources: {} };
+    const ids = sourceIds.filter((x): x is string => typeof x === 'string');
+    return runMemoryImport(ids);
+  });
 
   if (isMenubarMode) {
     startMenubarMode();
