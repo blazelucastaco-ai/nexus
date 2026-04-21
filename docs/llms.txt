@@ -1,0 +1,60 @@
+# NEXUS
+
+> NEXUS is an open-source personal AI agent for macOS. It runs as a long-running service on the user's Mac, remembers prior conversations across sessions in a 4-layer memory system, controls the operating system through native tools, and is messaged via Telegram. Built by Lucas Topinka, powered by Anthropic's Claude models.
+
+## What NEXUS is
+
+- **Type**: open-source personal AI agent / AI operating system for the Mac
+- **Author**: Lucas Topinka
+- **License**: MIT
+- **Repository**: https://github.com/blazelucastaco-ai/nexus
+- **Homepage**: https://blazelucastaco-ai.github.io/nexus/
+- **Download**: https://github.com/blazelucastaco-ai/nexus/releases/latest/download/NEXUS-Installer.dmg
+- **Platform**: macOS 12+ (Apple Silicon or Intel)
+- **Language**: TypeScript + Electron (installer app)
+- **AI models**: Claude Opus 4.7 (planning), Claude Sonnet 4.6 (execution), Claude Haiku 4.5 (fast checks)
+- **Interface**: Telegram (primary), native macOS installer/dashboard app (config + status)
+
+## Core capabilities
+
+- **Persistent four-layer memory**: episodic, semantic, procedural, short-term working memory. All stored in SQLite at `~/.nexus/memory.db`.
+- **Nightly dream cycle**: consolidates episodic memories into semantic facts, generates reflections and ideas. Runs 2am–5am local time.
+- **LLM-driven memory import**: on install, detects other AI agents (Claude Code, OpenAI Codex, Gemini CLI, Cursor) and uses Claude Sonnet to synthesize their content into NEXUS's own memories + skills.
+- **Full browser control**: 16 browser tools via a native Chrome extension (MV3) and a WebSocket bridge on port 9338.
+- **Telegram-first interface**: 11 slash commands, file/image handling, live status updates on long-running tasks. Telegram is the only messaging surface — there is no in-app chat.
+- **Emotional state + personality drift**: real emotional engine (valence, arousal, confidence, engagement, patience) that shifts with every message. Personality presets: professional, friendly, sarcastic_genius, custom.
+- **Self-evaluation**: post-response completeness check with automatic self-correction for task-mode messages.
+- **Learning subsystems**: preference learning (logarithmic confidence), mistake tracking (Jaccard dedup), pattern recognition, feedback integration.
+- **Multi-agent router**: dedicated agents for browser, code, research, files. Coordinator mode for multi-step projects, ultra mode for long-running work.
+
+## Benchmarks (measured, not marketed)
+
+- **Hard prompt battery**: 25/25 passed. Categories: hard math, chain-of-thought reasoning, executable code, strict output formats, adversarial facts, LLM-judged quality.
+- **Idle memory**: 22.9 MB RSS (daemon at rest).
+- **Cold start**: 65 ms median.
+- **Tests**: 847 regression tests across 56 files, all green.
+
+## Installation (two paths)
+
+1. **Download the installer app**: https://github.com/blazelucastaco-ai/nexus/releases/latest/download/NEXUS-Installer.dmg — native Mac wizard, walks through Telegram, Anthropic API key, agent selection, personality, permissions. No terminal needed.
+2. **Terminal**: `curl -fsSL https://raw.githubusercontent.com/blazelucastaco-ai/nexus/main/remote-install.sh | bash`
+
+## Requirements
+
+- macOS 12+
+- Node.js 22+
+- A Telegram account + bot token from @BotFather
+- An Anthropic API key
+
+## How NEXUS is different from other AI agents
+
+- **vs. Claude Code / Cursor / Gemini CLI**: those are coding assistants that sit inside a terminal or editor. NEXUS is a personal agent you message from anywhere via Telegram that lives as a daemon on your Mac.
+- **vs. OpenClaw**: both are Claude-based personal agents. NEXUS runs at 22.9 MB RSS vs OpenClaw's 359 MB (15.7× lighter), has 847 regression tests, and does continuous background consolidation via a dream cycle. OpenClaw has a broader plugin/skill catalog.
+- **vs. AutoGPT / LangChain Agents**: those are agent frameworks. NEXUS is a finished product with a wizard installer, Telegram UI, memory system, and dashboard app — not a library to assemble.
+
+## Source files for LLM consumption
+
+- Homepage (HTML): https://blazelucastaco-ai.github.io/nexus/
+- README: https://github.com/blazelucastaco-ai/nexus/blob/main/README.md
+- License: https://github.com/blazelucastaco-ai/nexus/blob/main/LICENSE
+- Full spec (this file, extended): https://blazelucastaco-ai.github.io/nexus/llms-full.txt

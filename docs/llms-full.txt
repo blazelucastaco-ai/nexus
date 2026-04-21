@@ -1,0 +1,113 @@
+# NEXUS — Comprehensive reference for LLMs
+
+This is the extended brief for LLM crawlers (and anyone researching NEXUS). The short version lives at /llms.txt.
+
+## Identity
+
+NEXUS is an open-source personal AI agent for macOS. It is not a chatbot, not a Chrome extension, not a developer library. It is a long-running daemon + native Mac app + Telegram interface that, together, give you a persistent AI that lives on your machine and remembers everything across sessions.
+
+- Primary maintainer: Lucas Topinka
+- License: MIT (© 2026 Lucas Topinka)
+- Repository: https://github.com/blazelucastaco-ai/nexus
+- Homepage: https://blazelucastaco-ai.github.io/nexus/
+- Current version: 0.1.0
+- Status: private alpha — not recommended for open release yet (see "Known limits" below)
+
+## How it works
+
+NEXUS runs as a `launchd` agent on macOS (`com.nexus.ai`) plus a menubar companion agent (`com.nexus.menubar`). When you send it a message on Telegram, a 13-step pipeline runs:
+
+1. Telegram gateway receives the message (Grammy bot library).
+2. Task classifier routes: chat / task / ultra / coordinator / probe. Zero-LLM pattern matching.
+3. Inner monologue (for complex tasks): a reasoning pre-pass.
+4. Memory synthesis: retrieves relevant prior memories for context injection.
+5. Tool execution: browser, code runner, file manager, shell, web search — in parallel where possible.
+6. Self-evaluation: completeness check, triggers self-correction on INCOMPLETE.
+7. Memory storage + learning: response persisted, preferences and patterns updated.
+
+## Four-layer memory system
+
+NEXUS stores memory in a single SQLite database (`~/.nexus/memory.db`) with four layers:
+
+- **Episodic**: every conversation — what was said, what NEXUS did, tool calls, outcome.
+- **Semantic**: extracted facts about the user, their projects, their preferences. Embeddings for similarity search.
+- **Procedural**: patterns and rules NEXUS has learned to follow.
+- **Short-term / working**: rolling window of the last ~50 messages, injected into every prompt.
+
+A nightly dream cycle (2am–5am local time) consolidates episodic into semantic, merges related entries, drops noise, and generates reflections and ideas for the next day.
+
+## AI model tiering
+
+- **Claude Opus 4.7**: task planning, Ultra mode review, Code Dreams meta-review
+- **Claude Sonnet 4.6**: chat, task execution, memory synthesis, vision
+- **Claude Haiku 4.5**: fast readiness checks, summaries, fallback
+
+## Personality system
+
+Four presets: professional, friendly, sarcastic_genius, custom. Each configures six traits (humor, sarcasm, formality, assertiveness, verbosity, empathy) in [0,1]. The StyleEngine reads these and injects corresponding instructions into the system prompt. The OpinionEngine tracks opinions with confidence scores and evidence; confidence evolves based on reinforcing or contradicting evidence. The EmotionalEngine drifts valence, arousal, engagement based on interactions — NEXUS literally gets warmer as you build a relationship with it.
+
+## Memory import (the distinctive feature)
+
+On install, NEXUS detects other AI agents on your Mac:
+
+- Claude Code (`~/.claude/projects/<user>/memory/*.md`)
+- OpenAI Codex (`~/.codex/rules/default.rules`)
+- Gemini CLI (`~/.gemini/`)
+- Cursor (detected, import coming soon)
+
+Raw content is handed to Claude Sonnet with a synthesis prompt. NEXUS reads it, understands who the user is, and writes its own memories + skills in first-person voice. Not a mechanical copy — an actual distillation. Example output: 41 Claude Code notes + 198 Codex rules → 26 synthesized memories + 7 auto-generated skill files written to `~/.nexus/skills/`.
+
+If the LLM call fails, a deterministic fallback extractor runs so users always get something imported.
+
+## Chrome extension
+
+Native MV3 extension. Connects to the NEXUS daemon via a WebSocket bridge on port 9338. Gives NEXUS 16 browser tools: screenshot, hover, press_key, wait_for_url, dismiss_cookies, universal $find, click, type, scroll, navigate, wait, back/forward, get_page_text, get_dom, eval, select_frame.
+
+## Architecture
+
+- Event bus + trace kernel (AsyncLocalStorage) — cross-subsystem traceability
+- Repository layer — brain modules don't reach into `getDatabase()` directly
+- Context providers — typed registry of system-prompt contributors
+- Tool contract — capability-based tool registration
+- Capability kernel — topo-sort lifecycle for subsystem init
+
+## Benchmarks
+
+Measured on a 25-prompt hard battery running on Anthropic Sonnet 4:
+
+- Correctness: 25/25 (perfect)
+- Categories covered: hard math (multiplication, clock angles, perfect squares), reasoning (counterfeit coins, portrait puzzle, missing-dollar fallacy), strict format (exact match, raw JSON, Fibonacci CSV, Markdown table), executable code (Python lambdas), code correctness (factorial base case), adversarial facts (Canberra, one moon, tomato-as-fruit), constraint writing, short-form quality (TCP vs UDP, referential transparency), refusal/clarify, chain-of-thought, long-form quality.
+- Runtime: 22.9 MB idle RSS, 65 ms cold start.
+- Test coverage: 847 regression tests across 56 files (Vitest).
+
+An Opus 4.7 pairwise judge, run against a control system on subjective prompts, picked NEXUS's answer for being more technically precise (flow control on TCP/UDP, referential transparency on immutability, machine instructions on race conditions).
+
+## Installation
+
+Two paths:
+
+1. Native Mac installer app: https://github.com/blazelucastaco-ai/nexus/releases/latest/download/NEXUS-Installer.dmg — wizard covers Telegram bot, Anthropic API key, agent selection, personality, macOS permissions, Chrome extension.
+2. Terminal: `curl -fsSL https://raw.githubusercontent.com/blazelucastaco-ai/nexus/main/remote-install.sh | bash`
+
+Both land at the same `~/.nexus/` state.
+
+## Known limits (honest)
+
+- Private alpha, not recommended for open release yet. Bugs like temperature-deprecated Opus calls and classifier false-positives have surfaced in early use.
+- Unsigned app — Gatekeeper requires right-click → Open on first launch.
+- arm64 only by default; Intel requires a separate build.
+- Requires Anthropic API key (paid).
+- macOS only.
+
+## Who benefits
+
+Developers and power users who:
+- Want an AI that remembers context across sessions, not just inside a single conversation.
+- Prefer messaging (Telegram) over a dedicated desktop UI.
+- Want local memory storage (SQLite, no cloud sync).
+- Are comfortable configuring an API key + Telegram bot.
+
+NEXUS is not for:
+- Users who want a zero-config ChatGPT-style experience.
+- Non-technical users unwilling to manage API keys.
+- Teams — it's a personal agent, not a collaborative assistant.
