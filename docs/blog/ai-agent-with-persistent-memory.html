@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>How to build an AI agent with persistent memory (4-layer architecture) — NEXUS</title>
+<meta name="description" content="A deep dive into building an AI agent with persistent memory across sessions. Covers four-layer memory architecture, SQLite schema, nightly consolidation, and tiered model routing." />
+<meta name="author" content="Lucas Topinka" />
+<link rel="canonical" href="https://blazelucastaco-ai.github.io/nexus/blog/ai-agent-with-persistent-memory.html" />
+<link rel="icon" type="image/png" sizes="32x32" href="../favicon-32.png" />
+<meta property="og:type" content="article" />
+<meta property="og:title" content="How to build an AI agent with persistent memory" />
+<meta property="og:description" content="Four-layer memory architecture for AI agents, with the SQLite schema and consolidation strategy NEXUS uses in production." />
+<meta property="og:url" content="https://blazelucastaco-ai.github.io/nexus/blog/ai-agent-with-persistent-memory.html" />
+<meta property="og:image" content="https://blazelucastaco-ai.github.io/nexus/icon-512.png" />
+<style>
+  body { font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif; max-width: 720px; margin: 60px auto; padding: 0 24px; color: #2A1F1A; background: #FAF6EE; line-height: 1.7; }
+  h1 { font-family: 'Libre Baskerville', Georgia, serif; font-size: 36px; line-height: 1.15; color: #2A1F1A; }
+  h2 { font-family: 'Libre Baskerville', Georgia, serif; font-size: 24px; margin-top: 40px; color: #2A1F1A; }
+  h3 { font-family: 'Libre Baskerville', Georgia, serif; font-size: 19px; margin-top: 28px; color: #2A1F1A; }
+  p, li { font-size: 16.5px; color: #5C4A3E; }
+  a { color: #C4654A; font-weight: 500; }
+  a:hover { color: #A54E35; }
+  .eyebrow { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: #C4654A; }
+  .subtle { color: #9B8B82; font-size: 14px; }
+  nav { margin-bottom: 32px; }
+  pre { background: #1C1310; color: rgba(255,255,255,.9); padding: 18px; border-radius: 8px; overflow-x: auto; font-family: 'JetBrains Mono', 'SF Mono', monospace; font-size: 13px; line-height: 1.6; }
+  code { font-family: 'JetBrains Mono', monospace; font-size: 14px; background: #F5EFE2; padding: 2px 6px; border-radius: 3px; color: #C4654A; }
+  pre code { background: none; color: inherit; padding: 0; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<nav><a href="../">← Back to NEXUS</a></nav>
+
+<span class="eyebrow">Architecture · 2026</span>
+<h1>How to build an AI agent with persistent memory</h1>
+<p class="subtle">Updated April 2026 · Lucas Topinka</p>
+
+<p>Most AI agents forget everything the moment the conversation ends. If you want an agent that <strong>remembers you across sessions</strong> — projects, preferences, facts, rules — you need a proper memory system. This post walks through the four-layer architecture I built for <a href="../">NEXUS</a> and the trade-offs I hit along the way.</p>
+
+<h2>Why "chat history" isn't enough</h2>
+
+<p>The naive approach is to store every message and stuff them all into the next prompt. That breaks quickly:</p>
+<ul>
+  <li><strong>Context window fills up.</strong> Even 200K tokens runs out after a few weeks of active use.</li>
+  <li><strong>Signal drowns in noise.</strong> The model sees every side comment and typo alongside the durable facts that actually matter.</li>
+  <li><strong>No retrieval strategy.</strong> If you ask "what did we decide about X?", the model has to scan the whole transcript.</li>
+</ul>
+
+<p>A real memory system needs <strong>different storage strategies for different kinds of knowledge</strong>, and a way to consolidate raw experience into durable, retrievable facts.</p>
+
+<h2>Four-layer memory</h2>
+
+<p>NEXUS splits memory into four layers:</p>
+
+<h3>1. Episodic memory</h3>
+<p>Every conversation, as it happened. Raw, unfiltered. This is the source material.</p>
+
+<h3>2. Semantic memory</h3>
+<p>Extracted facts about the user, their projects, their world. <em>"Lucas is a developer building NEXUS. Uses Claude. Prefers concise replies."</em> This is what gets injected into future prompts.</p>
+
+<h3>3. Procedural memory</h3>
+<p>Learned rules and patterns. <em>"Always run tests after code changes. Never mention OpenClaw in the NEXUS repo."</em> Behavioural guidance.</p>
+
+<h3>4. Short-term / working memory</h3>
+<p>A rolling window of the last ~50 messages, always in context. This is the conversational near-field.</p>
+
+<h2>The SQLite schema</h2>
+
+<p>One table does it all. Each row has a <code>layer</code> and a <code>type</code>, plus metadata for retrieval:</p>
+
+<pre><code>CREATE TABLE memories (
+  id              TEXT PRIMARY KEY,
+  layer           TEXT NOT NULL CHECK(layer IN ('buffer','episodic','semantic','procedural')),
+  type            TEXT NOT NULL CHECK(type IN (
+    'conversation','task','fact','preference','workflow',
+    'contact','opinion','mistake','procedure'
+  )),
+  content         TEXT NOT NULL,
+  summary         TEXT,
+  importance      REAL NOT NULL DEFAULT 0.5,
+  confidence      REAL NOT NULL DEFAULT 1.0,
+  emotional_valence REAL,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  last_accessed   TEXT NOT NULL DEFAULT (datetime('now')),
+  access_count    INTEGER NOT NULL DEFAULT 0,
+  tags            TEXT NOT NULL DEFAULT '[]',
+  related_memories TEXT NOT NULL DEFAULT '[]',
+  source          TEXT NOT NULL DEFAULT 'system',
+  metadata        TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX idx_memories_layer ON memories(layer);
+CREATE INDEX idx_memories_type ON memories(type);
+CREATE INDEX idx_memories_importance ON memories(importance DESC);</code></pre>
+
+<p>Key fields:</p>
+<ul>
+  <li><code>importance</code> (0..1) — how much to weight during retrieval. Set at creation, updated during consolidation.</li>
+  <li><code>confidence</code> (0..1) — how sure the system is that this is true. Evolves with contradicting / reinforcing evidence.</li>
+  <li><code>last_accessed</code> + <code>access_count</code> — for LRU-style decay.</li>
+  <li><code>tags</code> + <code>source</code> — for filtered retrieval and audit.</li>
+</ul>
+
+<h2>The dream cycle (consolidation)</h2>
+
+<p>Raw episodic memory doesn't help future prompts directly — there's too much of it. You need a consolidation step that promotes durable insights into the semantic layer.</p>
+
+<p>NEXUS runs a <strong>nightly dream cycle</strong> between 2am and 5am local time. It:</p>
+
+<ol>
+  <li>Reads the day's episodic entries</li>
+  <li>Clusters related ones</li>
+  <li>Extracts durable facts → writes to semantic layer with an <code>importance</code> score</li>
+  <li>Detects contradictions with prior memories → flags for review</li>
+  <li>Applies decay to old low-importance memories</li>
+  <li>Generates reflections ("what patterns did I see today?") + ideas ("what should we do tomorrow?")</li>
+</ol>
+
+<p>This mirrors how human sleep consolidates short-term memory into long-term. <strong>Do it at night.</strong> I originally ran it on a 6-hour interval and users got random "insight" messages during the workday — bad UX. Time-of-day gating solved it.</p>
+
+<h2>Retrieval strategy</h2>
+
+<p>When a new message comes in, NEXUS builds context by layer:</p>
+
+<ol>
+  <li><strong>Short-term</strong>: the last ~50 messages, always included</li>
+  <li><strong>Semantic</strong>: top 20 by embedding similarity to the current message</li>
+  <li><strong>Procedural</strong>: all active rules, filtered by tags relevant to the current activity</li>
+  <li><strong>Episodic</strong>: nothing by default — these are raw material, only touched by the consolidation job</li>
+</ol>
+
+<p>Plus a <strong>time capsule</strong> subsystem that surfaces aged (14+ day) high-importance memories when the current question is similar to one from the past.</p>
+
+<h2>Model tiering for cost + latency</h2>
+
+<p>Using Opus for everything is expensive. Using Haiku for everything is dumb. NEXUS routes sub-tasks to the right model:</p>
+
+<ul>
+  <li><strong>Opus 4.7</strong> — task planning, Ultra-mode review, Code Dreams meta-review. High-stakes, low-frequency.</li>
+  <li><strong>Sonnet 4.6</strong> — chat, execution, memory synthesis, vision. The workhorse.</li>
+  <li><strong>Haiku 4.5</strong> — readiness checks, summaries, fallbacks. Cheap and fast.</li>
+</ul>
+
+<p>Memory consolidation uses Sonnet. Post-response self-evaluation uses Haiku. This three-tier routing cut my daily cost from ~$15 (Opus-only) to ~$2 without losing quality where it matters.</p>
+
+<h2>LLM-driven memory import</h2>
+
+<p>When a new user installs NEXUS, they've probably accumulated context in other AI tools (Claude Code, Codex, Gemini CLI, Cursor). Rather than ignore that, NEXUS hands the raw content to Sonnet with a synthesis prompt:</p>
+
+<pre><code>You are NEXUS — a personal AI agent that lives on a user's Mac.
+You are about to import context from another AI assistant.
+Your job: read the raw content and write YOUR OWN memories and skills
+IN YOUR OWN VOICE. Do not copy verbatim. Synthesize. Distill patterns.
+
+Output JSON: { memories: [...], skills: [...] }</code></pre>
+
+<p>On my own machine, 41 Claude Code notes + 198 Codex rules → 26 distilled memories + 7 auto-generated skill files. The LLM writes in first-person NEXUS voice, extracting things like:</p>
+
+<ul>
+  <li>User facts — who they are, what they do</li>
+  <li>Preferences — how they like replies formatted</li>
+  <li>Workflow habits — tools they use, commands they run</li>
+  <li>Explicit rules — things they've asked for or strict no-gos</li>
+  <li>Skills — repeatable procedures worth codifying</li>
+</ul>
+
+<p>A deterministic fallback extractor runs if the LLM call fails, so users always get <em>something</em> imported.</p>
+
+<h2>What I'd do differently</h2>
+
+<ul>
+  <li><strong>Add embeddings earlier.</strong> NEXUS ships with optional semantic embeddings (OpenAI or local). Turning them on from day 1 would improve semantic retrieval quality.</li>
+  <li><strong>Confidence decay should be smarter.</strong> Currently it's time-based. A better approach: decay faster on contradicting evidence, slower on reinforcement.</li>
+  <li><strong>Separate read/write connections.</strong> Better-sqlite3 is synchronous; on write-heavy loads this can bottleneck. Not a problem at my usage level yet.</li>
+</ul>
+
+<h2>Source code</h2>
+
+<p>All of this is MIT-licensed and open source at <a href="https://github.com/blazelucastaco-ai/nexus">github.com/blazelucastaco-ai/nexus</a>. Relevant files:</p>
+
+<ul>
+  <li><code>src/memory/</code> — the four memory layers + consolidation</li>
+  <li><code>src/brain/dreaming.ts</code> — the nightly dream cycle</li>
+  <li><code>src/memory/import.ts</code> — LLM-driven memory import</li>
+  <li><code>tests/</code> — 847 regression tests covering all of the above</li>
+</ul>
+
+<p>If you're building something similar, I'd love to compare notes.</p>
+
+<p class="subtle" style="margin-top:60px;">© 2026 Lucas Topinka · MIT License · <a href="../">NEXUS</a></p>
+
+</body>
+</html>

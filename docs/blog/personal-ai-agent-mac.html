@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>The best personal AI agent for Mac in 2026 (open source, Claude-powered) — NEXUS</title>
+<meta name="description" content="A comparison of personal AI agents for macOS in 2026. NEXUS is open-source, Telegram-first, runs in 22 MB of RAM, and remembers every conversation across sessions via a four-layer memory system." />
+<meta name="author" content="Lucas Topinka" />
+<link rel="canonical" href="https://blazelucastaco-ai.github.io/nexus/blog/personal-ai-agent-mac.html" />
+<link rel="icon" type="image/png" sizes="32x32" href="../favicon-32.png" />
+<meta property="og:type" content="article" />
+<meta property="og:title" content="The best personal AI agent for Mac in 2026" />
+<meta property="og:description" content="NEXUS is an open-source, Telegram-first personal AI agent for macOS with persistent memory and 22 MB idle RAM." />
+<meta property="og:url" content="https://blazelucastaco-ai.github.io/nexus/blog/personal-ai-agent-mac.html" />
+<meta property="og:image" content="https://blazelucastaco-ai.github.io/nexus/icon-512.png" />
+<style>
+  body { font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif; max-width: 720px; margin: 60px auto; padding: 0 24px; color: #2A1F1A; background: #FAF6EE; line-height: 1.7; }
+  h1 { font-family: 'Libre Baskerville', Georgia, serif; font-size: 36px; line-height: 1.15; color: #2A1F1A; }
+  h2 { font-family: 'Libre Baskerville', Georgia, serif; font-size: 24px; margin-top: 40px; color: #2A1F1A; }
+  p, li { font-size: 16.5px; color: #5C4A3E; }
+  a { color: #C4654A; font-weight: 500; }
+  a:hover { color: #A54E35; }
+  .eyebrow { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: #C4654A; }
+  .subtle { color: #9B8B82; font-size: 14px; }
+  nav { margin-bottom: 32px; }
+  table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+  th, td { padding: 10px 12px; border-bottom: 1px solid #E2D9C4; text-align: left; font-size: 14.5px; }
+  th { font-weight: 600; background: #F5EFE2; }
+  .ck { color: #5A8C54; font-weight: 700; }
+  .cx { color: #9B8B82; }
+</style>
+</head>
+<body>
+
+<nav><a href="../">← Back to NEXUS</a></nav>
+
+<span class="eyebrow">Guide · 2026</span>
+<h1>The best personal AI agent for Mac in 2026 (open source, Claude-powered)</h1>
+<p class="subtle">Updated April 2026 · Lucas Topinka</p>
+
+<p>If you're looking for a <strong>personal AI agent for Mac</strong> that actually remembers you across sessions, has real system control, and ships open source — there are a handful of options in 2026 and they each make different trade-offs. This guide walks through what to look for and which tool fits which use case.</p>
+
+<h2>What makes an AI agent "personal"?</h2>
+
+<p>A personal AI agent is different from a chatbot, a coding assistant, or a Chrome extension. The defining features:</p>
+
+<ul>
+  <li><strong>Persistence.</strong> It remembers what you've worked on yesterday, last week, last month.</li>
+  <li><strong>Always on.</strong> It runs in the background, not just when you open a window.</li>
+  <li><strong>System control.</strong> It can take screenshots, run shell commands, drive your browser, manage files — not just talk.</li>
+  <li><strong>Message-first, not window-first.</strong> You chat with it from anywhere (phone, watch, another computer) instead of having to sit at the machine it runs on.</li>
+  <li><strong>Private.</strong> Memory stored locally, not on someone else's cloud.</li>
+</ul>
+
+<p>Not every tool hits all five. Here's the landscape.</p>
+
+<h2>The contenders in 2026</h2>
+
+<table>
+<thead>
+<tr>
+  <th>Tool</th>
+  <th>Open source</th>
+  <th>Persistent memory</th>
+  <th>System control</th>
+  <th>Remote access</th>
+  <th>Idle RAM</th>
+</tr>
+</thead>
+<tbody>
+<tr><td><strong>NEXUS</strong></td><td class="ck">MIT</td><td class="ck">4-layer SQLite</td><td class="ck">Full (shell, browser, files)</td><td class="ck">Telegram from anywhere</td><td>22.9 MB</td></tr>
+<tr><td>OpenClaw</td><td class="ck">Open</td><td>Markdown journaling</td><td class="ck">Broad skill catalog</td><td>Multiple channels</td><td>~359 MB</td></tr>
+<tr><td>Claude Code</td><td class="cx">No</td><td class="cx">Session-only</td><td class="ck">Full (within terminal)</td><td class="cx">Same machine</td><td>N/A</td></tr>
+<tr><td>Cursor / Zed</td><td class="cx">No</td><td>Project-scoped</td><td>Within editor</td><td class="cx">Same machine</td><td>N/A</td></tr>
+<tr><td>ChatGPT Desktop</td><td class="cx">No</td><td class="ck">Cloud memory</td><td>Limited</td><td>Account sync</td><td>N/A</td></tr>
+</tbody>
+</table>
+
+<h2>NEXUS (if you want open source + persistent memory)</h2>
+
+<p><a href="https://github.com/blazelucastaco-ai/nexus">NEXUS</a> is the tool if you want everything owned locally and you like the idea of messaging your Mac from your phone.</p>
+
+<ul>
+  <li><strong>Four-layer memory in SQLite</strong> at <code>~/.nexus/memory.db</code> — episodic, semantic, procedural, short-term. You can literally <code>cat</code> and <code>grep</code> your memory.</li>
+  <li><strong>Nightly dream cycle</strong> (2–5am local) consolidates episodic into semantic, drops noise, generates reflections.</li>
+  <li><strong>Telegram interface.</strong> Message from your phone, watch, work laptop — one inbox across everything.</li>
+  <li><strong>LLM-driven memory import</strong>: on install, it reads your Claude Code / Codex / Gemini history and Sonnet writes NEXUS's own memories and skills in first-person voice.</li>
+  <li><strong>22.9 MB RSS idle.</strong> The whole daemon — orchestrator, memory, personality, agents, browser bridge.</li>
+  <li><strong>MIT licensed.</strong> Fork it, extend it, ship it in your own product.</li>
+</ul>
+
+<p>Trade-offs: macOS only (12+), requires an Anthropic API key, currently v0.1.0 private alpha.</p>
+
+<p><a href="../">Visit the NEXUS site</a> for benchmarks and download.</p>
+
+<h2>OpenClaw (if you want a broad skill catalog)</h2>
+
+<p><a href="https://openclaw.ai">OpenClaw</a> is another Claude-based personal agent with a much broader catalog of pre-built skills (1Password, Apple Notes, Bear, Discord, GitHub, and 25+ more). If you want the "it already integrates with everything" experience, OpenClaw wins on catalog breadth.</p>
+
+<p>Trade-off: heavier runtime (~359 MB idle vs NEXUS's 22.9 MB) and markdown-based memory that reflects less automatically. OpenClaw has you review and consolidate manually; NEXUS does it in the background nightly.</p>
+
+<h2>Claude Code / Cursor / Zed (if you want a coding assistant)</h2>
+
+<p>These are <em>coding</em> tools, not personal agents. They live inside your terminal or editor, forget everything between sessions, and can't be messaged remotely. Great at what they do — but different product category.</p>
+
+<h2>ChatGPT Desktop (if you want a chatbot with cloud memory)</h2>
+
+<p>OpenAI's memory feature stores facts in the cloud and makes them available across conversations. Closed source, cloud-dependent, no system control, no remote interface beyond their own app. Best if you're already deep in the OpenAI ecosystem.</p>
+
+<h2>How to choose</h2>
+
+<ul>
+  <li>Want <strong>open source + persistent memory + remote access</strong>: → NEXUS</li>
+  <li>Want <strong>pre-built integrations with 25+ apps</strong>: → OpenClaw</li>
+  <li>Want <strong>inline coding help in your editor</strong>: → Claude Code, Cursor, or Zed</li>
+  <li>Want <strong>a polished cloud chatbot</strong>: → ChatGPT Desktop</li>
+</ul>
+
+<h2>Frequently asked</h2>
+
+<h3>Is NEXUS the same as ChatGPT for Mac?</h3>
+<p>No. ChatGPT Desktop is a chat window that forgets between conversations (unless you enable cloud memory). NEXUS runs as a background service with local memory, system control, and Telegram access from any device.</p>
+
+<h3>Does NEXUS require an internet connection?</h3>
+<p>Yes, for the Claude API calls. Memory storage, browser automation, and shell execution all run locally on your Mac.</p>
+
+<h3>Can I use NEXUS without paying for Anthropic?</h3>
+<p>No. Anthropic API calls cost money per-use. Typical day of heavy use runs a few dollars; light use, cents.</p>
+
+<h3>Is NEXUS production-ready?</h3>
+<p>v0.1.0 is private alpha. Not yet recommended for strangers. See the <a href="https://github.com/blazelucastaco-ai/nexus">repo</a> for the latest status.</p>
+
+<p class="subtle" style="margin-top:60px;">© 2026 Lucas Topinka · MIT License · <a href="https://github.com/blazelucastaco-ai/nexus">NEXUS on GitHub</a></p>
+
+</body>
+</html>
