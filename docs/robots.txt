@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://blazelucastaco-ai.github.io/nexus/sitemap.xml
