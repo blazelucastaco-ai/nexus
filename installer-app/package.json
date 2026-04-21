@@ -2,6 +2,8 @@
   "name": "nexus-installer",
   "version": "0.1.0",
   "description": "NEXUS installer — native macOS app for installing NEXUS in a few clicks",
+  "author": "Lucas Topinka",
+  "license": "MIT",
   "private": true,
   "main": "dist/main/main.js",
   "type": "commonjs",

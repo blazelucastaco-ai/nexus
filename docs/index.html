@@ -676,6 +676,102 @@ footer {
 .hero-card { animation: up .7s .3s ease both; }
 
 /* ─────────────────────────────────────────────
+   HERO — compact commit strip on the card
+───────────────────────────────────────────── */
+.hc-commits {
+  border-top: 1px solid var(--div);
+  background: var(--p1);
+  padding: 12px 18px 14px;
+}
+.hc-commits-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.hc-commits-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--t);
+  animation: pulse 2.4s ease-in-out infinite;
+  flex-shrink: 0;
+}
+.hc-commits-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--soft);
+  flex: 1;
+}
+.hc-commits-more {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: .08em;
+  color: var(--t);
+  font-weight: 500;
+}
+.hc-commits-more:hover { color: var(--td); }
+
+.hc-commits-body { display: flex; flex-direction: column; gap: 2px; }
+.hc-commit-mini {
+  display: grid;
+  grid-template-columns: 58px 1fr 40px;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 6px;
+  border-radius: 4px;
+  transition: background .15s;
+}
+.hc-commit-mini:hover { background: var(--p2); }
+.hc-commit-mini-hash {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  color: var(--t);
+  letter-spacing: .03em;
+  text-align: left;
+}
+.hc-commit-mini-msg {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.hc-commit-mini-msg strong {
+  color: var(--t);
+  font-weight: 600;
+  margin-right: 4px;
+}
+.hc-commit-mini-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--soft);
+  text-align: right;
+  white-space: nowrap;
+}
+.hc-commit-skeleton {
+  display: flex; gap: 10px; padding: 4px 6px;
+  align-items: center;
+}
+.hc-commit-skeleton span {
+  display: block;
+  height: 10px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--p2) 0%, var(--p3) 50%, var(--p2) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+.hc-commit-skeleton span:first-child { width: 56px; }
+.hc-commit-skeleton span:last-child { flex: 1; }
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ─────────────────────────────────────────────
    ACTIVITY — live commit feed
 ───────────────────────────────────────────── */
 .commit-feed {
@@ -887,6 +983,18 @@ footer {
       <div class="hc-stat"><span class="hc-stat-n">792</span><span class="hc-stat-l">Tests Passing</span></div>
       <div class="hc-stat"><span class="hc-stat-n">22.9MB</span><span class="hc-stat-l">Idle Memory</span></div>
       <div class="hc-stat"><span class="hc-stat-n">40+</span><span class="hc-stat-l">Native Tools</span></div>
+    </div>
+    <div class="hc-commits" id="hc-commits">
+      <div class="hc-commits-head">
+        <span class="hc-commits-dot"></span>
+        <span class="hc-commits-label">Latest commits</span>
+        <a class="hc-commits-more" href="#activity">All →</a>
+      </div>
+      <div class="hc-commits-body">
+        <div class="hc-commit-skeleton"><span></span><span></span></div>
+        <div class="hc-commit-skeleton"><span></span><span></span></div>
+        <div class="hc-commit-skeleton"><span></span><span></span></div>
+      </div>
     </div>
   </div>
 </section>
@@ -1148,7 +1256,7 @@ footer {
     <a href="https://github.com/blazelucastaco-ai/nexus/issues">Issues</a>
     <a href="https://github.com/blazelucastaco-ai/nexus/blob/main/README.md">Docs</a>
   </div>
-  <span class="foot-copy">MIT License · Powered by Anthropic Claude</span>
+  <span class="foot-copy">© 2026 Lucas Topinka · MIT License · Powered by Anthropic Claude</span>
 </footer>
 
 <script>
@@ -1213,6 +1321,26 @@ footer {
     }).join('');
   }
 
+  function renderHeroStrip(commits) {
+    const host = document.getElementById('hc-commits');
+    if (!host) return;
+    const body = host.querySelector('.hc-commits-body');
+    if (!body) return;
+    const three = commits.slice(0, 3);
+    body.innerHTML = three.map(function(c) {
+      const subject = (c.commit.message || '').split('\n')[0];
+      const parts = splitCommit(subject);
+      const typeHtml = parts.type ? '<strong>' + escapeHtml(parts.type) + '</strong>' : '';
+      return (
+        '<a class="hc-commit-mini" href="' + escapeHtml(c.html_url) + '" target="_blank" rel="noopener">' +
+          '<span class="hc-commit-mini-hash">' + escapeHtml(c.sha.slice(0, 7)) + '</span>' +
+          '<span class="hc-commit-mini-msg">' + typeHtml + escapeHtml(parts.rest) + '</span>' +
+          '<span class="hc-commit-mini-time">' + relTime(c.commit.author.date) + '</span>' +
+        '</a>'
+      );
+    }).join('');
+  }
+
   function fail(msg) {
     feed.innerHTML = '<div class="commit-error">' + msg +
       '<br><br><a href="https://github.com/' + REPO + '/commits/main" target="_blank" rel="noopener">View history on GitHub →</a></div>';
@@ -1232,6 +1360,7 @@ footer {
         return;
       }
       render(data);
+      renderHeroStrip(data);
     })
     .catch(function(err) {
       fail('Couldn\'t load commits — ' + (err && err.message ? err.message : 'network error') + '.');

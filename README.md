@@ -183,4 +183,4 @@ pnpm lint          # Lint and format
 
 ## License
 
-MIT
+MIT © 2026 Lucas Topinka

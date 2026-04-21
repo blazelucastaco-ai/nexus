@@ -2,6 +2,8 @@
   "name": "nexus-ai",
   "version": "0.1.0",
   "description": "NEXUS — A personal AI that lives on your Mac, communicates via Telegram",
+  "author": "Lucas Topinka",
+  "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
