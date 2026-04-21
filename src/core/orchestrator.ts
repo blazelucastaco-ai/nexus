@@ -38,6 +38,7 @@ import { SELF_DISCLOSURE_REFUSAL } from './self-protection.js';
 import { InnerMonologue } from '../brain/inner-monologue.js';
 import { appendTurn, loadSession } from './session-store.js';
 import { DreamingEngine } from '../brain/dreaming.js';
+import { Heartbeat } from '../brain/heartbeat.js';
 import { getDatabase } from '../memory/database.js';
 import { ProactiveEngine } from '../brain/proactive.js';
 import { BriefingEngine } from '../brain/briefing.js';
@@ -213,6 +214,7 @@ export class Orchestrator {
   private lastMessageTime = Date.now();
   private inactivityTimer: ReturnType<typeof setTimeout> | null = null;
   private dreamInterval: ReturnType<typeof setInterval> | null = null;
+  private readonly heartbeat = new Heartbeat();
   private readonly INACTIVITY_MS = 30 * 60 * 1000; // 30 minutes
   private readonly SUMMARY_EVERY_N_TURNS = 5;
   // Dream cycle runs at night when the user is asleep. Checked every 15 min;
@@ -511,8 +513,17 @@ export class Orchestrator {
 
     await this.telegram.start();
 
-    // Schedule dream cycle every 6 hours
+    // Schedule dream cycle (night window, 2am–5am local)
     this.scheduleDreamCycle();
+
+    // Start the main-agent heartbeat (paused during the dream window).
+    this.heartbeat.setStateAccessors({
+      mood: () => this.personality.getPersonalityState().mood,
+      lastMessageAt: () => (this.lastMessageTime
+        ? new Date(this.lastMessageTime).toISOString()
+        : undefined),
+    });
+    this.heartbeat.start();
 
     // Start proactive monitoring + idle ideas + port monitoring
     const primaryChatId = this.config.telegram.allowedUsers[0] ?? this.config.telegram.chatId ?? '';
@@ -561,6 +572,7 @@ export class Orchestrator {
       this.inactivityTimer = null;
     }
 
+    this.heartbeat.stop();
     if (this.dreamInterval) {
       clearInterval(this.dreamInterval);
       this.dreamInterval = null;

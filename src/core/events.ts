@@ -58,7 +58,12 @@ export type NexusEvent =
 
   // System
   | { type: 'system.started'; version: string; uptime: number }
-  | { type: 'system.shutdown'; graceful: boolean; reason?: string };
+  | { type: 'system.shutdown'; graceful: boolean; reason?: string }
+
+  // Main-agent heartbeat — emitted every N minutes by the orchestrator while
+  // it's alive. Paused during the dream window so it doesn't compete with
+  // the consolidation pass.
+  | { type: 'heartbeat'; uptimeSec: number; memoryCount: number; sessionCount: number; mood: number; lastMessageAt?: string };
 
 export type EventType = NexusEvent['type'];
 

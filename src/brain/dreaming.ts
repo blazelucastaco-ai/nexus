@@ -42,6 +42,11 @@ export interface DreamReport {
   reflections: string[];     // observations about recent activity patterns
   ideas: string[];           // actionable ideas generated from reflections
   insights: string[];        // LLM-generated semantic facts from consolidation
+  // Advanced synthesis — produced by the second pass when an AI is wired
+  themes: string[];          // clustered topics from the day's activity
+  openLoops: string[];       // things started but not finished; surface tomorrow
+  skillProposals: Array<{ name: string; rationale: string }>; // patterns worth codifying
+  narrative: string;         // prose diary entry — feeds the morning briefing
   durationMs: number;
   skipped?: boolean;         // true if double-run guard fired
 }
@@ -97,6 +102,7 @@ export class DreamingEngine {
       return {
         consolidated: 0, decayed: 0, garbageCollected: 0, contradictions: 0,
         staleGoalsPruned: 0, reflections: [], ideas: [], insights: [],
+        themes: [], openLoops: [], skillProposals: [], narrative: '',
         durationMs: 0, skipped: true,
       };
     }
@@ -112,6 +118,7 @@ export class DreamingEngine {
         return {
           consolidated: 0, decayed: 0, garbageCollected: 0, contradictions: 0,
           staleGoalsPruned: 0, reflections: [], ideas: [], insights: [],
+          themes: [], openLoops: [], skillProposals: [], narrative: '',
           durationMs: Date.now() - start, skipped: true,
         };
       }
@@ -133,30 +140,50 @@ export class DreamingEngine {
     // Reflection + ideation — only if we have an AI manager
     const reflections: string[] = [];
     const ideas: string[] = [];
+    let themes: string[] = [];
+    let openLoops: string[] = [];
+    let skillProposals: Array<{ name: string; rationale: string }> = [];
+    let narrative = '';
 
     if (this.aiManager) {
       try {
         const recentContext = this.gatherRecentContext(state.lastReflectedAt);
         if (recentContext.trim().length > 20) {
+          // Pass 1 — raw observations about what happened
           await this.reflect(recentContext, reflections);
           if (reflections.length > 0) {
             // Update reflection timestamp before ideation.
             // Spread the existing state so any future fields survive (FIND-BUG-03).
             this.saveDreamState({ ...state, lastDreamAt: start, lastReflectedAt: Date.now() });
 
+            // Pass 2 — action ideas derived from the observations
             await this.ideate(reflections, ideas);
-            // Store ideas as episodic memories so they surface in future sessions
             this.storeIdeasAsMemories(ideas);
+
+            // Pass 3 — structured synthesis: themes, open loops, skill
+            // proposals, and a prose narrative. This is the "advanced"
+            // layer on top of the older reflect + ideate flow.
+            const synth = await this.synthesize(recentContext, reflections, ideas);
+            themes = synth.themes;
+            openLoops = synth.openLoops;
+            skillProposals = synth.skillProposals;
+            narrative = synth.narrative;
+            this.storeOpenLoopsAsMemories(openLoops);
+            this.storeSkillProposalsAsMemories(skillProposals);
           }
         }
       } catch (err) {
-        log.warn({ err }, 'Reflection/ideation failed — skipping');
+        log.warn({ err }, 'Reflection/synthesis failed — skipping');
       }
 
       // Journal the dream as a semantic memory
       try {
-        if (reflections.length > 0 || insights.length > 0) {
-          this.journalDream(reflections, ideas, insights, consolidated, decayed, garbageCollected, contradictions);
+        if (reflections.length > 0 || insights.length > 0 || narrative) {
+          this.journalDream(
+            reflections, ideas, insights,
+            consolidated, decayed, garbageCollected, contradictions,
+            { themes, openLoops, skillProposals, narrative },
+          );
         }
       } catch (err) {
         log.warn({ err }, 'Dream journal write failed — skipping');
@@ -172,6 +199,10 @@ export class DreamingEngine {
       reflections,
       ideas,
       insights,
+      themes,
+      openLoops,
+      skillProposals,
+      narrative,
       durationMs: Date.now() - start,
     };
 
@@ -638,6 +669,188 @@ export class DreamingEngine {
     }
   }
 
+  // ── Advanced synthesis pass (Pass 3) ──────────────────────────────────────
+
+  /**
+   * Pass 3 of the dream cycle. Given the raw context, the Pass-1 reflections,
+   * and the Pass-2 ideas, produce a structured synthesis:
+   *   - themes: the 2-4 topic clusters the day broke into
+   *   - openLoops: things started but not finished — surface tomorrow
+   *   - skillProposals: patterns worth codifying as a NEXUS skill
+   *   - narrative: prose diary entry (feeds the morning briefing)
+   */
+  private async synthesize(
+    context: string,
+    reflections: string[],
+    ideas: string[],
+  ): Promise<{
+    themes: string[];
+    openLoops: string[];
+    skillProposals: Array<{ name: string; rationale: string }>;
+    narrative: string;
+  }> {
+    const empty = { themes: [], openLoops: [], skillProposals: [], narrative: '' };
+    if (!this.aiManager) return empty;
+
+    const now = new Date();
+    const dateLabel = now.toLocaleDateString('en-AU', {
+      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+    });
+
+    // Pull mistakes recorded today so the synthesis can learn from them.
+    const db = getDatabase();
+    const todayCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const mistakes = db
+      .prepare(
+        `SELECT content FROM memories
+         WHERE tags LIKE '%mistake%'
+           AND created_at > ?
+         ORDER BY created_at DESC
+         LIMIT 5`,
+      )
+      .all(todayCutoff) as Array<{ content: string }>;
+
+    const mistakeLines = mistakes.length > 0
+      ? '\n\n=== Mistakes logged in the last 24h (learn from these) ===\n' +
+        mistakes.map((m) => `• ${m.content.slice(0, 220)}`).join('\n')
+      : '';
+
+    const prompt =
+      `You are NEXUS running a late-night synthesis pass. Today is ${dateLabel}.\n\n` +
+      `You've already produced raw observations and action ideas for the day. Now step\n` +
+      `back and write a structured synthesis. Think slowly and integrate.\n\n` +
+      `=== Raw observations (pass 1) ===\n${reflections.map((r) => `• ${r}`).join('\n')}\n\n` +
+      `=== Action ideas (pass 2) ===\n${ideas.map((i) => `• ${i}`).join('\n')}\n\n` +
+      `=== Full day context ===\n${context.slice(0, 12_000)}${mistakeLines}\n\n` +
+      `Output EXACTLY this JSON — no prose before or after, no markdown fences:\n\n` +
+      `{\n` +
+      `  "themes": ["<2-4 one-line topic clusters the day broke into>"],\n` +
+      `  "openLoops": ["<2-5 things started but not finished, each <= 120 chars>"],\n` +
+      `  "skillProposals": [\n` +
+      `    { "name": "<kebab-case>", "rationale": "<one sentence why this is worth codifying>" }\n` +
+      `  ],\n` +
+      `  "narrative": "<3-5 paragraph first-person diary entry in NEXUS's voice — what did the day look like, what mattered, what felt stuck, what felt like progress. Tight prose, no bullet points inside.>"\n` +
+      `}\n\n` +
+      `Rules:\n` +
+      `- Skill proposals only when you see a repeated multi-step procedure in the day's activity. If nothing fits, return [].\n` +
+      `- Open loops are for the morning briefing — be specific, not generic.\n` +
+      `- Narrative should read like NEXUS wrote it to itself, not to the user. First person. Honest.\n`;
+
+    try {
+      const response = await this.aiManager.complete({
+        messages: [{ role: 'user', content: prompt }],
+        // Use Opus here — synthesis is the most nuanced step and it only
+        // runs once per day, so the cost is negligible.
+        model: 'claude-opus-4-7',
+        maxTokens: 2000,
+      });
+      const parsed = this.parseSynthesisJson(response.content);
+      if (!parsed) return empty;
+      return parsed;
+    } catch (err) {
+      log.warn({ err }, 'Synthesis pass failed');
+      return empty;
+    }
+  }
+
+  private parseSynthesisJson(raw: string): {
+    themes: string[];
+    openLoops: string[];
+    skillProposals: Array<{ name: string; rationale: string }>;
+    narrative: string;
+  } | null {
+    if (!raw) return null;
+    const stripped = raw.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+    const start = stripped.indexOf('{');
+    if (start < 0) return null;
+    const candidate = stripped.slice(start);
+    try {
+      return this.validateSynthesis(JSON.parse(candidate));
+    } catch { /* try trimming */ }
+    const end = stripped.lastIndexOf('}');
+    if (end > start) {
+      try { return this.validateSynthesis(JSON.parse(stripped.slice(start, end + 1))); }
+      catch { return null; }
+    }
+    return null;
+  }
+
+  private validateSynthesis(obj: unknown): {
+    themes: string[];
+    openLoops: string[];
+    skillProposals: Array<{ name: string; rationale: string }>;
+    narrative: string;
+  } | null {
+    if (!obj || typeof obj !== 'object') return null;
+    const o = obj as Record<string, unknown>;
+    const asStrArr = (v: unknown): string[] =>
+      Array.isArray(v)
+        ? v.filter((x): x is string => typeof x === 'string' && x.trim().length >= 4).map((x) => x.trim())
+        : [];
+    const skillProposals: Array<{ name: string; rationale: string }> = [];
+    if (Array.isArray(o.skillProposals)) {
+      for (const s of o.skillProposals) {
+        if (!s || typeof s !== 'object') continue;
+        const sp = s as Record<string, unknown>;
+        const name = typeof sp.name === 'string'
+          ? sp.name.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 48)
+          : '';
+        const rationale = typeof sp.rationale === 'string' ? sp.rationale.trim() : '';
+        if (name && rationale) skillProposals.push({ name, rationale });
+      }
+    }
+    return {
+      themes: asStrArr(o.themes).slice(0, 5),
+      openLoops: asStrArr(o.openLoops).slice(0, 6),
+      skillProposals: skillProposals.slice(0, 4),
+      narrative: typeof o.narrative === 'string' ? o.narrative.trim() : '',
+    };
+  }
+
+  private storeOpenLoopsAsMemories(openLoops: string[]): void {
+    if (openLoops.length === 0) return;
+    const db = getDatabase();
+    const now = nowISO();
+    for (const loop of openLoops) {
+      try {
+        const id = generateId();
+        db.prepare(
+          `INSERT INTO memories
+             (id, layer, type, content, importance, confidence, created_at,
+              last_accessed, access_count, tags, related_memories, source, metadata)
+           VALUES (?, 'episodic', 'task', ?, 0.75, 0.7, ?, ?, 0,
+                   '["dream-open-loop","proactive"]', '[]', 'dream-cycle', '{}')`,
+        ).run(id, loop, now, now);
+        try { storeEmbedding(id, loop); } catch { /* non-fatal */ }
+      } catch (err) {
+        log.warn({ err }, 'Failed to store open loop');
+      }
+    }
+    log.debug({ count: openLoops.length }, 'Stored open loops');
+  }
+
+  private storeSkillProposalsAsMemories(proposals: Array<{ name: string; rationale: string }>): void {
+    if (proposals.length === 0) return;
+    const db = getDatabase();
+    const now = nowISO();
+    for (const p of proposals) {
+      try {
+        const id = generateId();
+        const content = `Skill proposal: ${p.name}\n\n${p.rationale}`;
+        db.prepare(
+          `INSERT INTO memories
+             (id, layer, type, content, importance, confidence, created_at,
+              last_accessed, access_count, tags, related_memories, source, metadata)
+           VALUES (?, 'procedural', 'procedure', ?, 0.7, 0.7, ?, ?, 0,
+                   '["dream-skill-proposal"]', '[]', 'dream-cycle', ?)`,
+        ).run(id, content, now, now, JSON.stringify({ proposedName: p.name }));
+      } catch (err) {
+        log.warn({ err }, 'Failed to store skill proposal');
+      }
+    }
+    log.debug({ count: proposals.length }, 'Stored skill proposals');
+  }
+
   /**
    * Store each generated idea as an episodic memory tagged 'dream-idea'
    * so it surfaces in future recall and the morning briefing.
@@ -681,12 +894,24 @@ export class DreamingEngine {
     decayed: number,
     garbageCollected: number,
     contradictions = 0,
+    synth: {
+      themes: string[];
+      openLoops: string[];
+      skillProposals: Array<{ name: string; rationale: string }>;
+      narrative: string;
+    } = { themes: [], openLoops: [], skillProposals: [], narrative: '' },
   ): void {
     const db = getDatabase();
 
     const parts: string[] = [`Dream cycle at ${new Date().toUTCString()}`];
+    if (synth.narrative) parts.push(`\n${synth.narrative}\n`);
+    if (synth.themes.length > 0) parts.push(`Themes: ${synth.themes.join(' | ')}`);
     if (reflections.length > 0) parts.push(`Reflections: ${reflections.join(' | ')}`);
     if (ideas.length > 0) parts.push(`Ideas: ${ideas.join(' | ')}`);
+    if (synth.openLoops.length > 0) parts.push(`Open loops: ${synth.openLoops.join(' | ')}`);
+    if (synth.skillProposals.length > 0) {
+      parts.push(`Skill proposals: ${synth.skillProposals.map((s) => `${s.name} — ${s.rationale}`).join(' | ')}`);
+    }
     if (insights.length > 0) parts.push(`Insights: ${insights.join(' | ')}`);
     parts.push(`Stats: consolidated=${consolidated}, decayed=${decayed}, gc=${garbageCollected}, contradictions=${contradictions}`);
 
@@ -710,16 +935,44 @@ export class DreamingEngine {
   private formatTelegramMessage(report: DreamReport): string {
     const parts: string[] = ['🌙 <b>NEXUS dreamed…</b>\n'];
 
+    if (report.narrative) {
+      // Take the first paragraph of the narrative for the Telegram preview —
+      // the full one is on the dream journal row in the memory table.
+      const para = report.narrative.split(/\n\n+/)[0]?.trim() ?? '';
+      if (para) parts.push(`<i>${escapeHtml(para)}</i>`);
+      parts.push('');
+    }
+
+    if (report.themes.length > 0) {
+      parts.push(`<b>Themes</b>`);
+      for (const t of report.themes) parts.push(`· ${escapeHtml(t)}`);
+      parts.push('');
+    }
+
     if (report.reflections.length > 0) {
       for (const r of report.reflections) {
-        parts.push(`💭 ${r}`);
+        parts.push(`💭 ${escapeHtml(r)}`);
       }
+    }
+
+    if (report.openLoops.length > 0) {
+      parts.push('');
+      parts.push(`<b>Open loops for today</b>`);
+      for (const l of report.openLoops) parts.push(`↻ ${escapeHtml(l)}`);
     }
 
     if (report.ideas.length > 0) {
       parts.push('');
       for (const idea of report.ideas) {
-        parts.push(`💡 ${idea}`);
+        parts.push(`💡 ${escapeHtml(idea)}`);
+      }
+    }
+
+    if (report.skillProposals.length > 0) {
+      parts.push('');
+      parts.push(`<b>Skill ideas</b>`);
+      for (const s of report.skillProposals) {
+        parts.push(`🛠 <code>${escapeHtml(s.name)}</code> — ${escapeHtml(s.rationale)}`);
       }
     }
 
@@ -798,4 +1051,12 @@ export class DreamingEngine {
     if (!first || first.length < 5) return null;
     return first.length > 200 ? first.slice(0, 200) + '…' : first;
   }
+}
+
+function escapeHtml(s: string): string {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
