@@ -27,7 +27,7 @@
     "electron-builder": "^25.1.8",
     "typescript": "^5.7.2",
     "vite": "^6.0.3",
-    "wait-on": "^8.0.1"
+    "wait-on": "^9.0.5"
   },
   "dependencies": {
     "react": "^18.3.1",
