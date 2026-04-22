@@ -3,7 +3,7 @@
 # The primary_region should be close to your users — `iad` (Virginia), `ams`
 # (Amsterdam), `sjc` (San Jose) are all fine for a small-footprint service.
 
-app = "nexus-hub"
+app = "nexus-hub-blazelucastaco"
 primary_region = "iad"
 kill_signal = "SIGTERM"
 kill_timeout = 10
