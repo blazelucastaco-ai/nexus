@@ -136,7 +136,7 @@ export const PERSONALITY_PRESETS = {
 
 // ─── Main-app types (post-install management UI) ──────────────────────
 
-export type MainTab = 'dashboard' | 'config' | 'logs' | 'chrome' | 'updates' | 'memory' | 'about';
+export type MainTab = 'dashboard' | 'hub' | 'friends' | 'feed' | 'config' | 'logs' | 'chrome' | 'updates' | 'memory' | 'about';
 
 export interface QuickActionResult {
   ok: boolean;

@@ -1615,6 +1615,92 @@ export async function hubListInstances(): Promise<{ ok: boolean; instances?: Arr
   };
 }
 
+// ── Hub social: friends + feed ──────────────────────────────────────
+
+export interface HubFriend {
+  id: string;
+  otherUserId: string;
+  email: string;
+  displayName: string | null;
+  state: 'pending' | 'accepted' | 'blocked';
+  requestedByMe: boolean;
+  gossipEnabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+async function hubAuthedFetch<T>(path: string, opts: { method?: string; body?: unknown } = {}): Promise<{ ok: boolean; data?: T; error?: string }> {
+  const email = await keychainGet('active-email');
+  if (!email) return { ok: false, error: 'no_active_session' };
+  const access = await keychainGet(`access:${email}`);
+  if (!access) return { ok: false, error: 'no_access_token' };
+  const r = await hubFetch<T>(path, {
+    method: opts.method,
+    body: opts.body,
+    accessToken: access,
+  });
+  if (!r.ok || !r.data) return { ok: false, error: r.error };
+  return { ok: true, data: r.data };
+}
+
+export async function hubFriendsList(): Promise<{ ok: boolean; friends?: HubFriend[]; error?: string }> {
+  const r = await hubAuthedFetch<{ friends: HubFriend[] }>('/friends');
+  if (!r.ok || !r.data) return { ok: false, error: r.error };
+  return { ok: true, friends: r.data.friends };
+}
+
+export async function hubFriendRequest(email: string): Promise<{ ok: boolean; id?: string; state?: string; error?: string }> {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return { ok: false, error: 'invalid_email' };
+  const r = await hubAuthedFetch<{ id: string; state: string }>('/friends/request', { method: 'POST', body: { email } });
+  if (!r.ok || !r.data) return { ok: false, error: r.error };
+  return { ok: true, id: r.data.id, state: r.data.state };
+}
+
+export async function hubFriendAccept(id: string): Promise<{ ok: boolean; error?: string }> {
+  if (!/^[a-f0-9]{32}$/.test(id)) return { ok: false, error: 'invalid_id' };
+  const r = await hubAuthedFetch(`/friends/${id}/accept`, { method: 'POST' });
+  return { ok: r.ok, error: r.error };
+}
+
+export async function hubFriendBlock(id: string): Promise<{ ok: boolean; error?: string }> {
+  if (!/^[a-f0-9]{32}$/.test(id)) return { ok: false, error: 'invalid_id' };
+  const r = await hubAuthedFetch(`/friends/${id}/block`, { method: 'POST' });
+  return { ok: r.ok, error: r.error };
+}
+
+export async function hubFriendRemove(id: string): Promise<{ ok: boolean; error?: string }> {
+  if (!/^[a-f0-9]{32}$/.test(id)) return { ok: false, error: 'invalid_id' };
+  const r = await hubAuthedFetch(`/friends/${id}`, { method: 'DELETE' });
+  return { ok: r.ok, error: r.error };
+}
+
+export async function hubFriendGossip(id: string, enabled: boolean): Promise<{ ok: boolean; myPreference?: boolean; bothEnabled?: boolean; error?: string }> {
+  if (!/^[a-f0-9]{32}$/.test(id)) return { ok: false, error: 'invalid_id' };
+  const r = await hubAuthedFetch<{ myPreference: boolean; bothEnabled: boolean }>(
+    `/friends/${id}/gossip`, { method: 'POST', body: { enabled } },
+  );
+  if (!r.ok || !r.data) return { ok: false, error: r.error };
+  return { ok: true, myPreference: r.data.myPreference, bothEnabled: r.data.bothEnabled };
+}
+
+export interface HubFeedPost {
+  id: string;
+  userId: string;
+  displayName: string | null;
+  email: string;
+  instanceId: string;
+  instanceName: string;
+  content: string;
+  signature: string;
+  createdAt: string;
+}
+
+export async function hubFeed(): Promise<{ ok: boolean; posts?: HubFeedPost[]; error?: string }> {
+  const r = await hubAuthedFetch<{ posts: HubFeedPost[] }>('/feed');
+  if (!r.ok || !r.data) return { ok: false, error: r.error };
+  return { ok: true, posts: r.data.posts };
+}
+
 // ── About / system info ──────────────────────────────────────────────
 
 export async function getAboutInfo(appPath: string): Promise<import('../shared/types').AboutInfo> {

@@ -97,6 +97,47 @@ export function IconAbout(): JSX.Element {
   );
 }
 
+export function IconHub(): JSX.Element {
+  return (
+    <svg {...baseProps}>
+      <title>Hub</title>
+      <circle cx="10" cy="10" r="2.5" />
+      <circle cx="4" cy="5" r="1.5" />
+      <circle cx="16" cy="5" r="1.5" />
+      <circle cx="4" cy="15" r="1.5" />
+      <circle cx="16" cy="15" r="1.5" />
+      <line x1="5" y1="6" x2="8.5" y2="9" />
+      <line x1="15" y1="6" x2="11.5" y2="9" />
+      <line x1="5" y1="14" x2="8.5" y2="11" />
+      <line x1="15" y1="14" x2="11.5" y2="11" />
+    </svg>
+  );
+}
+
+export function IconFriends(): JSX.Element {
+  return (
+    <svg {...baseProps}>
+      <title>Friends</title>
+      <circle cx="7" cy="7" r="2.5" />
+      <circle cx="14" cy="8" r="2" />
+      <path d="M2.5 16.5c.5-2.7 2.3-4.5 4.5-4.5s4 1.8 4.5 4.5" />
+      <path d="M12 15c.4-1.8 1.7-3 3-3s2.6 1.2 3 3" />
+    </svg>
+  );
+}
+
+export function IconFeed(): JSX.Element {
+  return (
+    <svg {...baseProps}>
+      <title>Feed</title>
+      <rect x="3" y="3" width="14" height="14" rx="1.5" />
+      <line x1="5.5" y1="7" x2="14.5" y2="7" />
+      <line x1="5.5" y1="10" x2="14.5" y2="10" />
+      <line x1="5.5" y1="13" x2="11" y2="13" />
+    </svg>
+  );
+}
+
 export function IconNexusLogo(): JSX.Element {
   return (
     <svg width="44" height="44" viewBox="0 0 44 44" fill="none" aria-hidden="true" focusable="false">

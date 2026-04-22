@@ -100,6 +100,20 @@ const api = {
       ipcRenderer.invoke('hub:register-instance', name),
     hubListInstances: (): Promise<{ ok: boolean; instances?: Array<{ id: string; name: string; platform?: string; appVersion?: string; createdAt: string; lastSeenAt?: string | null; isMe?: boolean }>; error?: string }> =>
       ipcRenderer.invoke('hub:list-instances'),
+    hubFriendsList: (): Promise<{ ok: boolean; friends?: Array<{ id: string; otherUserId: string; email: string; displayName: string | null; state: 'pending' | 'accepted' | 'blocked'; requestedByMe: boolean; gossipEnabled: boolean; createdAt: string; updatedAt: string }>; error?: string }> =>
+      ipcRenderer.invoke('hub:friends-list'),
+    hubFriendRequest: (email: string): Promise<{ ok: boolean; id?: string; state?: string; error?: string }> =>
+      ipcRenderer.invoke('hub:friend-request', email),
+    hubFriendAccept: (id: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('hub:friend-accept', id),
+    hubFriendBlock: (id: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('hub:friend-block', id),
+    hubFriendRemove: (id: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('hub:friend-remove', id),
+    hubFriendGossip: (id: string, enabled: boolean): Promise<{ ok: boolean; myPreference?: boolean; bothEnabled?: boolean; error?: string }> =>
+      ipcRenderer.invoke('hub:friend-gossip', { id, enabled }),
+    hubFeed: (): Promise<{ ok: boolean; posts?: Array<{ id: string; userId: string; displayName: string | null; email: string; instanceId: string; instanceName: string; content: string; signature: string; createdAt: string }>; error?: string }> =>
+      ipcRenderer.invoke('hub:feed'),
     actionDream: (): Promise<QuickActionResult> => ipcRenderer.invoke('main:action-dream'),
     actionHealth: (): Promise<QuickActionResult> => ipcRenderer.invoke('main:action-health'),
     memoryDetectSources: (): Promise<Array<{ id: string; name: string; status: string; summary: string; estimatedItems: number }>> =>

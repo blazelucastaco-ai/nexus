@@ -37,6 +37,13 @@ import {
   hubActiveSession,
   hubRegisterInstance,
   hubListInstances,
+  hubFriendsList,
+  hubFriendRequest,
+  hubFriendAccept,
+  hubFriendBlock,
+  hubFriendRemove,
+  hubFriendGossip,
+  hubFeed,
   getAboutInfo,
 } from './installer-core';
 import type { ConfigInput, InstallProgress, UpdateProgress } from '../shared/types';
@@ -513,6 +520,30 @@ app.whenReady().then(() => {
     return hubRegisterInstance(name);
   });
   ipcMain.handle('hub:list-instances', async () => hubListInstances());
+  ipcMain.handle('hub:friends-list', async () => hubFriendsList());
+  ipcMain.handle('hub:friend-request', async (_e, email: unknown) => {
+    if (typeof email !== 'string') return { ok: false, error: 'invalid_email' };
+    return hubFriendRequest(email);
+  });
+  ipcMain.handle('hub:friend-accept', async (_e, id: unknown) => {
+    if (typeof id !== 'string') return { ok: false, error: 'invalid_id' };
+    return hubFriendAccept(id);
+  });
+  ipcMain.handle('hub:friend-block', async (_e, id: unknown) => {
+    if (typeof id !== 'string') return { ok: false, error: 'invalid_id' };
+    return hubFriendBlock(id);
+  });
+  ipcMain.handle('hub:friend-remove', async (_e, id: unknown) => {
+    if (typeof id !== 'string') return { ok: false, error: 'invalid_id' };
+    return hubFriendRemove(id);
+  });
+  ipcMain.handle('hub:friend-gossip', async (_e, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') return { ok: false, error: 'invalid_input' };
+    const p = payload as { id?: unknown; enabled?: unknown };
+    if (typeof p.id !== 'string' || typeof p.enabled !== 'boolean') return { ok: false, error: 'invalid_input' };
+    return hubFriendGossip(p.id, p.enabled);
+  });
+  ipcMain.handle('hub:feed', async () => hubFeed());
 
   if (isMenubarMode) {
     startMenubarMode();
