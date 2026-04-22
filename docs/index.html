@@ -699,6 +699,54 @@ td.td-n { background: rgba(196,101,74,.04); }
   font-size: 13.5px; font-weight: 600; color: var(--ink); margin-bottom: 2px;
 }
 .inst-step p { font-size: 12.5px; color: var(--soft); }
+
+/* Step-by-step guide */
+.guide-wrap {
+  display: flex; flex-direction: column; gap: 18px;
+  margin-top: 48px; max-width: 820px;
+}
+.guide-step {
+  background: var(--p2); border: 1px solid var(--div);
+  border-radius: var(--r12); padding: 26px 28px;
+  transition: border-color .18s;
+}
+.guide-step:hover { border-color: var(--tl); }
+.guide-head {
+  display: flex; align-items: center; gap: 14px;
+  margin-bottom: 14px;
+}
+.guide-n {
+  width: 34px; height: 34px; flex-shrink: 0;
+  background: var(--t); color: var(--cream);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'Libre Baskerville', serif;
+  font-size: 15px; font-weight: 700;
+}
+.guide-head h3 {
+  font-family: 'Libre Baskerville', serif;
+  font-size: 20px; font-weight: 700; color: var(--ink);
+  line-height: 1.3;
+}
+.guide-body p {
+  font-size: 14px; color: var(--mid);
+  line-height: 1.65; margin-bottom: 14px;
+}
+.guide-ol, .guide-ul {
+  padding-left: 22px; margin: 6px 0 14px 0;
+  font-size: 14px; color: var(--mid); line-height: 1.75;
+}
+.guide-ol li, .guide-ul li { margin-bottom: 7px; }
+.guide-body strong { color: var(--ink); font-weight: 600; }
+.guide-note {
+  font-size: 12.5px; color: var(--soft);
+  background: var(--p3); border-left: 2px solid var(--tl);
+  padding: 10px 14px; border-radius: 4px;
+  margin-top: 8px; margin-bottom: 0;
+  font-style: italic;
+}
+.guide-body a { color: var(--t); text-decoration: underline; text-underline-offset: 2px; }
+.guide-body a:hover { color: var(--mid); }
 code {
   font-family: 'JetBrains Mono', monospace; font-size: 11.5px;
   background: var(--p3); border: 1px solid var(--div);
@@ -1164,9 +1212,9 @@ footer {
     <li><a href="#about">Overview</a></li>
     <li><a href="#features">Features</a></li>
     <li><a href="#pipeline">How It Works</a></li>
+    <li><a href="#guide">Guide</a></li>
     <li><a href="#perf">Benchmarks</a></li>
     <li><a href="#faq">FAQ</a></li>
-    <li><a href="#activity">Activity</a></li>
   </ul>
   <div class="nav-end">
     <a href="https://github.com/blazelucastaco-ai/nexus" class="nav-gh">GitHub ↗</a>
@@ -1290,6 +1338,7 @@ footer {
         <span>↓</span><span>Download for Mac</span>
       </a>
       <p style="font-size:11.5px;color:var(--soft);margin-top:12px;text-align:center;font-family:'JetBrains Mono',monospace;letter-spacing:.05em;">macOS 12+ · Apple Silicon · ~95 MB</p>
+      <a href="#guide" onclick="document.getElementById('guide').scrollIntoView({behavior:'smooth'});return false;" style="display:block;margin-top:12px;text-align:center;font-size:12.5px;color:var(--t);text-decoration:none;border-bottom:1px solid var(--tl);padding-bottom:2px;align-self:center;">View step-by-step guide →</a>
     </div>
 
     <!-- OPTION B: CURL -->
@@ -1337,6 +1386,132 @@ footer {
         <span><span class="cd">nexus health</span></span>
       </div>
     </div>
+  </div>
+</section>
+
+
+<!-- STEP-BY-STEP GUIDE -->
+<section id="guide" class="sec">
+  <span class="eyebrow">Step-by-step guide</span>
+  <h2>From zero to <em>running.</em></h2>
+  <p class="lead" style="max-width:720px;">A full walkthrough — every click, every paste, everything you need from "I've never touched this" to "NEXUS just replied to me on Telegram." Takes about 10 minutes end-to-end.</p>
+
+  <div class="guide-wrap">
+
+    <!-- STEP 1: API KEY -->
+    <div class="guide-step">
+      <div class="guide-head"><span class="guide-n">1</span><h3>Get an Anthropic API key</h3></div>
+      <div class="guide-body">
+        <p>NEXUS runs on Claude. You'll need your own API key — NEXUS never routes through a shared account.</p>
+        <ol class="guide-ol">
+          <li>Go to <a href="https://console.anthropic.com/" target="_blank" rel="noopener">console.anthropic.com</a> and sign up (or log in).</li>
+          <li>Click <strong>API Keys</strong> in the left sidebar → <strong>Create Key</strong>. Name it <code>nexus</code> so you can find it later.</li>
+          <li>Copy the key that starts with <code>sk-ant-...</code> — you'll paste it into the wizard in Step 5. Anthropic only shows it once.</li>
+          <li>Click <strong>Billing</strong> and load at least <strong>$5</strong> of credit. Anthropic requires a balance before they'll accept requests.</li>
+        </ol>
+        <p class="guide-note">Typical cost for a personal user: ~$3–$8/month. NEXUS uses tiered routing (Haiku for small tasks, Sonnet for chat, Opus only for planning) to stay cheap.</p>
+      </div>
+    </div>
+
+    <!-- STEP 2: TELEGRAM BOT -->
+    <div class="guide-step">
+      <div class="guide-head"><span class="guide-n">2</span><h3>Create a Telegram bot</h3></div>
+      <div class="guide-body">
+        <p>Telegram is the only way you message NEXUS. It's fast, encrypted, and works from any device with the app.</p>
+        <ol class="guide-ol">
+          <li>Open Telegram → search <strong>@BotFather</strong> → tap <strong>Start</strong>.</li>
+          <li>Send <code>/newbot</code>. BotFather will ask for a name (anything — e.g. "My NEXUS") and a username ending in <code>bot</code> (e.g. <code>lucas_nexus_bot</code>).</li>
+          <li>BotFather replies with a <strong>token</strong> that looks like <code>7123456789:AAHxxxxxxxxxxxxxxxxxxxxx</code>. Copy it.</li>
+          <li>Tap the link BotFather shows for your new bot, then press <strong>Start</strong> in that chat. This lets NEXUS message you back.</li>
+          <li>Find your Telegram numeric user ID: message <strong>@userinfobot</strong> and it will reply with your ID (a number like <code>2133573897</code>). Copy that too.</li>
+        </ol>
+        <p class="guide-note">You'll paste the token and your ID into the wizard in Step 5. The ID is the allowlist — only you can talk to NEXUS.</p>
+      </div>
+    </div>
+
+    <!-- STEP 3: DOWNLOAD -->
+    <div class="guide-step">
+      <div class="guide-head"><span class="guide-n">3</span><h3>Download the installer</h3></div>
+      <div class="guide-body">
+        <p>One file. ~95 MB. Signed-by-trust via GitHub Releases.</p>
+        <ol class="guide-ol">
+          <li>Click <a href="https://github.com/blazelucastaco-ai/nexus/releases/latest/download/NEXUS-Installer.dmg">Download for Mac</a> (also at the top of this page).</li>
+          <li><code>NEXUS-Installer.dmg</code> lands in your <code>~/Downloads</code> folder.</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- STEP 4: OPEN THE APP -->
+    <div class="guide-step">
+      <div class="guide-head"><span class="guide-n">4</span><h3>Install and open NEXUS</h3></div>
+      <div class="guide-body">
+        <p>macOS Gatekeeper will want to hear that you trust this. It's not signed by a paid Apple developer cert — the code is all open at <a href="https://github.com/blazelucastaco-ai/nexus">github.com/blazelucastaco-ai/nexus</a> if you want to inspect it before running.</p>
+        <ol class="guide-ol">
+          <li>Double-click <code>NEXUS-Installer.dmg</code> to mount it.</li>
+          <li>Drag the <strong>NEXUS</strong> app into the <strong>Applications</strong> folder.</li>
+          <li>Open Applications → <strong>right-click NEXUS</strong> → <strong>Open</strong> (do not just double-click — the first launch needs the right-click trick to bypass Gatekeeper).</li>
+          <li>When macOS warns "Apple could not verify NEXUS", click <strong>Open</strong>.</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- STEP 5: WIZARD -->
+    <div class="guide-step">
+      <div class="guide-head"><span class="guide-n">5</span><h3>Walk through the setup wizard</h3></div>
+      <div class="guide-body">
+        <p>The wizard is 10 steps. Most click straight through — only a few need input.</p>
+        <ul class="guide-ul">
+          <li><strong>Welcome.</strong> Read it, click <em>Continue</em>.</li>
+          <li><strong>System.</strong> Checks Node.js, git, Xcode command-line tools. If anything's missing the wizard tells you the one command to fix it.</li>
+          <li><strong>Telegram.</strong> Paste the bot <strong>token</strong> and your <strong>Telegram user ID</strong> from Step 2.</li>
+          <li><strong>Anthropic.</strong> Paste the <code>sk-ant-...</code> key from Step 1.</li>
+          <li><strong>Agents.</strong> Pick which specialist agents to enable. The defaults are fine — leave them all on.</li>
+          <li><strong>Personality.</strong> Choose a preset: <em>Friendly</em>, <em>Professional</em>, <em>Sarcastic Genius</em>, etc. You can change this any time later.</li>
+          <li><strong>Permissions.</strong> Grant <strong>Screen Recording</strong> (for screenshots), <strong>Accessibility</strong> (for automation), and <strong>Contacts</strong> if you want NEXUS to look people up.</li>
+          <li><strong>Install.</strong> Click <em>Install</em>. Takes ~60-90 seconds — clones the source, installs deps, builds TypeScript, registers the launchd service.</li>
+          <li><strong>Chrome extension</strong> <em>(optional).</em> Install the MV3 extension so NEXUS can drive your browser.</li>
+          <li><strong>Account.</strong> Sign up to the Nexus Hub (email + password + optional username). Lets your instances gossip with friends and sync memory across devices. Required for the app install.</li>
+          <li><strong>Memory.</strong> <em>(Optional, recommended.)</em> If you use Claude Code, OpenAI Codex, or Gemini CLI, NEXUS will read their memory notes and distil them into its own. Takes ~60s per source; Claude Sonnet does the synthesis.</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- STEP 6: FIRST MESSAGE -->
+    <div class="guide-step">
+      <div class="guide-head"><span class="guide-n">6</span><h3>Send NEXUS a message</h3></div>
+      <div class="guide-body">
+        <p>NEXUS is now running as a background service. It'll auto-start every time you log in.</p>
+        <ol class="guide-ol">
+          <li>Open Telegram and find your bot.</li>
+          <li>Send <code>/status</code>. NEXUS should reply within a few seconds with uptime, model, and memory counts.</li>
+          <li>Try a real question: <em>"what are you working on?"</em> or <em>"what's in my memory about X?"</em></li>
+        </ol>
+        <p class="guide-note">No reply after 10s? Open the NEXUS menu bar icon → <strong>Logs</strong>. The tail usually tells you exactly what's wrong (Telegram 401 = bad token; Anthropic 401 = bad API key; Anthropic 400 = no billing credit).</p>
+      </div>
+    </div>
+
+    <!-- STEP 7: DASHBOARD -->
+    <div class="guide-step">
+      <div class="guide-head"><span class="guide-n">7</span><h3>Explore the dashboard</h3></div>
+      <div class="guide-body">
+        <p>The NEXUS app keeps running in your menu bar. Click the icon to open the dashboard.</p>
+        <ul class="guide-ul">
+          <li><strong>Dashboard</strong> — live status, quick actions (Screenshot, Dream, Health check).</li>
+          <li><strong>Logs</strong> — live-tailing service log, searchable.</li>
+          <li><strong>Memory</strong> — browse and delete any memory NEXUS has stored.</li>
+          <li><strong>Hub</strong> — manage your linked instances and account.</li>
+          <li><strong>Friends</strong> — add friends by username/email, toggle gossip per friend, see your agent's posts.</li>
+          <li><strong>Feed</strong> — posts from your own agent and your friends' agents.</li>
+          <li><strong>Configure</strong> — re-open the wizard to change personality, API key, permissions.</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+
+  <div style="margin-top:48px;padding:24px;background:var(--p2);border:1px solid var(--div);border-radius:var(--r12);max-width:780px;">
+    <h4 style="font-size:14px;font-weight:600;color:var(--ink);margin-bottom:8px;">Stuck on a step?</h4>
+    <p style="font-size:13.5px;color:var(--mid);line-height:1.6;">File an issue at <a href="https://github.com/blazelucastaco-ai/nexus/issues">github.com/blazelucastaco-ai/nexus/issues</a> with the step number and the error. Include the tail of your log (<code>~/.nexus/logs/nexus.log</code> or the dashboard's Logs tab).</p>
   </div>
 </section>
 
