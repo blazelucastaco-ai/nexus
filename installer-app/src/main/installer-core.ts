@@ -1489,6 +1489,8 @@ export async function hubLogout(): Promise<{ ok: boolean }> {
   await keychainDelete(`instance-id:${email}`);
   await keychainDelete(`instance-pubkey:${email}`);
   await keychainDelete(`instance-privkey:${email}`);
+  await keychainDelete(`instance-xpubkey:${email}`);
+  await keychainDelete(`instance-xprivkey:${email}`);
   await keychainDelete('active-email');
   clearHubSessionMarker();
   return { ok: true };
@@ -1532,11 +1534,9 @@ export async function hubRegisterInstance(instanceName: string): Promise<{ ok: b
   let pubKeyHex = await keychainGet(`instance-pubkey:${email}`);
   let privKeyHex = await keychainGet(`instance-privkey:${email}`);
   if (!pubKeyHex || !privKeyHex) {
-    // Generate Ed25519 keypair using Node's built-in crypto. No native deps.
+    // Ed25519 keypair for post signatures.
     const { generateKeyPairSync } = await import('node:crypto');
     const { publicKey, privateKey } = generateKeyPairSync('ed25519');
-    // Raw public key is last 32 bytes of the DER SPKI; easier to grab via JWK
-    // and re-encode to raw hex.
     const pubJwk = publicKey.export({ format: 'jwk' }) as { x?: string };
     const privJwk = privateKey.export({ format: 'jwk' }) as { d?: string };
     if (!pubJwk.x || !privJwk.d) return { ok: false, error: 'key_generation_failed' };
@@ -1546,12 +1546,31 @@ export async function hubRegisterInstance(instanceName: string): Promise<{ ok: b
     await keychainSet(`instance-privkey:${email}`, privKeyHex);
   }
 
+  // X25519 keypair for gossip + soul ECDH. Generated separately so key
+  // compromise in one domain doesn't leak the other (belt + suspenders —
+  // both keys live in the same Keychain, but domain-separating them means
+  // future features like key revocation can be per-purpose).
+  let xPubHex = await keychainGet(`instance-xpubkey:${email}`);
+  let xPrivHex = await keychainGet(`instance-xprivkey:${email}`);
+  if (!xPubHex || !xPrivHex) {
+    const { generateKeyPairSync } = await import('node:crypto');
+    const { publicKey: xPub, privateKey: xPriv } = generateKeyPairSync('x25519');
+    const xPubJwk = xPub.export({ format: 'jwk' }) as { x?: string };
+    const xPrivJwk = xPriv.export({ format: 'jwk' }) as { d?: string };
+    if (!xPubJwk.x || !xPrivJwk.d) return { ok: false, error: 'x25519_key_generation_failed' };
+    xPubHex = Buffer.from(xPubJwk.x, 'base64url').toString('hex');
+    xPrivHex = Buffer.from(xPrivJwk.d, 'base64url').toString('hex');
+    await keychainSet(`instance-xpubkey:${email}`, xPubHex);
+    await keychainSet(`instance-xprivkey:${email}`, xPrivHex);
+  }
+
   const r = await hubFetch<{ id: string; created?: boolean; updated?: boolean }>('/instances', {
     method: 'POST',
     accessToken: access,
     body: {
       name: instanceName,
       publicKey: pubKeyHex,
+      x25519PublicKey: xPubHex,
       platform: `${process.platform}-${process.arch}`,
       appVersion: VERSION,
     },

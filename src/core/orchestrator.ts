@@ -40,6 +40,8 @@ import { appendTurn, loadSession } from './session-store.js';
 import { DreamingEngine } from '../brain/dreaming.js';
 import { Heartbeat } from '../brain/heartbeat.js';
 import { AutoPoster } from '../hub/auto-poster.js';
+import { InboxPoller } from '../hub/inbox-poller.js';
+import { GossipGenerator, SoulSyncGenerator } from '../hub/gossip-generator.js';
 import { getDatabase } from '../memory/database.js';
 import { ProactiveEngine } from '../brain/proactive.js';
 import { BriefingEngine } from '../brain/briefing.js';
@@ -217,6 +219,9 @@ export class Orchestrator {
   private dreamInterval: ReturnType<typeof setInterval> | null = null;
   private readonly heartbeat = new Heartbeat();
   private autoPoster: AutoPoster | null = null;
+  private inboxPoller: InboxPoller | null = null;
+  private gossipGen: GossipGenerator | null = null;
+  private soulGen: SoulSyncGenerator | null = null;
   private readonly INACTIVITY_MS = 30 * 60 * 1000; // 30 minutes
   private readonly SUMMARY_EVERY_N_TURNS = 5;
   // Dream cycle runs at night when the user is asleep. Checked every 15 min;
@@ -533,21 +538,37 @@ export class Orchestrator {
       // Only start the auto-poster when we're unlocked AND signed in.
       // Re-checks the gate at every tick so a sign-out pauses it automatically.
       if (!locked) {
+        const activityContext = async (): Promise<string> => {
+          try {
+            const recent = await this.memory.recall('recent activity', { limit: 5 });
+            return recent.map((m: { content: string }) => m.content.slice(0, 120)).join(' · ') || 'quiet lately';
+          } catch {
+            return 'quiet lately';
+          }
+        };
+        const preset = (): string => this.config.personality.preset ?? 'friendly';
+
         this.autoPoster = new AutoPoster(this.ai, {
-          personalityPreset: () => this.config.personality.preset ?? 'friendly',
-          getActivityContext: async () => {
-            // Pull the 5 most recent high-importance episodic memories as
-            // the "what have I been up to" context. Keeps the prompt tight
-            // and avoids the auto-poster running its own full recall pass.
-            try {
-              const recent = await this.memory.recall('recent activity', { limit: 5 });
-              return recent.map((m: { content: string }) => m.content.slice(0, 120)).join(' · ') || 'quiet lately';
-            } catch {
-              return 'quiet lately';
-            }
-          },
+          personalityPreset: preset,
+          getActivityContext: activityContext,
         });
         this.autoPoster.start();
+
+        // Inbox poller — decrypts incoming gossip + soul into memory.
+        this.inboxPoller = new InboxPoller(this.memory);
+        this.inboxPoller.start();
+
+        // Agent-initiated senders.
+        this.gossipGen = new GossipGenerator(this.ai, {
+          personalityPreset: preset,
+          getUserActivity: activityContext,
+        });
+        this.gossipGen.start();
+
+        this.soulGen = new SoulSyncGenerator(this.ai, this.memory, {
+          personalityPreset: preset,
+        });
+        this.soulGen.start();
       }
     }
 
@@ -609,6 +630,9 @@ export class Orchestrator {
 
     this.heartbeat.stop();
     this.autoPoster?.stop();
+    this.inboxPoller?.stop();
+    this.gossipGen?.stop();
+    this.soulGen?.stop();
     if (this.dreamInterval) {
       clearInterval(this.dreamInterval);
       this.dreamInterval = null;

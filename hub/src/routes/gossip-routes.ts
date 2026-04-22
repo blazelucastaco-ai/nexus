@@ -22,7 +22,9 @@ const SendBody = z.object({
   fromInstanceId: z.string().length(32),
   toInstanceId: z.string().length(32),
   ciphertext: z.string().min(1).max(8192),
-  nonce: z.string().length(48), // XChaCha20-Poly1305 nonce = 24 bytes = 48 hex
+  // ChaCha20-Poly1305 = 12-byte (24 hex) nonce. Allow 48-hex for future
+  // XChaCha20 upgrade.
+  nonce: z.string().regex(/^[0-9a-f]{24}([0-9a-f]{24})?$/, 'nonce must be 12 or 24 bytes hex'),
 });
 
 export async function gossipRoutes(app: FastifyInstance): Promise<void> {

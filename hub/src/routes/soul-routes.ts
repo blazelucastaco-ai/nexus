@@ -17,7 +17,7 @@ const SendBody = z.object({
   fromInstanceId: z.string().length(32),
   toInstanceId: z.string().length(32),
   ciphertext: z.string().min(1).max(65536), // larger limit for memory payloads
-  nonce: z.string().length(48),
+  nonce: z.string().regex(/^[0-9a-f]{24}([0-9a-f]{24})?$/, 'nonce must be 12 or 24 bytes hex'),
 });
 
 export async function soulRoutes(app: FastifyInstance): Promise<void> {

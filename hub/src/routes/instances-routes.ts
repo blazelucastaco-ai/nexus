@@ -15,6 +15,7 @@ const PUBKEY_RE = /^[0-9a-f]{64}$/;
 const RegisterBody = z.object({
   name: z.string().min(1).max(64),
   publicKey: z.string().regex(PUBKEY_RE, 'public key must be 32-byte hex'),
+  x25519PublicKey: z.string().regex(PUBKEY_RE, 'x25519 public key must be 32-byte hex').optional(),
   platform: z.string().max(64).optional(),
   appVersion: z.string().max(32).optional(),
 });
@@ -36,24 +37,63 @@ export async function instancesRoutes(app: FastifyInstance): Promise<void> {
   app.get('/instances', async (req) => {
     const db = getDb();
     const rows = db.prepare(`
-      SELECT id, name, public_key, platform, app_version, created_at, last_seen_at
+      SELECT id, name, public_key, x25519_public_key, platform, app_version, created_at, last_seen_at
       FROM instances
       WHERE user_id = ?
       ORDER BY last_seen_at DESC NULLS LAST, created_at DESC
     `).all(req.userId!) as Array<{
-      id: string; name: string; public_key: string; platform: string | null;
-      app_version: string | null; created_at: string; last_seen_at: string | null;
+      id: string; name: string; public_key: string; x25519_public_key: string | null;
+      platform: string | null; app_version: string | null;
+      created_at: string; last_seen_at: string | null;
     }>;
     return {
       instances: rows.map((r) => ({
         id: r.id,
         name: r.name,
         publicKey: r.public_key,
+        x25519PublicKey: r.x25519_public_key,
         platform: r.platform,
         appVersion: r.app_version,
         createdAt: r.created_at,
         lastSeenAt: r.last_seen_at,
       })),
+    };
+  });
+
+  // ── GET /instances/:id/keys — fetch a specific instance's public keys.
+  //    Used by friends' daemons to look up X25519 public keys for gossip
+  //    ECDH. Only returns keys for instances belonging to an accepted mutual
+  //    friend, or to the caller themselves (soul sync between own instances).
+  app.get<{ Params: { id: string } }>('/instances/:id/keys', async (req, reply) => {
+    const db = getDb();
+    const inst = db.prepare(`
+      SELECT id, user_id, public_key, x25519_public_key FROM instances WHERE id = ?
+    `).get(req.params.id) as
+      | { id: string; user_id: string; public_key: string; x25519_public_key: string | null }
+      | undefined;
+    if (!inst) return reply.code(404).send({ error: 'not_found' });
+
+    // Self-owned: always allowed (soul sync target lookup).
+    if (inst.user_id === req.userId) {
+      return {
+        id: inst.id,
+        publicKey: inst.public_key,
+        x25519PublicKey: inst.x25519_public_key,
+      };
+    }
+
+    // Otherwise require accepted mutual friendship.
+    const u1 = req.userId! < inst.user_id ? req.userId! : inst.user_id;
+    const u2 = req.userId! < inst.user_id ? inst.user_id : req.userId!;
+    const friendship = db.prepare(
+      "SELECT state FROM friendships WHERE user_a_id = ? AND user_b_id = ? AND state = 'accepted'",
+    ).get(u1, u2) as { state: string } | undefined;
+    if (!friendship) return reply.code(404).send({ error: 'not_found' });
+
+    return {
+      id: inst.id,
+      publicKey: inst.public_key,
+      x25519PublicKey: inst.x25519_public_key,
     };
   });
 
@@ -73,19 +113,21 @@ export async function instancesRoutes(app: FastifyInstance): Promise<void> {
     if (existing) {
       db.prepare(`
         UPDATE instances
-        SET name = ?, platform = ?, app_version = ?, last_seen_at = datetime('now')
+        SET name = ?, x25519_public_key = COALESCE(?, x25519_public_key),
+            platform = ?, app_version = ?, last_seen_at = datetime('now')
         WHERE id = ?
-      `).run(parsed.data.name, parsed.data.platform ?? null,
-             parsed.data.appVersion ?? null, existing.id);
+      `).run(parsed.data.name, parsed.data.x25519PublicKey ?? null,
+             parsed.data.platform ?? null, parsed.data.appVersion ?? null, existing.id);
       writeAudit(db, 'instance_updated', { userId: req.userId!, detail: existing.id, ipHash: hashIp(req.ip) });
       return { id: existing.id, updated: true };
     }
 
     const id = randomBytes(16).toString('hex');
     db.prepare(`
-      INSERT INTO instances (id, user_id, name, public_key, platform, app_version, last_seen_at)
-      VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+      INSERT INTO instances (id, user_id, name, public_key, x25519_public_key, platform, app_version, last_seen_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
     `).run(id, req.userId!, parsed.data.name, parsed.data.publicKey,
+           parsed.data.x25519PublicKey ?? null,
            parsed.data.platform ?? null, parsed.data.appVersion ?? null);
 
     writeAudit(db, 'instance_registered', { userId: req.userId!, detail: id, ipHash: hashIp(req.ip) });

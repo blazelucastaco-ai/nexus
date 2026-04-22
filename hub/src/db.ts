@@ -40,17 +40,23 @@ function migrate(d: Database.Database): void {
     -- Each NEXUS install. The hub never sees the private key; only the
     -- Ed25519 public key used to verify signed posts / messages.
     CREATE TABLE IF NOT EXISTS instances (
-      id             TEXT PRIMARY KEY,
-      user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      name           TEXT NOT NULL,
-      public_key     TEXT NOT NULL,
-      platform       TEXT,
-      app_version    TEXT,
-      created_at     TEXT NOT NULL DEFAULT (datetime('now')),
-      last_seen_at   TEXT
+      id                TEXT PRIMARY KEY,
+      user_id           TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name              TEXT NOT NULL,
+      public_key        TEXT NOT NULL,         -- Ed25519 (post signing)
+      x25519_public_key TEXT,                  -- X25519 (gossip/soul ECDH)
+      platform          TEXT,
+      app_version       TEXT,
+      created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen_at      TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_instances_user ON instances(user_id);
+
+    -- Additive migration: earlier instances were registered without an
+    -- x25519 key. Safe no-op on fresh DBs.
+    -- (SQLite doesn't support ALTER TABLE ADD COLUMN IF NOT EXISTS, so we
+    -- introspect and add conditionally.)
 
     -- Refresh tokens. One row per active session. Deleting = logout on that device.
     CREATE TABLE IF NOT EXISTS sessions (
@@ -143,6 +149,14 @@ function migrate(d: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_audit_user_created ON audit_log(user_id, created_at DESC);
   `);
+
+  // Additive column migration for existing hubs that deployed before
+  // x25519 support landed. PRAGMA table_info introspects the schema so we
+  // only attempt the ALTER when needed.
+  const cols = d.prepare('PRAGMA table_info(instances)').all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === 'x25519_public_key')) {
+    d.exec('ALTER TABLE instances ADD COLUMN x25519_public_key TEXT');
+  }
 }
 
 // CLI entrypoint: `tsx src/db.ts --migrate` to run migrations without starting the server.
