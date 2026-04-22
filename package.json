@@ -35,7 +35,7 @@
     "chalk": "^5.4.1",
     "cheerio": "^1.2.0",
     "commander": "^13.1.0",
-    "dotenv": "^16.4.7",
+    "dotenv": "^17.4.2",
     "grammy": "^1.35.0",
     "inquirer": "^12.4.0",
     "nanoid": "^5.1.2",
