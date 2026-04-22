@@ -291,6 +291,7 @@ function writeConfig(input: ConfigInput): Promise<void> {
 
   const config = {
     version: VERSION,
+    installMethod: 'app' as const,
     personality: {
       name: 'NEXUS',
       preset: input.personality.preset,
@@ -1414,15 +1415,14 @@ export async function hubSignup(input: HubSignupInput): Promise<{ ok: boolean; s
   const refresh = extractRefreshCookie(r.cookies);
   if (!refresh) return { ok: false, error: 'no_refresh_cookie' };
   await persistSession(input.email, r.data.accessToken, refresh);
-  return {
-    ok: true,
-    session: {
-      userId: r.data.user.id,
-      email: r.data.user.email,
-      displayName: r.data.user.displayName,
-      hubUrl: HUB_URL,
-    },
+  const session = {
+    userId: r.data.user.id,
+    email: r.data.user.email,
+    displayName: r.data.user.displayName,
+    hubUrl: HUB_URL,
   };
+  writeHubSessionMarker(session);
+  return { ok: true, session };
 }
 
 export async function hubLogin(input: HubLoginInput): Promise<{ ok: boolean; session?: HubSessionView; error?: string }> {
@@ -1434,15 +1434,14 @@ export async function hubLogin(input: HubLoginInput): Promise<{ ok: boolean; ses
   const refresh = extractRefreshCookie(r.cookies);
   if (!refresh) return { ok: false, error: 'no_refresh_cookie' };
   await persistSession(input.email, r.data.accessToken, refresh);
-  return {
-    ok: true,
-    session: {
-      userId: r.data.user.id,
-      email: r.data.user.email,
-      displayName: r.data.user.displayName,
-      hubUrl: HUB_URL,
-    },
+  const session = {
+    userId: r.data.user.id,
+    email: r.data.user.email,
+    displayName: r.data.user.displayName,
+    hubUrl: HUB_URL,
   };
+  writeHubSessionMarker(session);
+  return { ok: true, session };
 }
 
 async function persistSession(email: string, accessToken: string, refreshToken: string): Promise<void> {
@@ -1451,9 +1450,36 @@ async function persistSession(email: string, accessToken: string, refreshToken: 
   await keychainSet(`refresh:${email}`, refreshToken);
 }
 
+/**
+ * Marker file the running NEXUS daemon reads to know "is this install signed
+ * in to the hub?". Tokens stay in Keychain — this only carries public IDs so
+ * the daemon can decide whether to unlock without needing keychain access.
+ */
+const HUB_SESSION_FILE = join(NEXUS_DIR, 'hub-session.json');
+
+function writeHubSessionMarker(session: { userId: string; email: string; displayName: string; hubUrl: string; instanceId?: string }): void {
+  mkdirSync(NEXUS_DIR, { recursive: true });
+  writeFileSync(
+    HUB_SESSION_FILE,
+    JSON.stringify({
+      userId: session.userId,
+      email: session.email,
+      displayName: session.displayName,
+      hubUrl: session.hubUrl,
+      instanceId: session.instanceId ?? null,
+      signedInAt: new Date().toISOString(),
+    }, null, 2) + '\n',
+    'utf-8',
+  );
+}
+
+function clearHubSessionMarker(): void {
+  try { rmSync(HUB_SESSION_FILE, { force: true }); } catch { /* ignore */ }
+}
+
 export async function hubLogout(): Promise<{ ok: boolean }> {
   const email = await keychainGet('active-email');
-  if (!email) return { ok: true };
+  if (!email) { clearHubSessionMarker(); return { ok: true }; }
   const refresh = await keychainGet(`refresh:${email}`);
   if (refresh) {
     await hubFetch('/auth/logout', { method: 'POST', refreshCookie: refresh });
@@ -1464,6 +1490,7 @@ export async function hubLogout(): Promise<{ ok: boolean }> {
   await keychainDelete(`instance-pubkey:${email}`);
   await keychainDelete(`instance-privkey:${email}`);
   await keychainDelete('active-email');
+  clearHubSessionMarker();
   return { ok: true };
 }
 
@@ -1531,6 +1558,17 @@ export async function hubRegisterInstance(instanceName: string): Promise<{ ok: b
   });
   if (!r.ok || !r.data) return { ok: false, error: r.error };
   await keychainSet(`instance-id:${email}`, r.data.id);
+  // Update the marker file so the daemon sees the instanceId too.
+  if (existsSync(HUB_SESSION_FILE)) {
+    try {
+      const prev = JSON.parse(readFileSync(HUB_SESSION_FILE, 'utf-8'));
+      writeFileSync(
+        HUB_SESSION_FILE,
+        JSON.stringify({ ...prev, instanceId: r.data.id }, null, 2) + '\n',
+        'utf-8',
+      );
+    } catch { /* ignore */ }
+  }
   return { ok: true, instanceId: r.data.id };
 }
 

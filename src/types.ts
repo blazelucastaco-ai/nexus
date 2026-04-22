@@ -205,6 +205,11 @@ export interface NexusContext {
 
 // ─── Configuration ─────────────────────────────────────────────────
 export const NexusConfigSchema = z.object({
+  // Which installer wrote this config. App-installed NEXUS is gated on a
+  // signed-in hub account; terminal installs stay offline and unguarded.
+  // Missing / legacy configs default to 'terminal' so older installs aren't
+  // suddenly locked out.
+  installMethod: z.enum(['app', 'terminal']).default('terminal'),
   personality: z
     .object({
       name: z.string().default('NEXUS'),

@@ -516,6 +516,19 @@ export class Orchestrator {
     // Schedule dream cycle (night window, 2am–5am local)
     this.scheduleDreamCycle();
 
+    // App-installed NEXUS refuses to serve messages until the user has
+    // signed in on the Mac. Log the gate status once at boot so it's
+    // obvious from the logs whether we're locked or not.
+    if (this.config.installMethod === 'app') {
+      const locked = this.isLocked();
+      log.info(
+        { installMethod: 'app', locked, hasSession: !locked },
+        locked
+          ? 'Account gate: LOCKED — waiting for hub sign-in on the Mac'
+          : 'Account gate: unlocked (hub session present)',
+      );
+    }
+
     // Start the main-agent heartbeat (paused during the dream window).
     this.heartbeat.setStateAccessors({
       mood: () => this.personality.getPersonalityState().mood,
@@ -657,6 +670,17 @@ export class Orchestrator {
    * Each chatId gets its own promise chain — messages queue up and run one at a time.
    */
   async handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void, onStatus?: (status: string) => void): Promise<string> {
+    // App-installed NEXUS requires an active hub account. Until the user
+    // signs in on the Mac, every incoming message gets a short, helpful
+    // deflection instead of reaching the LLM / tools / memory system.
+    if (this.isLocked()) {
+      return (
+        'NEXUS is locked until you sign in on the Mac.\n\n' +
+        'Open the NEXUS app → Account → sign in or create one. ' +
+        "I'll be back online as soon as the Mac is linked to your Nexus Hub account."
+      );
+    }
+
     let resolve!: () => void;
     const slot = new Promise<void>((r) => { resolve = r; });
 
@@ -2031,6 +2055,30 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
     } catch (err) {
       log.debug({ err }, 'Self-improvement reflection skipped');
     }
+  }
+
+  /**
+   * App-installed NEXUS is locked until the user signs in on the Mac. The
+   * session marker is a small JSON file written by the installer-app at
+   * ~/.nexus/hub-session.json on successful signup/login. Terminal installs
+   * never write this marker and are never locked.
+   */
+  private isLocked(): boolean {
+    if (this.config.installMethod !== 'app') return false;
+    // Lazy require so this module isn't loaded during tests that mock fs.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { existsSync, readFileSync } = require('node:fs') as typeof import('node:fs');
+    const { join } = require('node:path') as typeof import('node:path');
+    const { homedir } = require('node:os') as typeof import('node:os');
+    const path = join(homedir(), '.nexus', 'hub-session.json');
+    if (!existsSync(path)) return true;
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf-8')) as { userId?: string };
+      if (!parsed.userId) return true;
+    } catch {
+      return true;
+    }
+    return false;
   }
 
   private scheduleDreamCycle(): void {
