@@ -1,42 +1,39 @@
 # Deploying the Nexus Hub to Fly.io
 
-Four commands and it's live. Built-in TLS, auto-restart on crash, ~$0/month at low volume.
+**Two commands** (flyctl is already installed on this Mac).
 
-## One-time setup
-
-Install flyctl if you don't already have it:
+## Sign in to Fly once
 
 ```bash
-brew install flyctl
+fly auth signup   # new Fly account — opens browser, verify email
+# or
+fly auth login    # existing account
 ```
 
-Sign in (or sign up — no credit card required for the free tier):
-
-```bash
-fly auth signup   # or: fly auth login
-```
+No credit card required for the free tier.
 
 ## Deploy
 
-From inside `hub/`:
-
 ```bash
-# 1. Create the app. Pick a unique name when asked (e.g. nexus-hub-yourname).
-#    When it asks to create a Postgres/Upstash/etc., say NO to all.
-fly launch --no-deploy
-
-# 2. Create the persistent volume for SQLite. Pick the same region your app
-#    is in. `iad` (Virginia) is a fine default for US users.
-fly volumes create hub_data --region iad --size 1
-
-# 3. Generate + set the JWT signing secret. Keep this out of git forever.
-fly secrets set JWT_SECRET="$(node -e 'console.log(require("node:crypto").randomBytes(48).toString("base64"))')"
-
-# 4. Deploy.
-fly deploy
+./scripts/deploy.sh
 ```
 
-That's it. Fly prints the URL — something like `https://nexus-hub-yourname.fly.dev`.
+That's it. The script:
+
+1. Creates the Fly app (auto-named `nexus-hub-<your-fly-username>`)
+2. Writes the app name + region into `fly.toml`
+3. Creates the `hub_data` persistent volume for SQLite
+4. Generates a strong random `JWT_SECRET` and sets it
+5. Deploys the container
+6. Prints the URL + writes it to `HUB_URL.txt`
+
+Idempotent — re-run as often as you like. Existing app / volume / secret are detected and skipped.
+
+Override defaults if you want:
+
+```bash
+./scripts/deploy.sh --app my-custom-name --region ams --size 3
+```
 
 Smoke test:
 
