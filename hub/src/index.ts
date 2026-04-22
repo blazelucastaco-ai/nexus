@@ -10,6 +10,10 @@ import sensible from '@fastify/sensible';
 import { getDb } from './db.js';
 import { authRoutes } from './routes/auth-routes.js';
 import { instancesRoutes } from './routes/instances-routes.js';
+import { friendsRoutes } from './routes/friends-routes.js';
+import { postsRoutes } from './routes/posts-routes.js';
+import { gossipRoutes } from './routes/gossip-routes.js';
+import { soulRoutes } from './routes/soul-routes.js';
 
 async function main(): Promise<void> {
   // Fail fast if required env is missing.
@@ -70,6 +74,10 @@ async function main(): Promise<void> {
 
   await app.register(authRoutes);
   await app.register(instancesRoutes);
+  await app.register(friendsRoutes);
+  await app.register(postsRoutes);
+  await app.register(gossipRoutes);
+  await app.register(soulRoutes);
 
   const port = Number.parseInt(process.env.PORT ?? '8787', 10);
   const host = process.env.HOST ?? '127.0.0.1';

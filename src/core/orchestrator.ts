@@ -39,6 +39,7 @@ import { InnerMonologue } from '../brain/inner-monologue.js';
 import { appendTurn, loadSession } from './session-store.js';
 import { DreamingEngine } from '../brain/dreaming.js';
 import { Heartbeat } from '../brain/heartbeat.js';
+import { AutoPoster } from '../hub/auto-poster.js';
 import { getDatabase } from '../memory/database.js';
 import { ProactiveEngine } from '../brain/proactive.js';
 import { BriefingEngine } from '../brain/briefing.js';
@@ -215,6 +216,7 @@ export class Orchestrator {
   private inactivityTimer: ReturnType<typeof setTimeout> | null = null;
   private dreamInterval: ReturnType<typeof setInterval> | null = null;
   private readonly heartbeat = new Heartbeat();
+  private autoPoster: AutoPoster | null = null;
   private readonly INACTIVITY_MS = 30 * 60 * 1000; // 30 minutes
   private readonly SUMMARY_EVERY_N_TURNS = 5;
   // Dream cycle runs at night when the user is asleep. Checked every 15 min;
@@ -527,6 +529,26 @@ export class Orchestrator {
           ? 'Account gate: LOCKED — waiting for hub sign-in on the Mac'
           : 'Account gate: unlocked (hub session present)',
       );
+
+      // Only start the auto-poster when we're unlocked AND signed in.
+      // Re-checks the gate at every tick so a sign-out pauses it automatically.
+      if (!locked) {
+        this.autoPoster = new AutoPoster(this.ai, {
+          personalityPreset: () => this.config.personality.preset ?? 'friendly',
+          getActivityContext: async () => {
+            // Pull the 5 most recent high-importance episodic memories as
+            // the "what have I been up to" context. Keeps the prompt tight
+            // and avoids the auto-poster running its own full recall pass.
+            try {
+              const recent = await this.memory.recall('recent activity', { limit: 5 });
+              return recent.map((m: { content: string }) => m.content.slice(0, 120)).join(' · ') || 'quiet lately';
+            } catch {
+              return 'quiet lately';
+            }
+          },
+        });
+        this.autoPoster.start();
+      }
     }
 
     // Start the main-agent heartbeat (paused during the dream window).
@@ -586,6 +608,7 @@ export class Orchestrator {
     }
 
     this.heartbeat.stop();
+    this.autoPoster?.stop();
     if (this.dreamInterval) {
       clearInterval(this.dreamInterval);
       this.dreamInterval = null;
