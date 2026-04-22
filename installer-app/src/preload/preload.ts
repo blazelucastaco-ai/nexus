@@ -87,6 +87,19 @@ const api = {
     memoryDelete: (id: string): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('main:memory-delete', id),
     actionScreenshot: (): Promise<QuickActionResult> => ipcRenderer.invoke('main:action-screenshot'),
+
+    // ── Hub ──────────────────────────────────────────────────
+    hubSignup: (payload: { email: string; password: string; displayName: string }): Promise<{ ok: boolean; session?: { userId: string; email: string; displayName: string; hubUrl: string; instanceId?: string }; error?: string }> =>
+      ipcRenderer.invoke('hub:signup', payload),
+    hubLogin: (payload: { email: string; password: string }): Promise<{ ok: boolean; session?: { userId: string; email: string; displayName: string; hubUrl: string; instanceId?: string }; error?: string }> =>
+      ipcRenderer.invoke('hub:login', payload),
+    hubLogout: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('hub:logout'),
+    hubSession: (): Promise<{ userId: string; email: string; displayName: string; hubUrl: string; instanceId?: string } | null> =>
+      ipcRenderer.invoke('hub:session'),
+    hubRegisterInstance: (name: string): Promise<{ ok: boolean; instanceId?: string; error?: string }> =>
+      ipcRenderer.invoke('hub:register-instance', name),
+    hubListInstances: (): Promise<{ ok: boolean; instances?: Array<{ id: string; name: string; platform?: string; appVersion?: string; createdAt: string; lastSeenAt?: string | null; isMe?: boolean }>; error?: string }> =>
+      ipcRenderer.invoke('hub:list-instances'),
     actionDream: (): Promise<QuickActionResult> => ipcRenderer.invoke('main:action-dream'),
     actionHealth: (): Promise<QuickActionResult> => ipcRenderer.invoke('main:action-health'),
     memoryDetectSources: (): Promise<Array<{ id: string; name: string; status: string; summary: string; estimatedItems: number }>> =>

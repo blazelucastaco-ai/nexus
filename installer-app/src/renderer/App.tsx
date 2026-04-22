@@ -13,6 +13,7 @@ import {
   PermissionsStep,
   InstallStep,
   ChromeStep,
+  AccountStep,
   MemoryImportStep,
   DoneStep,
 } from './steps';
@@ -27,6 +28,7 @@ const FULL_STEPS: Array<{ key: StepKey; label: string }> = [
   { key: 'permissions', label: 'Permissions' },
   { key: 'install', label: 'Install' },
   { key: 'chrome', label: 'Chrome' },
+  { key: 'account', label: 'Account' },
   { key: 'memory-import', label: 'Memory' },
   { key: 'done', label: 'Ready' },
 ];
@@ -179,6 +181,7 @@ export function App(): JSX.Element {
           <InstallStep config={config} mode={mode} onNext={next} />
         )}
         {currentKey === 'chrome' && <ChromeStep onNext={next} />}
+        {currentKey === 'account' && <AccountStep onNext={next} onBack={back} />}
         {currentKey === 'memory-import' && <MemoryImportStep onNext={next} onBack={back} />}
         {currentKey === 'done' && <DoneStep mode={mode} />}
       </main>

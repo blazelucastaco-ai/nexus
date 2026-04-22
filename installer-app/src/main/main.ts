@@ -31,6 +31,12 @@ import {
   runHealthCheck,
   detectMemorySources,
   runMemoryImport,
+  hubSignup,
+  hubLogin,
+  hubLogout,
+  hubActiveSession,
+  hubRegisterInstance,
+  hubListInstances,
   getAboutInfo,
 } from './installer-core';
 import type { ConfigInput, InstallProgress, UpdateProgress } from '../shared/types';
@@ -482,6 +488,31 @@ app.whenReady().then(() => {
     const ids = sourceIds.filter((x): x is string => typeof x === 'string');
     return runMemoryImport(ids);
   });
+
+  // ── Nexus Hub ────────────────────────────────────────────────────
+  ipcMain.handle('hub:signup', async (_e, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') return { ok: false, error: 'invalid_input' };
+    const p = payload as Record<string, unknown>;
+    if (typeof p.email !== 'string' || typeof p.password !== 'string' || typeof p.displayName !== 'string') {
+      return { ok: false, error: 'invalid_input' };
+    }
+    return hubSignup({ email: p.email, password: p.password, displayName: p.displayName });
+  });
+  ipcMain.handle('hub:login', async (_e, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') return { ok: false, error: 'invalid_input' };
+    const p = payload as Record<string, unknown>;
+    if (typeof p.email !== 'string' || typeof p.password !== 'string') {
+      return { ok: false, error: 'invalid_input' };
+    }
+    return hubLogin({ email: p.email, password: p.password });
+  });
+  ipcMain.handle('hub:logout', async () => hubLogout());
+  ipcMain.handle('hub:session', async () => hubActiveSession());
+  ipcMain.handle('hub:register-instance', async (_e, name: unknown) => {
+    if (typeof name !== 'string' || !name) return { ok: false, error: 'invalid_name' };
+    return hubRegisterInstance(name);
+  });
+  ipcMain.handle('hub:list-instances', async () => hubListInstances());
 
   if (isMenubarMode) {
     startMenubarMode();

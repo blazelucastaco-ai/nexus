@@ -892,7 +892,214 @@ export function ChromeStep(props: { onNext: () => void }): JSX.Element {
 }
 
 /* ──────────────────────────────────────────────────────────────────
-   10. MEMORY IMPORT — merge context from other agents
+   10. ACCOUNT — link this install to the Nexus Hub
+────────────────────────────────────────────────────────────────── */
+
+type AccountMode = 'choose' | 'signup' | 'login' | 'linked';
+
+export function AccountStep(props: { onNext: () => void; onBack: () => void }): JSX.Element {
+  const [mode, setMode] = useState<AccountMode>('choose');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [instanceName, setInstanceName] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [session, setSession] = useState<{ userId: string; email: string; displayName: string; hubUrl: string; instanceId?: string } | null>(null);
+
+  // On mount, pre-populate if the user is already signed in on this Mac.
+  useEffect(() => {
+    void (async () => {
+      const existing = await window.nexus.main.hubSession();
+      if (existing) {
+        setSession(existing);
+        setMode('linked');
+      }
+    })();
+    setInstanceName('This Mac');
+  }, []);
+
+  const readableError = (code?: string): string => {
+    switch (code) {
+      case 'invalid_credentials': return 'Email or password is wrong.';
+      case 'signup_unavailable': return 'Could not create the account. Try signing in instead.';
+      case 'account_locked': return 'Too many failed attempts. Wait 15 minutes and try again.';
+      case 'invalid_input': return 'Email needs to be valid and password at least 8 characters.';
+      case 'no_refresh_cookie': return 'Hub responded oddly — try again.';
+      default:
+        return code?.startsWith('network_error')
+          ? 'Can\'t reach the Nexus Hub. Check your connection or that the hub is running.'
+          : 'Something went wrong. Try again.';
+    }
+  };
+
+  const doSignup = async (): Promise<void> => {
+    setError(null);
+    setSubmitting(true);
+    try {
+      const r = await window.nexus.main.hubSignup({ email, password, displayName });
+      if (!r.ok || !r.session) { setError(readableError(r.error)); return; }
+      const reg = await window.nexus.main.hubRegisterInstance(instanceName || 'This Mac');
+      setSession({ ...r.session, instanceId: reg.instanceId });
+      setMode('linked');
+    } finally { setSubmitting(false); }
+  };
+
+  const doLogin = async (): Promise<void> => {
+    setError(null);
+    setSubmitting(true);
+    try {
+      const r = await window.nexus.main.hubLogin({ email, password });
+      if (!r.ok || !r.session) { setError(readableError(r.error)); return; }
+      const reg = await window.nexus.main.hubRegisterInstance(instanceName || 'This Mac');
+      setSession({ ...r.session, instanceId: reg.instanceId });
+      setMode('linked');
+    } finally { setSubmitting(false); }
+  };
+
+  const doLogout = async (): Promise<void> => {
+    await window.nexus.main.hubLogout();
+    setSession(null);
+    setMode('choose');
+    setEmail(''); setPassword(''); setDisplayName('');
+  };
+
+  return (
+    <div className="step">
+      <span className="eyebrow">Step 10 / 11</span>
+      <h1 className="step-title">
+        Your <em>Nexus account</em>.
+      </h1>
+      <p className="step-lead">
+        Link this install to the Nexus Hub. Once linked, it shows up in your hub
+        alongside any other Mac you've installed NEXUS on — so your instances
+        can sync memory, post to a shared feed, and (with your permission) gossip
+        with your friends' agents. App-only feature; terminal installs stay offline.
+      </p>
+
+      {mode === 'choose' && !session && (
+        <div className="btn-row" style={{ marginTop: 28 }}>
+          <button type="button" className="btn-p" onClick={() => setMode('signup')}>
+            Create account →
+          </button>
+          <button type="button" className="btn-g" onClick={() => setMode('login')}>
+            I already have one
+          </button>
+          <button type="button" className="btn-g" style={{ marginLeft: 'auto' }} onClick={props.onNext}>
+            Skip — keep this install offline
+          </button>
+        </div>
+      )}
+
+      {(mode === 'signup' || mode === 'login') && (
+        <div style={{ maxWidth: 420, marginTop: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {mode === 'signup' && (
+            <label className="field">
+              <span className="field-label">Display name</span>
+              <input
+                type="text"
+                className="field-input"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="Lucas"
+                maxLength={64}
+              />
+            </label>
+          )}
+          <label className="field">
+            <span className="field-label">Email</span>
+            <input
+              type="email"
+              className="field-input"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              maxLength={254}
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">Password {mode === 'signup' ? '(min 8 characters)' : ''}</span>
+            <input
+              type="password"
+              className="field-input"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              minLength={8}
+              maxLength={256}
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">Name for this Mac</span>
+            <input
+              type="text"
+              className="field-input"
+              value={instanceName}
+              onChange={(e) => setInstanceName(e.target.value)}
+              placeholder="MacBook Pro"
+              maxLength={64}
+            />
+          </label>
+
+          {error && (
+            <div className="subtle" style={{ color: 'var(--t)', fontSize: 13 }}>
+              {error}
+            </div>
+          )}
+
+          <div className="btn-row">
+            <button type="button" className="btn-g" onClick={() => { setMode('choose'); setError(null); }} disabled={submitting}>
+              ← Back
+            </button>
+            <button
+              type="button"
+              className="btn-p"
+              onClick={() => void (mode === 'signup' ? doSignup() : doLogin())}
+              disabled={
+                submitting ||
+                email.length < 3 ||
+                password.length < 8 ||
+                (mode === 'signup' && displayName.length < 1)
+              }
+            >
+              {submitting ? (mode === 'signup' ? 'Creating…' : 'Signing in…') : mode === 'signup' ? 'Create account' : 'Sign in'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {mode === 'linked' && session && (
+        <>
+          <div className="card" style={{ marginTop: 18, borderColor: '#A8C49F' }}>
+            <h3 style={{ marginTop: 0, marginBottom: 8 }}>
+              Linked as {session.displayName}
+            </h3>
+            <p className="subtle" style={{ margin: '0 0 6px' }}>
+              <code>{session.email}</code>
+            </p>
+            {session.instanceId && (
+              <p className="subtle" style={{ margin: 0, fontSize: 12 }}>
+                Instance ID <code>{session.instanceId}</code> · stored in macOS Keychain
+              </p>
+            )}
+          </div>
+
+          <div className="btn-row" style={{ marginTop: 20 }}>
+            <button type="button" className="btn-g" onClick={props.onBack}>← Back</button>
+            <button type="button" className="btn-g" onClick={() => void doLogout()}>
+              Sign out
+            </button>
+            <button type="button" className="btn-p" onClick={props.onNext} style={{ marginLeft: 'auto' }}>
+              Continue →
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   11. MEMORY IMPORT — merge context from other agents
 ────────────────────────────────────────────────────────────────── */
 interface DetectedSourceView {
   id: string;

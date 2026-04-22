@@ -1307,6 +1307,254 @@ function readAnthropicKeyFromRepoEnv(): string | null {
   } catch { return null; }
 }
 
+// ── Nexus Hub — account + instance registration ─────────────────────
+//
+// Tokens are stored in the macOS Keychain via `security add-generic-password`.
+// Never in config.json, never in a dotfile. The refresh cookie from the hub is
+// forwarded manually on subsequent calls so cookie-less CLIs don't need a full
+// cookie jar.
+
+const HUB_URL = process.env.NEXUS_HUB_URL ?? 'http://127.0.0.1:8787';
+const KEYCHAIN_SERVICE = 'com.nexus.hub';
+
+export interface HubSignupInput {
+  email: string;
+  password: string;
+  displayName: string;
+}
+
+export interface HubLoginInput {
+  email: string;
+  password: string;
+}
+
+export interface HubSessionView {
+  userId: string;
+  email: string;
+  displayName: string;
+  hubUrl: string;
+  instanceId?: string;
+}
+
+async function keychainSet(account: string, value: string): Promise<void> {
+  await execFileAsync('security', [
+    'add-generic-password', '-U',
+    '-s', KEYCHAIN_SERVICE,
+    '-a', account,
+    '-w', value,
+  ]);
+}
+
+async function keychainGet(account: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync('security', [
+      'find-generic-password',
+      '-s', KEYCHAIN_SERVICE,
+      '-a', account,
+      '-w',
+    ]);
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function keychainDelete(account: string): Promise<void> {
+  try {
+    await execFileAsync('security', [
+      'delete-generic-password',
+      '-s', KEYCHAIN_SERVICE,
+      '-a', account,
+    ]);
+  } catch { /* already gone */ }
+}
+
+interface HubResponse<T> { ok: boolean; status: number; data: T | null; error?: string; cookies?: string[] }
+
+async function hubFetch<T>(
+  path: string,
+  opts: { method?: string; body?: unknown; accessToken?: string; refreshCookie?: string } = {},
+): Promise<HubResponse<T>> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (opts.accessToken) headers.authorization = `Bearer ${opts.accessToken}`;
+  if (opts.refreshCookie) headers.cookie = `nexus_refresh=${opts.refreshCookie}`;
+  try {
+    const r = await fetch(`${HUB_URL}${path}`, {
+      method: opts.method ?? (opts.body ? 'POST' : 'GET'),
+      headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    const text = await r.text();
+    const data = text ? JSON.parse(text) : null;
+    const setCookies = r.headers.getSetCookie?.() ?? [];
+    return { ok: r.ok, status: r.status, data: r.ok ? (data as T) : null, error: r.ok ? undefined : (data?.error ?? 'request_failed'), cookies: setCookies };
+  } catch (err) {
+    return { ok: false, status: 0, data: null, error: `network_error: ${(err as Error).message}` };
+  }
+}
+
+function extractRefreshCookie(setCookies: string[] | undefined): string | null {
+  if (!setCookies) return null;
+  for (const c of setCookies) {
+    const m = c.match(/^nexus_refresh=([^;]+)/);
+    if (m) return m[1] ?? null;
+  }
+  return null;
+}
+
+export async function hubSignup(input: HubSignupInput): Promise<{ ok: boolean; session?: HubSessionView; error?: string }> {
+  const r = await hubFetch<{ user: { id: string; email: string; displayName: string }; accessToken: string }>(
+    '/auth/signup',
+    { method: 'POST', body: input },
+  );
+  if (!r.ok || !r.data) return { ok: false, error: r.error };
+  const refresh = extractRefreshCookie(r.cookies);
+  if (!refresh) return { ok: false, error: 'no_refresh_cookie' };
+  await persistSession(input.email, r.data.accessToken, refresh);
+  return {
+    ok: true,
+    session: {
+      userId: r.data.user.id,
+      email: r.data.user.email,
+      displayName: r.data.user.displayName,
+      hubUrl: HUB_URL,
+    },
+  };
+}
+
+export async function hubLogin(input: HubLoginInput): Promise<{ ok: boolean; session?: HubSessionView; error?: string }> {
+  const r = await hubFetch<{ user: { id: string; email: string; displayName: string }; accessToken: string }>(
+    '/auth/login',
+    { method: 'POST', body: input },
+  );
+  if (!r.ok || !r.data) return { ok: false, error: r.error };
+  const refresh = extractRefreshCookie(r.cookies);
+  if (!refresh) return { ok: false, error: 'no_refresh_cookie' };
+  await persistSession(input.email, r.data.accessToken, refresh);
+  return {
+    ok: true,
+    session: {
+      userId: r.data.user.id,
+      email: r.data.user.email,
+      displayName: r.data.user.displayName,
+      hubUrl: HUB_URL,
+    },
+  };
+}
+
+async function persistSession(email: string, accessToken: string, refreshToken: string): Promise<void> {
+  await keychainSet('active-email', email);
+  await keychainSet(`access:${email}`, accessToken);
+  await keychainSet(`refresh:${email}`, refreshToken);
+}
+
+export async function hubLogout(): Promise<{ ok: boolean }> {
+  const email = await keychainGet('active-email');
+  if (!email) return { ok: true };
+  const refresh = await keychainGet(`refresh:${email}`);
+  if (refresh) {
+    await hubFetch('/auth/logout', { method: 'POST', refreshCookie: refresh });
+  }
+  await keychainDelete(`access:${email}`);
+  await keychainDelete(`refresh:${email}`);
+  await keychainDelete(`instance-id:${email}`);
+  await keychainDelete(`instance-pubkey:${email}`);
+  await keychainDelete(`instance-privkey:${email}`);
+  await keychainDelete('active-email');
+  return { ok: true };
+}
+
+export async function hubActiveSession(): Promise<HubSessionView | null> {
+  const email = await keychainGet('active-email');
+  if (!email) return null;
+  const access = await keychainGet(`access:${email}`);
+  const refresh = await keychainGet(`refresh:${email}`);
+  if (!access || !refresh) return null;
+  // Refresh in case the access token has expired; returns a fresh one.
+  const refreshed = await hubFetch<{ accessToken: string }>('/auth/refresh', {
+    method: 'POST', refreshCookie: refresh,
+  });
+  const token = refreshed.ok && refreshed.data ? refreshed.data.accessToken : access;
+  if (refreshed.ok && refreshed.data) await keychainSet(`access:${email}`, refreshed.data.accessToken);
+  const me = await hubFetch<{ id: string; email: string; displayName: string }>('/me', { accessToken: token });
+  if (!me.ok || !me.data) return null;
+  const instanceId = (await keychainGet(`instance-id:${email}`)) ?? undefined;
+  return {
+    userId: me.data.id,
+    email: me.data.email,
+    displayName: me.data.displayName,
+    hubUrl: HUB_URL,
+    instanceId,
+  };
+}
+
+/**
+ * Registers this Mac with the hub using a fresh Ed25519 keypair stored in
+ * the Keychain. The private key never leaves this machine.
+ */
+export async function hubRegisterInstance(instanceName: string): Promise<{ ok: boolean; instanceId?: string; error?: string }> {
+  const email = await keychainGet('active-email');
+  if (!email) return { ok: false, error: 'no_active_session' };
+  const access = await keychainGet(`access:${email}`);
+  if (!access) return { ok: false, error: 'no_access_token' };
+
+  // Re-use an existing keypair if one was generated previously.
+  let pubKeyHex = await keychainGet(`instance-pubkey:${email}`);
+  let privKeyHex = await keychainGet(`instance-privkey:${email}`);
+  if (!pubKeyHex || !privKeyHex) {
+    // Generate Ed25519 keypair using Node's built-in crypto. No native deps.
+    const { generateKeyPairSync } = await import('node:crypto');
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+    // Raw public key is last 32 bytes of the DER SPKI; easier to grab via JWK
+    // and re-encode to raw hex.
+    const pubJwk = publicKey.export({ format: 'jwk' }) as { x?: string };
+    const privJwk = privateKey.export({ format: 'jwk' }) as { d?: string };
+    if (!pubJwk.x || !privJwk.d) return { ok: false, error: 'key_generation_failed' };
+    pubKeyHex = Buffer.from(pubJwk.x, 'base64url').toString('hex');
+    privKeyHex = Buffer.from(privJwk.d, 'base64url').toString('hex');
+    await keychainSet(`instance-pubkey:${email}`, pubKeyHex);
+    await keychainSet(`instance-privkey:${email}`, privKeyHex);
+  }
+
+  const r = await hubFetch<{ id: string; created?: boolean; updated?: boolean }>('/instances', {
+    method: 'POST',
+    accessToken: access,
+    body: {
+      name: instanceName,
+      publicKey: pubKeyHex,
+      platform: `${process.platform}-${process.arch}`,
+      appVersion: VERSION,
+    },
+  });
+  if (!r.ok || !r.data) return { ok: false, error: r.error };
+  await keychainSet(`instance-id:${email}`, r.data.id);
+  return { ok: true, instanceId: r.data.id };
+}
+
+export async function hubListInstances(): Promise<{ ok: boolean; instances?: Array<{ id: string; name: string; platform?: string; appVersion?: string; createdAt: string; lastSeenAt?: string | null; isMe?: boolean }>; error?: string }> {
+  const email = await keychainGet('active-email');
+  if (!email) return { ok: false, error: 'no_active_session' };
+  const access = await keychainGet(`access:${email}`);
+  if (!access) return { ok: false, error: 'no_access_token' };
+  const me = await keychainGet(`instance-id:${email}`);
+  const r = await hubFetch<{ instances: Array<{ id: string; name: string; platform: string | null; appVersion: string | null; createdAt: string; lastSeenAt: string | null }> }>(
+    '/instances', { accessToken: access },
+  );
+  if (!r.ok || !r.data) return { ok: false, error: r.error };
+  return {
+    ok: true,
+    instances: r.data.instances.map((i) => ({
+      id: i.id,
+      name: i.name,
+      platform: i.platform ?? undefined,
+      appVersion: i.appVersion ?? undefined,
+      createdAt: i.createdAt,
+      lastSeenAt: i.lastSeenAt,
+      isMe: i.id === me,
+    })),
+  };
+}
+
 // ── About / system info ──────────────────────────────────────────────
 
 export async function getAboutInfo(appPath: string): Promise<import('../shared/types').AboutInfo> {
