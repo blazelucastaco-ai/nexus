@@ -9,3 +9,14 @@ dist/
 coverage/
 .claude/
 installer-app/release/
+
+# Built DMG stays on GitHub Releases, never in git.
+NEXUS-Installer.dmg
+*.dmg
+
+# Drift prevention — pnpm-lock.yaml is the source of truth.
+package-lock.json
+
+# Hub data volumes / backups.
+hub/data/
+hub/*.db

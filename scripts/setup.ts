@@ -908,7 +908,10 @@ async function writeConfiguration(opts: {
     "",
   ];
 
-  writeFileSync(ENV_PATH, envLines.join("\n"), "utf-8");
+  // mode 0o600: owner-read/write only. The .env holds the Anthropic API key
+  // and the Telegram bot token — world-readable would leak them to every
+  // other local user process.
+  writeFileSync(ENV_PATH, envLines.join("\n"), { encoding: "utf-8", mode: 0o600 });
 
   spin.succeed(chalk.green("Configuration saved"));
 

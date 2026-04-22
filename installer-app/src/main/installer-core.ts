@@ -330,10 +330,14 @@ function writeConfig(input: ConfigInput): Promise<void> {
     },
   };
 
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+  // mode 0o600 on files under ~/.nexus that hold identifying data. Even
+  // though config.json / config.yaml don't contain tokens (those live in
+  // .env), they include the Telegram chat ID and personality, which is
+  // PII-ish and shouldn't be world-readable on a shared Mac.
+  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', { encoding: 'utf-8', mode: 0o600 });
   // Also write YAML — the NEXUS daemon only reads config.yaml. Writing
   // both keeps detection fast (json) and the runtime correct (yaml).
-  writeFileSync(CONFIG_PATH_YAML, stringifyConfigYaml(config), 'utf-8');
+  writeFileSync(CONFIG_PATH_YAML, stringifyConfigYaml(config), { encoding: 'utf-8', mode: 0o600 });
 
   const envLines = [
     '# ─── NEXUS Environment ────────────────────────────────',
@@ -355,7 +359,9 @@ function writeConfig(input: ConfigInput): Promise<void> {
     'NEXUS_LOG_LEVEL=info',
     '',
   ];
-  writeFileSync(ENV_PATH, envLines.join('\n'), 'utf-8');
+  // mode 0o600: the .env holds Anthropic API key + Telegram bot token.
+  // World-readable would let any other local user process harvest them.
+  writeFileSync(ENV_PATH, envLines.join('\n'), { encoding: 'utf-8', mode: 0o600 });
   return Promise.resolve();
 }
 
@@ -427,7 +433,11 @@ ${envXml}
 </plist>
 `;
   mkdirSync(join(HOME, 'Library', 'LaunchAgents'), { recursive: true });
-  writeFileSync(plistPath, plist, 'utf-8');
+  // mode 0o600: the plist embeds all env vars in the file, including the
+  // Anthropic API key and Telegram bot token. Plists under
+  // ~/Library/LaunchAgents are user-scoped, but still default to 0o644
+  // without this. Lock them down.
+  writeFileSync(plistPath, plist, { encoding: 'utf-8', mode: 0o600 });
 
   try {
     await execFileAsync('launchctl', ['unload', plistPath]);
@@ -1531,6 +1541,8 @@ const HUB_SESSION_FILE = join(NEXUS_DIR, 'hub-session.json');
 
 function writeHubSessionMarker(session: { userId: string; email: string; displayName: string; username?: string | null; hubUrl: string; instanceId?: string }): void {
   mkdirSync(NEXUS_DIR, { recursive: true });
+  // mode 0o600 — the marker holds email + userId + instanceId. Not
+  // directly a secret, but PII that shouldn't be world-readable.
   writeFileSync(
     HUB_SESSION_FILE,
     JSON.stringify({
@@ -1542,7 +1554,7 @@ function writeHubSessionMarker(session: { userId: string; email: string; display
       instanceId: session.instanceId ?? null,
       signedInAt: new Date().toISOString(),
     }, null, 2) + '\n',
-    'utf-8',
+    { encoding: 'utf-8', mode: 0o600 },
   );
 }
 
@@ -1572,8 +1584,20 @@ async function currentAccessToken(): Promise<string | null> {
     method: 'POST', refreshCookie: refresh,
   });
   if (refreshed.ok && refreshed.data) {
+    // Hub uses rotating refresh — absorb the new cookie so the next call
+    // doesn't trip refresh-reuse detection.
+    const newRefresh = extractRefreshCookie(refreshed.cookies);
+    if (newRefresh) await keychainSet(`refresh:${email}`, newRefresh);
     await keychainSet(`access:${email}`, refreshed.data.accessToken);
     return refreshed.data.accessToken;
+  }
+  if (refreshed.status === 401) {
+    // Session was revoked (either by user logout-all, password change, or
+    // the reuse-detection trip). Clear stale tokens so the next call doesn't
+    // keep hammering /auth/refresh.
+    await keychainDelete(`access:${email}`);
+    await keychainDelete(`refresh:${email}`);
+    return null;
   }
   return access;
 }
@@ -1612,7 +1636,11 @@ export async function hubActiveSession(): Promise<HubSessionView | null> {
     method: 'POST', refreshCookie: refresh,
   });
   const token = refreshed.ok && refreshed.data ? refreshed.data.accessToken : access;
-  if (refreshed.ok && refreshed.data) await keychainSet(`access:${email}`, refreshed.data.accessToken);
+  if (refreshed.ok && refreshed.data) {
+    const newRefresh = extractRefreshCookie(refreshed.cookies);
+    if (newRefresh) await keychainSet(`refresh:${email}`, newRefresh);
+    await keychainSet(`access:${email}`, refreshed.data.accessToken);
+  }
   const me = await hubFetch<{ id: string; email: string; displayName: string; username: string | null }>('/me', { accessToken: token });
   if (!me.ok || !me.data) return null;
   const instanceId = (await keychainGet(`instance-id:${email}`)) ?? undefined;
@@ -1690,7 +1718,7 @@ export async function hubRegisterInstance(instanceName: string): Promise<{ ok: b
       writeFileSync(
         HUB_SESSION_FILE,
         JSON.stringify({ ...prev, instanceId: r.data.id }, null, 2) + '\n',
-        'utf-8',
+        { encoding: 'utf-8', mode: 0o600 },
       );
     } catch { /* ignore */ }
   }

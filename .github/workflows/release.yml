@@ -1,0 +1,97 @@
+name: release
+
+# Triggered by pushing a `v*` tag (e.g. `v0.1.1`). Builds the installer DMG
+# on a macOS runner, uploads a SHA-256 hash + the DMG to the GitHub Release.
+#
+# Code-signing + notarization require an Apple Developer cert. Until the
+# maintainer has enrolled, the `APPLE_ID`/`APPLE_TEAM_ID` secrets are absent
+# and the build runs unsigned (same as the current v0.1.0 artifact). When
+# they're added, electron-builder auto-signs.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-dmg:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install root deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build NEXUS daemon
+        # The daemon's built dist/index.cjs gets bundled into the DMG (installer
+        # copies it to ~/.nexus/app/index.cjs on first install).
+        run: pnpm build
+
+      - name: Install installer-app deps
+        run: pnpm install --frozen-lockfile
+        working-directory: installer-app
+
+      - name: Build + package DMG
+        run: pnpm dist
+        working-directory: installer-app
+        env:
+          # When these are set, electron-builder signs + notarizes automatically.
+          # Missing secrets = unsigned build (same as today's v0.1.0).
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_LINK: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+
+      - name: Rename DMG to release artifact name
+        run: |
+          cd installer-app/release
+          mv NEXUS-*-arm64.dmg NEXUS-Installer.dmg
+
+      - name: Generate SHA-256
+        run: |
+          cd installer-app/release
+          shasum -a 256 NEXUS-Installer.dmg > NEXUS-Installer.dmg.sha256
+          cat NEXUS-Installer.dmg.sha256
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${GITHUB_REF#refs/tags/}" \
+            installer-app/release/NEXUS-Installer.dmg \
+            installer-app/release/NEXUS-Installer.dmg.sha256 \
+            --clobber
+
+  deploy-hub:
+    # Only deploy the hub on tags that start with 'v' AND the repo has a
+    # FLY_API_TOKEN secret (i.e., the maintainer has enrolled Fly). Other
+    # forks / forks without Fly just skip this.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy hub to Fly (skipped if no token)
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "No FLY_API_TOKEN — skipping hub deploy"
+            exit 0
+          fi
+          curl -L https://fly.io/install.sh | sh
+          export PATH="$HOME/.fly/bin:$PATH"
+          cd hub
+          flyctl deploy --app nexus-hub-blazelucastaco --config fly.toml --ha=false

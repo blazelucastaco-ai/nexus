@@ -105,6 +105,32 @@ async function main() {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
+  // Don't let an unhandled rejection silently crash the daemon. launchd
+  // will KeepAlive restart, but every in-flight conversation is lost on
+  // a cold restart. Log + Telegram-notify so the user knows the daemon
+  // recovered from something bad.
+  process.on('unhandledRejection', (reason) => {
+    log.fatal({ reason }, 'unhandled_rejection');
+    try {
+      const chatId = config.telegram.chatId;
+      if (chatId) {
+        telegram.sendMessage(
+          chatId,
+          `⚠️ NEXUS hit an unhandled promise rejection and recovered. Check logs.\n\n<code>${String(reason).slice(0, 200)}</code>`,
+          { parseMode: 'HTML' },
+        ).catch(() => null);
+      }
+    } catch { /* ignore — we're already in a bad state */ }
+  });
+
+  process.on('uncaughtException', (err) => {
+    log.fatal({ err }, 'uncaught_exception');
+    // Let the process actually exit so launchd restarts — an uncaught
+    // exception has put us in an unknown state that we shouldn't try to
+    // recover from in-process.
+    setTimeout(() => process.exit(1), 100);
+  });
+
   // Start everything
   await orchestrator.start();
 

@@ -140,6 +140,15 @@ export async function instancesRoutes(app: FastifyInstance): Promise<void> {
       return { id: existing.id, updated: true };
     }
 
+    // Per-user instance cap: prevents a compromised account from flooding
+    // the instances table (which would blow up /gossip/inbox's IN() query
+    // and waste disk on stale keypair rows).
+    const MAX_INSTANCES_PER_USER = 50;
+    const countRow = db.prepare('SELECT COUNT(*) as n FROM instances WHERE user_id = ?').get(req.userId!) as { n: number };
+    if (countRow.n >= MAX_INSTANCES_PER_USER) {
+      return reply.code(400).send({ error: 'instance_limit_reached' });
+    }
+
     const id = randomBytes(16).toString('hex');
     db.prepare(`
       INSERT INTO instances (id, user_id, name, public_key, x25519_public_key, platform, app_version, last_seen_at)

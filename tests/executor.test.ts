@@ -2,10 +2,10 @@
 // These tests hit real OS/filesystem operations — they verify the actual execution pipeline
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdirSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, rmSync, existsSync, mkdtempSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { ToolExecutor } from '../src/tools/executor.js';
 
 // Minimal stub implementations required by ToolExecutor constructor
@@ -23,7 +23,11 @@ const memoryStub = {
   close: () => {},
 } as any;
 
-const TEST_DIR = join(homedir(), '.nexus', 'test-workspace');
+// Use a real tmpdir instead of ~/.nexus/test-workspace. On CI, HOME is
+// inside the checked-out repo (so ~/.nexus/* resolves under src-tree and
+// trips NEXUS's own self-protection path guard). os.tmpdir() is always
+// outside the repo and outside any self-protection scope.
+const TEST_DIR = mkdtempSync(join(tmpdir(), 'nexus-executor-test-'));
 
 describe('ToolExecutor — core tools', () => {
   let executor: ToolExecutor;
@@ -144,7 +148,8 @@ describe('ToolExecutor — core tools', () => {
 
     it('respects working directory', async () => {
       const result = await executor.execute('run_terminal_command', { command: 'pwd', cwd: TEST_DIR });
-      expect(result.trim()).toContain('test-workspace');
+      // basename of the tmp dir (nexus-executor-test-<6 rand chars>)
+      expect(result.trim()).toContain('nexus-executor-test-');
     });
 
     it('has access to homebrew and standard PATH tools', async () => {

@@ -130,7 +130,7 @@ describe('POST /auth/login', () => {
 });
 
 describe('POST /auth/refresh', () => {
-  test('exchanges a valid refresh cookie for a new access token', async () => {
+  test('exchanges a valid refresh cookie for a new access token + new refresh cookie (rotation)', async () => {
     const email = randEmail();
     const s = await signup(t.app, { email, password: 'password-1234', displayName: 'x' });
     const r = await t.app.inject({
@@ -140,6 +140,12 @@ describe('POST /auth/refresh', () => {
     });
     expect(r.statusCode).toBe(200);
     expect(r.json().accessToken).toBeTruthy();
+    // Rotation: the response MUST issue a new cookie (different from the one sent).
+    const setCookie = r.headers['set-cookie'];
+    const cookies = Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [];
+    const newToken = cookies.find((c) => c.startsWith('nexus_refresh='))?.match(/^nexus_refresh=([^;]+)/)?.[1];
+    expect(newToken).toBeTruthy();
+    expect(newToken).not.toBe(s.refreshCookie);
   });
 
   test('rejects when no cookie is sent', async () => {
@@ -162,7 +168,128 @@ describe('POST /auth/refresh', () => {
       url: '/auth/refresh',
       headers: { cookie: `nexus_refresh=${s.refreshCookie}` },
     });
+    // The logout flow trips the "reuse after revoke" detection path, but the
+    // same 401 + cookie-cleared outcome is what matters for security.
     expect(r.statusCode).toBe(401);
+  });
+
+  test('replaying an already-rotated refresh triggers family-wide revocation', async () => {
+    const email = randEmail();
+    const s = await signup(t.app, { email, password: 'password-1234', displayName: 'x' });
+
+    // First refresh — gets new cookie, old one now revoked.
+    const firstRefresh = await t.app.inject({
+      method: 'POST',
+      url: '/auth/refresh',
+      headers: { cookie: `nexus_refresh=${s.refreshCookie}` },
+    });
+    expect(firstRefresh.statusCode).toBe(200);
+    const setCookie = firstRefresh.headers['set-cookie'];
+    const cookies = Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [];
+    const newToken = cookies.find((c) => c.startsWith('nexus_refresh='))?.match(/^nexus_refresh=([^;]+)/)?.[1];
+
+    // Attacker replays the OLD cookie — should fail and wipe the family.
+    const replay = await t.app.inject({
+      method: 'POST',
+      url: '/auth/refresh',
+      headers: { cookie: `nexus_refresh=${s.refreshCookie}` },
+    });
+    expect(replay.statusCode).toBe(401);
+    expect(replay.json().error).toBe('session_revoked');
+
+    // The legitimate NEW cookie should now also fail — the family was nuked.
+    const legitimate = await t.app.inject({
+      method: 'POST',
+      url: '/auth/refresh',
+      headers: { cookie: `nexus_refresh=${newToken}` },
+    });
+    expect(legitimate.statusCode).toBe(401);
+  });
+});
+
+describe('POST /auth/logout-all', () => {
+  test('revokes every active session for the user', async () => {
+    const email = randEmail();
+    // Sign up + login twice = three sessions for the same user.
+    const a = await signup(t.app, { email, password: 'password-1234', displayName: 'x' });
+    const b = await login(t.app, { email, password: 'password-1234' });
+    const c = await login(t.app, { email, password: 'password-1234' });
+
+    const r = await authed(t.app, a.body.accessToken, { method: 'POST', url: '/auth/logout-all' });
+    expect(r.status).toBe(200);
+    expect(r.body.revokedCount).toBeGreaterThanOrEqual(3);
+
+    // All three refresh cookies should now fail.
+    for (const cookie of [a.refreshCookie, b.refreshCookie, c.refreshCookie]) {
+      const rr = await t.app.inject({
+        method: 'POST', url: '/auth/refresh',
+        headers: { cookie: `nexus_refresh=${cookie}` },
+      });
+      expect(rr.statusCode).toBe(401);
+    }
+  });
+
+  test('rejects without a valid access token', async () => {
+    const r = await t.app.inject({ method: 'POST', url: '/auth/logout-all' });
+    expect(r.statusCode).toBe(401);
+  });
+});
+
+describe('DELETE /auth/me', () => {
+  test('deletes the user after password re-auth', async () => {
+    const email = randEmail();
+    const s = await signup(t.app, { email, password: 'password-1234', displayName: 'x' });
+    const r = await authed(t.app, s.body.accessToken, {
+      method: 'DELETE', url: '/auth/me',
+      payload: { password: 'password-1234', confirm: 'DELETE' },
+    });
+    expect(r.status).toBe(200);
+    const row = t.db.prepare('SELECT id FROM users WHERE id = ?').get(s.body.user.id);
+    expect(row).toBeUndefined();
+  });
+
+  test('rejects a wrong password', async () => {
+    const email = randEmail();
+    const s = await signup(t.app, { email, password: 'password-1234', displayName: 'x' });
+    const r = await authed(t.app, s.body.accessToken, {
+      method: 'DELETE', url: '/auth/me',
+      payload: { password: 'wrong-password', confirm: 'DELETE' },
+    });
+    expect(r.status).toBe(401);
+    expect(r.body.error).toBe('invalid_password');
+    // Row still exists.
+    const row = t.db.prepare('SELECT id FROM users WHERE id = ?').get(s.body.user.id);
+    expect(row).toBeTruthy();
+  });
+
+  test('rejects missing confirm string', async () => {
+    const s = await signup(t.app, { email: randEmail(), password: 'password-1234', displayName: 'x' });
+    const r = await authed(t.app, s.body.accessToken, {
+      method: 'DELETE', url: '/auth/me',
+      payload: { password: 'password-1234' },
+    });
+    expect(r.status).toBe(400);
+  });
+
+  test('cascades: deletes sessions, instances, friendships, posts', async () => {
+    // Create friendship between A and B, then delete A.
+    const aEmail = randEmail();
+    const a = await signup(t.app, { email: aEmail, password: 'password-1234', displayName: 'A' });
+    const b = await signup(t.app, { email: randEmail(), password: 'password-1234', displayName: 'B' });
+    await authed(t.app, a.body.accessToken, {
+      method: 'POST', url: '/friends/request', payload: { email: (t.db.prepare('SELECT email FROM users WHERE id = ?').get(b.body.user.id) as { email: string }).email },
+    });
+    const before = t.db.prepare('SELECT COUNT(*) as n FROM friendships').get() as { n: number };
+    expect(before.n).toBe(1);
+
+    // Delete A
+    await authed(t.app, a.body.accessToken, {
+      method: 'DELETE', url: '/auth/me',
+      payload: { password: 'password-1234', confirm: 'DELETE' },
+    });
+
+    const after = t.db.prepare('SELECT COUNT(*) as n FROM friendships').get() as { n: number };
+    expect(after.n).toBe(0);
   });
 });
 

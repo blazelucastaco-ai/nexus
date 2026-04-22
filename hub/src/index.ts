@@ -69,16 +69,81 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
 
   await app.register(cookie);
   if (!opts.disableRateLimit) {
+    // Global IP-keyed rate limit for unauthenticated / auth endpoints.
+    // Authed endpoints get an additional per-user limit registered below.
     await app.register(rateLimit, {
       max: Number.parseInt(process.env.AUTH_RATE_LIMIT ?? '10', 10),
       timeWindow: '15 minutes',
       keyGenerator: (req) => req.ip,
+      // Only apply to auth routes — the authed routes have their own
+      // per-user limiter that's looser but keyed on the JWT subject.
       allowList: (req) => !req.url.startsWith('/auth/'),
     });
+
+    // Per-user limiter for authed routes. Implemented as a preHandler hook
+    // (rather than a second `app.register(rateLimit, ...)` which would
+    // collide with the first) so we can key on `req.userId` populated by
+    // the bearer-token middleware.
+    const AUTHED_MAX = Number.parseInt(process.env.AUTHED_RATE_LIMIT ?? '300', 10);
+    const AUTHED_WINDOW_MS = 60_000; // per minute
+    const userBuckets = new Map<string, { count: number; resetAt: number }>();
+    app.addHook('preHandler', async (req, reply) => {
+      if (!req.userId) return; // either anonymous or the auth middleware will 401 shortly
+      const now = Date.now();
+      const bucket = userBuckets.get(req.userId);
+      if (!bucket || bucket.resetAt < now) {
+        userBuckets.set(req.userId, { count: 1, resetAt: now + AUTHED_WINDOW_MS });
+        return;
+      }
+      bucket.count++;
+      if (bucket.count > AUTHED_MAX) {
+        return reply.code(429).send({ error: 'rate_limited' });
+      }
+    });
+
+    // Janitor — prune stale buckets every 2 minutes.
+    const janitor = setInterval(() => {
+      const now = Date.now();
+      for (const [k, v] of userBuckets) {
+        if (v.resetAt < now) userBuckets.delete(k);
+      }
+    }, 120_000);
+    janitor.unref?.();
   }
 
   // Root: return nothing. Don't leak server name/version to bots trawling the internet.
   app.get('/', async (_req, reply) => reply.code(204).send());
+
+  // Background purge — keeps the SQLite volume from filling with stale
+  // queue rows, revoked sessions, and ancient audit logs. Runs hourly.
+  // Skipped under opts.db (test harness) since the tests need deterministic
+  // row counts.
+  if (!opts.db) {
+    const purge = (): void => {
+      try {
+        const db = getDb();
+        const now = new Date().toISOString();
+        // Expired sessions — every one that's past expires_at is dead weight.
+        db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now);
+        // Delivered gossip / soul messages older than 90 days.
+        db.prepare("DELETE FROM gossip_queue WHERE delivered_at IS NOT NULL AND delivered_at < datetime('now','-90 days')").run();
+        db.prepare("DELETE FROM soul_queue WHERE delivered_at IS NOT NULL AND delivered_at < datetime('now','-90 days')").run();
+        // Undelivered queue messages older than 180 days (never going to be consumed).
+        db.prepare("DELETE FROM gossip_queue WHERE delivered_at IS NULL AND created_at < datetime('now','-180 days')").run();
+        db.prepare("DELETE FROM soul_queue WHERE delivered_at IS NULL AND created_at < datetime('now','-180 days')").run();
+        // Audit log older than 365 days.
+        db.prepare("DELETE FROM audit_log WHERE created_at < datetime('now','-365 days')").run();
+        app.log.debug('purge cycle complete');
+      } catch (err) {
+        app.log.warn({ err }, 'purge cycle failed');
+      }
+    };
+    // First run 1 min after boot, then every hour.
+    const firstTimer = setTimeout(purge, 60_000);
+    firstTimer.unref?.();
+    const hourlyTimer = setInterval(purge, 60 * 60_000);
+    hourlyTimer.unref?.();
+  }
 
   // Deep health check: hits SQLite so we detect "server is up but DB is sick".
   app.get('/healthz', async (_req, reply) => {

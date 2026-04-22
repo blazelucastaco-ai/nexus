@@ -154,9 +154,9 @@ const SELF_DISCLOSURE_PATTERNS: RegExp[] = [
   // `[self: pid=… commit=… branch=…]` style self-awareness dumps
   /\[self:\s*[^\]]*\]/gi,
   // NEXUS internal module paths like `src/brain/self-awareness.ts` (relative)
-  /\bsrc\/(?:brain|core|ai|memory|telegram|agents|tools|data|personality|learning|macos|media|browser|utils|skills)\/[a-zA-Z0-9_-]+\.(?:ts|tsx|js)\b/gi,
+  /\bsrc\/(?:brain|core|ai|memory|telegram|agents|tools|data|personality|learning|macos|media|browser|utils|skills|hub|mcp|plugins|providers|runners|security)\/[a-zA-Z0-9_-]+\.(?:ts|tsx|js)\b/gi,
   // `import ... from '../brain/...'` or similar — internal relative imports
-  /\bfrom\s+['"]\.\.?\/(?:[^'"/]+\/)*?(?:brain|core|ai|memory|telegram|agents|tools|data|personality|learning|macos|media|browser)\/[^'"]+['"]/gi,
+  /\bfrom\s+['"]\.\.?\/(?:[^'"/]+\/)*?(?:brain|core|ai|memory|telegram|agents|tools|data|personality|learning|macos|media|browser|utils|skills|hub|mcp|plugins|providers|runners|security)\/[^'"]+['"]/gi,
 ];
 
 // Additional patterns used only for *detection* (L6 memory filter).

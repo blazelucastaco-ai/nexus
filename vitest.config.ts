@@ -8,8 +8,22 @@ import { defineConfig } from 'vitest/config';
 // Disabling file-level concurrency is the surgical fix: tests within a file
 // still run in their natural order, and total wall time increases only slightly
 // because individual tests are fast.
+//
+// Scope tests to `tests/**` only. Without this, vitest auto-discovers files
+// under `hub/tests/**` and `installer-app/...` and tries to compile them with
+// the root's dep tree — which fails at `import fastify from 'fastify'` because
+// root has no fastify. Each subpackage has its own vitest run.
 export default defineConfig({
   test: {
     fileParallelism: false,
+    include: ['tests/**/*.{test,spec}.ts'],
+    exclude: [
+      'node_modules',
+      'dist',
+      'hub/**',
+      'installer-app/**',
+      'chrome-extension/**',
+      '**/*.d.ts',
+    ],
   },
 });

@@ -1716,6 +1716,15 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
       .replace(/\n\n\[Note: Could not auto-save[^\]]*\]/g, '')
       .trim();
     this.conversationHistory.push({ role: 'assistant', content: cleanContent });
+    // Cap the in-memory history. The JSONL session store at appendTurn()
+    // below persists full history to disk; the in-memory array only needs
+    // enough tail for pruneHistory's 20-entry window and debug logs. Left
+    // unbounded, a daemon that chats every hour for weeks accumulates
+    // thousands of entries of stale context it never reads.
+    const HISTORY_CAP = 200;
+    if (this.conversationHistory.length > HISTORY_CAP) {
+      this.conversationHistory.splice(0, this.conversationHistory.length - HISTORY_CAP);
+    }
     this.memory.addToBuffer('assistant', finalContent);
 
     // FIX 1 — Persist turn to JSONL session store.

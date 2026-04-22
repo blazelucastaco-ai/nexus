@@ -90,7 +90,9 @@ export async function signAccessToken(userId: string, instanceId?: string): Prom
 
 export async function verifyAccessToken(token: string): Promise<AccessTokenClaims | null> {
   try {
-    const { payload } = await jwtVerify(token, getSecret());
+    // Pin HS256 explicitly. Without this, a future jose default change (or
+    // an accidental `alg: 'none'` in a malformed token) could weaken verify.
+    const { payload } = await jwtVerify(token, getSecret(), { algorithms: ['HS256'] });
     if ((payload as Record<string, unknown>).typ !== 'access') return null;
     return payload as unknown as AccessTokenClaims;
   } catch {

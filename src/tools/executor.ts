@@ -1,7 +1,7 @@
 // Tool executor — maps structured tool calls to concrete implementations.
 // Bridge between Claude's function calling and NEXUS's agent system.
 
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import {
   readFile as fsReadFile,
   writeFile as fsWriteFile,
@@ -11,7 +11,7 @@ import {
   mkdir,
   chmod,
 } from 'node:fs/promises';
-import { join, dirname, resolve, extname } from 'node:path';
+import { join, dirname, resolve, extname, sep } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createLogger } from '../utils/logger.js';
@@ -240,9 +240,9 @@ function validateFilePath(filePath: string): string | null {
   // Canonicalize the PARENT dir. If the parent is a symlink pointing outside
   // home/tmp, we need to detect that before allowing the write.
   let canonicalParent = dirname(resolved);
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { realpathSync } = require('node:fs') as typeof import('node:fs');
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { realpathSync } = require('node:fs') as typeof import('node:fs');
     canonicalParent = realpathSync(canonicalParent);
   } catch {
     // Parent doesn't exist yet (recursive mkdir will create it). In that case,
@@ -254,15 +254,29 @@ function validateFilePath(filePath: string): string | null {
     log.warn({ filePath: canonicalTarget }, 'Self-protection: blocked symlink-traversal into NEXUS source');
     return SELF_PROTECTION_ERROR;
   }
+  // macOS resolves /tmp -> /private/tmp via a symlink, and os.tmpdir()
+  // returns /var/folders/... for per-user temp which realpath()s to
+  // /private/var/folders/... We accept both the resolved and un-resolved
+  // forms because the target path may not exist yet (and so dirname walk
+  // can't canonicalize it), which means we can't force one or the other.
+  let osTmpReal: string;
+  try { osTmpReal = realpathSync(tmpdir()); }
+  catch { osTmpReal = tmpdir(); }
+  const osTmpRaw = tmpdir();
+
+  const inTmp = (p: string): boolean =>
+    p.startsWith('/tmp/') || p === '/tmp' ||
+    p.startsWith('/private/tmp/') || p === '/private/tmp' ||
+    p.startsWith(osTmpReal + sep) || p === osTmpReal ||
+    p.startsWith(osTmpRaw + sep) || p === osTmpRaw;
+
   const allowed =
     canonicalTarget.startsWith(home) ||
-    canonicalTarget.startsWith('/tmp/') ||
-    canonicalTarget === '/tmp' ||
     resolved.startsWith(home) ||
-    resolved.startsWith('/tmp/') ||
-    resolved === '/tmp';
+    inTmp(canonicalTarget) ||
+    inTmp(resolved);
   if (!allowed) {
-    return `Error: Path "${resolved}" is outside allowed directories (home directory or /tmp). Refusing to write.`;
+    return `Error: Path "${resolved}" is outside allowed directories (home directory or tmp). Refusing to write.`;
   }
   return null;
 }

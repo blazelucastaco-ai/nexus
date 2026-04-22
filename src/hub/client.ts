@@ -36,11 +36,29 @@ export interface HubSession {
 
 // ─── Session + Keychain helpers ──────────────────────────────────────
 
+// Hub URL allowlist. Prevents a malicious edit to ~/.nexus/hub-session.json
+// from redirecting auth traffic to an attacker-controlled server. Production
+// users always land on the official fly.dev host; the localhost entries are
+// for developing the hub itself alongside the daemon.
+const HUB_URL_ALLOWLIST = new Set([
+  'https://nexus-hub-blazelucastaco.fly.dev',
+  'https://nexus-hub-staging-blazelucastaco.fly.dev',
+  'http://127.0.0.1:8787',
+  'http://localhost:8787',
+]);
+
 export function readSession(): HubSession | null {
   if (!existsSync(HUB_SESSION_FILE)) return null;
   try {
     const parsed = JSON.parse(readFileSync(HUB_SESSION_FILE, 'utf-8'));
     if (!parsed.userId || !parsed.hubUrl) return null;
+    if (!HUB_URL_ALLOWLIST.has(parsed.hubUrl)) {
+      // Someone tampered with the session marker to point at an unknown host.
+      // Refuse to use it — we don't want to leak tokens or decrypt messages
+      // against an attacker's endpoint.
+      log.error({ hubUrl: parsed.hubUrl }, 'Refusing session: hubUrl not in allowlist');
+      return null;
+    }
     return parsed as HubSession;
   } catch {
     return null;
@@ -93,6 +111,21 @@ async function fetchWithAuth(
       const body = (await refreshResp.json()) as { accessToken?: string };
       if (body.accessToken) {
         access = body.accessToken;
+        // Hub now uses rotating refresh tokens: every /auth/refresh returns a
+        // NEW cookie and invalidates the old one. Absorb the new cookie so
+        // the next call doesn't trip refresh-reuse detection (which would
+        // nuke every session for this user).
+        const setCookies = refreshResp.headers.getSetCookie?.() ?? [];
+        for (const c of setCookies) {
+          const m = c.match(/^nexus_refresh=([^;]+)/);
+          if (m?.[1]) {
+            await execFileAsync('security', [
+              'add-generic-password', '-U',
+              '-s', KEYCHAIN_SERVICE, '-a', `refresh:${email}`, '-w', m[1],
+            ]).catch(() => null);
+            break;
+          }
+        }
         // Update Keychain for future calls.
         await execFileAsync('security', [
           'add-generic-password', '-U',
@@ -100,6 +133,15 @@ async function fetchWithAuth(
         ]).catch(() => null);
         r = await makeRequest(access);
       }
+    } else if (refreshResp.status === 401) {
+      // Hub told us the refresh is revoked or the session family was
+      // detected as compromised. Clear the stale tokens so the next call
+      // surfaces "no_session" rather than re-hammering /auth/refresh.
+      await Promise.all([
+        execFileAsync('security', ['delete-generic-password', '-s', KEYCHAIN_SERVICE, '-a', `access:${email}`]).catch(() => null),
+        execFileAsync('security', ['delete-generic-password', '-s', KEYCHAIN_SERVICE, '-a', `refresh:${email}`]).catch(() => null),
+      ]);
+      return { ok: false, status: 401, data: null, error: 'session_revoked' };
     }
   }
 

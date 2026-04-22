@@ -151,22 +151,71 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // ── POST /auth/refresh ────────────────────────────────────────────
+  //
+  // Rotating-refresh pattern: every successful refresh REVOKES the old
+  // refresh token and issues a brand-new one. A stolen cookie works once;
+  // when the legitimate client next refreshes, the old (stolen) token is
+  // already revoked and returns 401. Classic OAuth 2.0 refresh rotation.
+  //
+  // If we see a revoked refresh being presented again ("reuse after
+  // rotation"), we treat that as a compromise signal and revoke the
+  // entire user's session family — forcing a fresh login everywhere.
   app.post('/auth/refresh', async (req, reply) => {
     const refresh = req.cookies?.[REFRESH_COOKIE];
     if (!refresh) return reply.code(401).send({ error: 'missing_refresh' });
     const db = getDb();
+    const tokenHash = hashRefreshToken(refresh);
     const session = db.prepare(`
       SELECT id, user_id, expires_at, revoked_at FROM sessions WHERE token_hash = ?
-    `).get(hashRefreshToken(refresh)) as
+    `).get(tokenHash) as
       | { id: string; user_id: string; expires_at: string; revoked_at: string | null } | undefined;
-    if (!session || session.revoked_at || new Date(session.expires_at).getTime() < Date.now()) {
+
+    if (!session) {
+      reply.clearCookie(REFRESH_COOKIE, { path: '/' });
       return reply.code(401).send({ error: 'invalid_refresh' });
     }
+
+    // Reuse of an already-revoked refresh = stolen-and-replayed. Nuke ALL
+    // sessions for this user and audit-log the event.
+    if (session.revoked_at) {
+      db.prepare('UPDATE sessions SET revoked_at = datetime(\'now\') WHERE user_id = ? AND revoked_at IS NULL')
+        .run(session.user_id);
+      writeAudit(db, 'refresh_reuse_detected', {
+        userId: session.user_id,
+        ipHash: hashIp(req.ip),
+        userAgent: req.headers['user-agent'],
+      });
+      reply.clearCookie(REFRESH_COOKIE, { path: '/' });
+      return reply.code(401).send({ error: 'session_revoked' });
+    }
+
+    if (new Date(session.expires_at).getTime() < Date.now()) {
+      reply.clearCookie(REFRESH_COOKIE, { path: '/' });
+      return reply.code(401).send({ error: 'refresh_expired' });
+    }
+
+    // Revoke old, issue new.
+    const { plaintext: newRefresh, hash: newHash } = generateRefreshToken();
+    const newSessionId = randomBytes(16).toString('hex');
+    const newExpiresAt = new Date(Date.now() + refreshTtlSec * 1000).toISOString();
+
+    db.transaction(() => {
+      db.prepare('UPDATE sessions SET revoked_at = datetime(\'now\') WHERE id = ?').run(session.id);
+      db.prepare(`
+        INSERT INTO sessions (id, user_id, token_hash, expires_at, user_agent, ip_hash)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(newSessionId, session.user_id, newHash, newExpiresAt,
+             req.headers['user-agent']?.slice(0, 512) ?? null,
+             hashIp(req.ip));
+    })();
+
     const access = await signAccessToken(session.user_id);
+    reply.setCookie(REFRESH_COOKIE, newRefresh, cookieOpts());
     return reply.send({ accessToken: access });
   });
 
   // ── POST /auth/logout ─────────────────────────────────────────────
+  // Revokes only the current session (this device).
   app.post('/auth/logout', async (req, reply) => {
     const refresh = req.cookies?.[REFRESH_COOKIE];
     if (refresh) {
@@ -174,6 +223,69 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       db.prepare('UPDATE sessions SET revoked_at = datetime(\'now\') WHERE token_hash = ?')
         .run(hashRefreshToken(refresh));
     }
+    reply.clearCookie(REFRESH_COOKIE, { path: '/' });
+    return reply.send({ ok: true });
+  });
+
+  // ── POST /auth/logout-all ─────────────────────────────────────────
+  //
+  // "Log out everywhere." Revokes every active session for the authed user.
+  // Critical escape hatch if the user suspects a cookie was stolen — without
+  // this they'd have to wait for every session's 30-day TTL to expire.
+  //
+  // Caller must present a valid access token (not just the refresh cookie)
+  // so an attacker with just the cookie can't lock out the real user.
+  app.post('/auth/logout-all', async (req, reply) => {
+    const auth = req.headers.authorization;
+    if (!auth?.startsWith('Bearer ')) return reply.code(401).send({ error: 'unauthorized' });
+    const token = auth.slice(7);
+    const { verifyAccessToken } = await import('../auth.js');
+    const claims = await verifyAccessToken(token);
+    if (!claims) return reply.code(401).send({ error: 'unauthorized' });
+
+    const db = getDb();
+    const result = db.prepare(`
+      UPDATE sessions SET revoked_at = datetime('now')
+      WHERE user_id = ? AND revoked_at IS NULL
+    `).run(claims.sub);
+
+    writeAudit(db, 'logout_all', { userId: claims.sub, ipHash: hashIp(req.ip), userAgent: req.headers['user-agent'] });
+    reply.clearCookie(REFRESH_COOKIE, { path: '/' });
+    return reply.send({ ok: true, revokedCount: result.changes });
+  });
+
+  // ── DELETE /auth/me ───────────────────────────────────────────────
+  //
+  // GDPR Article 17 ("right to erasure") self-serve: authed user can delete
+  // their own account + cascade all owned data. Requires a re-confirmation
+  // of the password so a stolen access token alone can't nuke the account.
+  const DeleteBody = z.object({
+    password: z.string().min(1).max(256),
+    confirm: z.literal('DELETE'),
+  });
+  app.delete('/auth/me', async (req, reply) => {
+    const auth = req.headers.authorization;
+    if (!auth?.startsWith('Bearer ')) return reply.code(401).send({ error: 'unauthorized' });
+    const { verifyAccessToken } = await import('../auth.js');
+    const claims = await verifyAccessToken(auth.slice(7));
+    if (!claims) return reply.code(401).send({ error: 'unauthorized' });
+
+    const parsed = DeleteBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'invalid_input' });
+
+    const db = getDb();
+    const user = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(claims.sub) as
+      | { password_hash: string } | undefined;
+    if (!user) return reply.code(404).send({ error: 'not_found' });
+    const ok = await verifyPassword(parsed.data.password, user.password_hash);
+    if (!ok) return reply.code(401).send({ error: 'invalid_password' });
+
+    // All user-owned tables have ON DELETE CASCADE → deleting the user row
+    // removes sessions, instances, friendships, posts, gossip_queue, soul_queue,
+    // audit_log entries (via SET NULL) in one shot.
+    writeAudit(db, 'account_deleted', { userId: claims.sub, ipHash: hashIp(req.ip), userAgent: req.headers['user-agent'] });
+    db.prepare('DELETE FROM users WHERE id = ?').run(claims.sub);
+
     reply.clearCookie(REFRESH_COOKIE, { path: '/' });
     return reply.send({ ok: true });
   });

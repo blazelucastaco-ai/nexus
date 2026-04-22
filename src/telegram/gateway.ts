@@ -289,13 +289,17 @@ export class TelegramGateway {
   // ─── Middleware ─────────────────────────────────────────────────
 
   private setupMiddleware(): void {
-    // Auth middleware — validate incoming messages are from allowed chat ID
+    // Auth middleware — validate incoming messages are from allowed chat ID.
+    //
+    // FAIL-CLOSED: if no chatId is configured we REFUSE every message, not
+    // allow-all. Previous behavior silently accepted every Telegram user in
+    // the world if someone deployed without setting `TELEGRAM_CHAT_ID`.
     this.bot.use(async (ctx, next) => {
       const chatId = String(ctx.chat?.id ?? '');
 
-      // If no chatId is configured, allow all (development mode)
       if (!this.chatId) {
-        await next();
+        log.error({ chatId, from: ctx.from?.username }, 'Refusing message: TELEGRAM_CHAT_ID is not configured (fail-closed)');
+        await ctx.reply('NEXUS is misconfigured — no allowed chat ID set. Talk to the operator.').catch(() => null);
         return;
       }
 
