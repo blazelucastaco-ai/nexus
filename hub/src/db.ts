@@ -8,6 +8,8 @@ import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+export type HubDb = Database.Database;
+
 let db: Database.Database | null = null;
 
 export function getDb(): Database.Database {
@@ -19,6 +21,27 @@ export function getDb(): Database.Database {
   db.pragma('foreign_keys = ON');
   migrate(db);
   return db;
+}
+
+/**
+ * Swap in a pre-built Database for the process. Integration tests create a
+ * fresh DB per test and call this so routes that resolve getDb() get the
+ * isolated instance instead of the default path.
+ */
+export function setDbForTest(newDb: Database.Database): void {
+  db = newDb;
+  migrate(db);
+}
+
+/**
+ * Close the active DB handle. Called on graceful shutdown and by test
+ * teardown to release file locks on the WAL sidecar files.
+ */
+export function closeDb(): void {
+  if (db) {
+    try { db.close(); } catch { /* already closed */ }
+    db = null;
+  }
 }
 
 function migrate(d: Database.Database): void {

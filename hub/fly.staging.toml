@@ -1,0 +1,56 @@
+# Fly.io config for nexus-hub-staging — run deploys here first, validate,
+# then promote to production. Create once:
+#   fly apps create nexus-hub-staging-blazelucastaco
+#   fly volumes create hub_data --region iad --size 1 --app nexus-hub-staging-blazelucastaco
+#   fly secrets set --app nexus-hub-staging-blazelucastaco JWT_SECRET=<fresh-secret>
+
+app = "nexus-hub-staging-blazelucastaco"
+primary_region = "iad"
+kill_signal = "SIGTERM"
+kill_timeout = 10
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8787"
+  HOST = "0.0.0.0"
+  PRODUCTION = "1"
+  # Staging runs at DEBUG so we catch any log-noise regressions before prod.
+  LOG_LEVEL = "debug"
+  ACCESS_TOKEN_TTL_SECONDS = "900"
+  REFRESH_TOKEN_TTL_SECONDS = "2592000"
+  AUTH_RATE_LIMIT = "10"
+  CORS_ORIGINS = "null,file://"
+  DB_PATH = "/data/hub.db"
+  # Tag responses so clients can tell staging from prod at a glance.
+  HUB_ENV = "staging"
+
+[[mounts]]
+  source = "hub_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 50
+    hard_limit = 100
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "get"
+    path = "/healthz"
+    protocol = "http"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

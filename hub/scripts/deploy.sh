@@ -21,12 +21,14 @@ cd "$(dirname "$0")/.."
 APP_NAME=""
 REGION="iad"
 VOLUME_SIZE="1"
+STAGING=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --app)    APP_NAME="$2"; shift 2 ;;
-    --region) REGION="$2"; shift 2 ;;
-    --size)   VOLUME_SIZE="$2"; shift 2 ;;
+    --app)     APP_NAME="$2"; shift 2 ;;
+    --region)  REGION="$2"; shift 2 ;;
+    --size)    VOLUME_SIZE="$2"; shift 2 ;;
+    --staging) STAGING=1; shift ;;
     *) echo "Unknown flag: $1" >&2; exit 1 ;;
   esac
 done
@@ -45,16 +47,31 @@ if ! fly auth whoami >/dev/null 2>&1; then
   exit 1
 fi
 
-# Default app name includes Fly username so it's unique.
+# Default app name includes Fly username so it's unique. Staging appends
+# "-staging" so prod and staging don't collide.
 if [[ -z "$APP_NAME" ]]; then
   USERNAME=$(fly auth whoami | sed 's/@.*//' | tr -cd 'a-z0-9-')
-  APP_NAME="nexus-hub-${USERNAME}"
+  if [[ $STAGING -eq 1 ]]; then
+    APP_NAME="nexus-hub-staging-${USERNAME}"
+  else
+    APP_NAME="nexus-hub-${USERNAME}"
+  fi
 fi
 
-echo "─── NEXUS Hub deploy ───"
+# Pick the right fly config for the environment.
+if [[ $STAGING -eq 1 ]]; then
+  FLY_CONFIG="fly.staging.toml"
+  ENV_LABEL="staging"
+else
+  FLY_CONFIG="fly.toml"
+  ENV_LABEL="production"
+fi
+
+echo "─── NEXUS Hub deploy (${ENV_LABEL}) ───"
 echo "  App:    $APP_NAME"
 echo "  Region: $REGION"
 echo "  Volume: ${VOLUME_SIZE}GB"
+echo "  Config: $FLY_CONFIG"
 echo "────────────────────────"
 
 # ── 1. Create the app (idempotent) ───────────────────────────────────
@@ -66,7 +83,7 @@ else
   fly apps create "$APP_NAME" --org personal
 fi
 
-# Update fly.toml with the actual app name.
+# Update the selected fly config with the actual app name + region.
 # Uses awk so the replacement is idempotent and handles both the default
 # value and any previous deploy's name.
 TMP_TOML=$(mktemp)
@@ -74,7 +91,7 @@ awk -v name="$APP_NAME" -v region="$REGION" '
   /^app = / { print "app = \"" name "\""; next }
   /^primary_region = / { print "primary_region = \"" region "\""; next }
   { print }
-' fly.toml > "$TMP_TOML" && mv "$TMP_TOML" fly.toml
+' "$FLY_CONFIG" > "$TMP_TOML" && mv "$TMP_TOML" "$FLY_CONFIG"
 
 # ── 2. Persistent volume ─────────────────────────────────────────────
 
@@ -103,7 +120,7 @@ fi
 # ── 4. Deploy ────────────────────────────────────────────────────────
 
 echo "→ deploying…"
-fly deploy --app "$APP_NAME" --ha=false
+fly deploy --app "$APP_NAME" --config "$FLY_CONFIG" --ha=false
 
 # ── 5. Summary ───────────────────────────────────────────────────────
 

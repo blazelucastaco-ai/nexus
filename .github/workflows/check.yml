@@ -32,9 +32,23 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
-      - name: Test
+      - name: Test (main package)
         run: pnpm test
         env:
           # Tests open a real SQLite DB at ~/.nexus/memory.db; make sure CI
           # has a writable home.
           HOME: ${{ github.workspace }}/.home
+
+      # Hub package — install deps (reusing the monorepo store), typecheck,
+      # and run the full integration suite against a fresh in-memory SQLite.
+      - name: Install hub dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: hub
+
+      - name: Typecheck (hub)
+        run: npx tsc --noEmit
+        working-directory: hub
+
+      - name: Test (hub)
+        run: pnpm test
+        working-directory: hub
