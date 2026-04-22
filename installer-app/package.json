@@ -18,7 +18,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
-    "@types/react": "^18.3.12",
+    "@types/react": "^19.2.14",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.0",
@@ -30,8 +30,8 @@
     "wait-on": "^8.0.1"
   },
   "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
   },
   "build": {
     "appId": "com.nexus.app",
