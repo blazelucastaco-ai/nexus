@@ -62,8 +62,10 @@ async function main(): Promise<void> {
     allowList: (req) => !req.url.startsWith('/auth/'),
   });
 
-  // Plain routes.
-  app.get('/', async () => ({ name: 'nexus-hub', version: '0.1.0', ok: true }));
+  // Health check + a deliberately empty root. We don't advertise the server
+  // name on the public root — bots trawling the internet get a minimal
+  // response with no version string or fingerprint.
+  app.get('/', async (_req, reply) => reply.code(204).send());
   app.get('/healthz', async () => ({ ok: true }));
 
   await app.register(authRoutes);

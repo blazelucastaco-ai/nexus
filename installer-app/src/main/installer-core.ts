@@ -1314,7 +1314,11 @@ function readAnthropicKeyFromRepoEnv(): string | null {
 // forwarded manually on subsequent calls so cookie-less CLIs don't need a full
 // cookie jar.
 
-const HUB_URL = process.env.NEXUS_HUB_URL ?? 'http://127.0.0.1:8787';
+// After you deploy the hub to Fly.io (see hub/DEPLOY.md), update this
+// constant to the production URL. Env var still wins so a tester can point
+// at localhost without editing the binary.
+const DEFAULT_HUB_URL = 'http://127.0.0.1:8787';
+const HUB_URL = process.env.NEXUS_HUB_URL ?? DEFAULT_HUB_URL;
 const KEYCHAIN_SERVICE = 'com.nexus.hub';
 
 export interface HubSignupInput {

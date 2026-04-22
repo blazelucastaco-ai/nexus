@@ -1,0 +1,14 @@
+node_modules
+dist
+data
+.env
+*.log
+.git
+.gitignore
+README.md
+ARCHITECTURE.md
+SECURITY.md
+DEPLOY.md
+.dockerignore
+Dockerfile
+fly.toml

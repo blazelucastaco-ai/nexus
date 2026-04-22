@@ -1,0 +1,58 @@
+# Fly.io config for nexus-hub.
+# Rename `app` to whatever you picked during `fly launch`.
+# The primary_region should be close to your users — `iad` (Virginia), `ams`
+# (Amsterdam), `sjc` (San Jose) are all fine for a small-footprint service.
+
+app = "nexus-hub"
+primary_region = "iad"
+kill_signal = "SIGTERM"
+kill_timeout = 10
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8787"
+  HOST = "0.0.0.0"
+  PRODUCTION = "1"
+  LOG_LEVEL = "info"
+  # Access token = short. Refresh = 30 days. Clients renew silently.
+  ACCESS_TOKEN_TTL_SECONDS = "900"
+  REFRESH_TOKEN_TTL_SECONDS = "2592000"
+  AUTH_RATE_LIMIT = "10"
+  # Installer-app ships calls via Electron — origins show up as `null`.
+  # Add a production domain here if you also host a CLI web UI someday.
+  CORS_ORIGINS = "null,file://"
+  # Fly gives us the DB path via the mount below.
+  DB_PATH = "/data/hub.db"
+
+# Persistent volume for the SQLite file. Without this, every deploy wipes
+# the users table. Create once: `fly volumes create hub_data --region iad --size 1`
+[[mounts]]
+  source = "hub_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 100
+    hard_limit = 200
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "get"
+    path = "/healthz"
+    protocol = "http"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
