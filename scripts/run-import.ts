@@ -16,38 +16,84 @@ import {
 import { getDatabase } from '../src/memory/database.js';
 import { AIManager } from '../src/ai/index.js';
 
+/**
+ * Emit a progress event. The installer-app parent process reads these line by
+ * line off stdout and forwards them to the wizard renderer.
+ */
+function emit(event: {
+  type: 'phase';
+  phase: string;
+  label: string;
+  pct: number;
+  source?: string;
+}): void {
+  console.log(JSON.stringify(event));
+}
+
 async function main(): Promise<void> {
   const raw = process.env.__NEXUS_IMPORT_SOURCES__ ?? '';
   const selected = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
   const empty = { imported: 0, skipped: 0, skillsWritten: 0, sources: {}, llmUsed: false };
-  if (selected.size === 0) { console.log(JSON.stringify(empty)); return; }
+  if (selected.size === 0) { console.log(JSON.stringify({ type: 'done', result: empty })); return; }
 
+  emit({ type: 'phase', phase: 'detecting', label: 'Scanning for agents…', pct: 5 });
   const sources = (await detectAllSources()).filter(
     (s) => s.status === 'ready' && selected.has(s.id),
   );
-  if (sources.length === 0) { console.log(JSON.stringify(empty)); return; }
+  if (sources.length === 0) { console.log(JSON.stringify({ type: 'done', result: empty })); return; }
 
   const ai = new AIManager('anthropic');
   const allMemories = [];
   const allSkills = [];
   let llmUsed = false;
 
-  for (const source of sources) {
+  // Budget the 5-90% range across the source loop; leave 5% for detection
+  // (already done) and the remaining 10% for DB write + skill write.
+  const perSource = 85 / sources.length;
+
+  for (let i = 0; i < sources.length; i++) {
+    const source = sources[i]!;
+    const base = 5 + i * perSource;
+
+    emit({
+      type: 'phase', phase: 'reading',
+      label: `Reading ${source.name}…`,
+      pct: Math.round(base),
+      source: source.name,
+    });
     const bundle = gatherRaw(source);
     if (!bundle) continue;
+
+    emit({
+      type: 'phase', phase: 'synthesizing',
+      label: `${source.name} → Claude is reading and writing NEXUS's memory…`,
+      pct: Math.round(base + perSource * 0.15),
+      source: source.name,
+    });
     const { memories, skills } = await synthesizeWithLLM(bundle, ai);
     allMemories.push(...memories);
     allSkills.push(...skills);
-    // If any memory has metadata.synthesizedBy === 'llm', we used the LLM.
     if (memories.some((m) => (m.metadata as Record<string, unknown>).synthesizedBy === 'llm')) {
       llmUsed = true;
     }
+
+    emit({
+      type: 'phase', phase: 'source-done',
+      label: `${source.name}: ${memories.length} memor${memories.length === 1 ? 'y' : 'ies'} · ${skills.length} skill${skills.length === 1 ? '' : 's'}`,
+      pct: Math.round(base + perSource),
+      source: source.name,
+    });
   }
 
+  emit({ type: 'phase', phase: 'persisting', label: 'Writing memories to SQLite…', pct: 92 });
   const db = getDatabase();
   const result = await importMemories(allMemories, db);
+
+  emit({ type: 'phase', phase: 'skills', label: `Writing ${allSkills.length} skill file${allSkills.length === 1 ? '' : 's'}…`, pct: 97 });
   const skillsWritten = writeSkills(allSkills);
-  console.log(JSON.stringify({ ...result, skillsWritten, llmUsed }));
+
+  emit({ type: 'phase', phase: 'done', label: 'Complete.', pct: 100 });
+  console.log(JSON.stringify({ type: 'done', result: { ...result, skillsWritten, llmUsed } }));
 }
 
 main().catch((err: Error) => {

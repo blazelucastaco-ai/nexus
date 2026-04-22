@@ -1260,30 +1260,36 @@ export async function detectMemorySources(): Promise<DetectedMemorySource[]> {
   return out;
 }
 
+export type MemoryImportProgress =
+  | { type: 'phase'; phase: string; label: string; pct: number; source?: string };
+
+export type MemoryImportProgressCb = (p: MemoryImportProgress) => void;
+
 /**
- * Run `nexus import-memories --yes` restricted to the selected source IDs.
- * This shells out to the installed CLI so the import logic stays in one place.
+ * Run the memory-import subprocess and stream per-phase progress events to
+ * the caller. Parent process reads stdout line by line: each `{type:"phase"…}`
+ * JSON is a progress tick; the single `{type:"done",result:…}` JSON carries
+ * the final counts.
  */
-export async function runMemoryImport(sourceIds: string[]): Promise<MemoryImportResult> {
-  if (!Array.isArray(sourceIds) || sourceIds.length === 0) {
-    return { imported: 0, skipped: 0, sources: {} };
-  }
+export async function runMemoryImport(
+  sourceIds: string[],
+  onProgress?: MemoryImportProgressCb,
+): Promise<MemoryImportResult> {
+  const zero: MemoryImportResult = { imported: 0, skipped: 0, sources: {} };
+  if (!Array.isArray(sourceIds) || sourceIds.length === 0) return zero;
   const safeIds = new Set(['claude-code', 'openai-codex', 'gemini-cli', 'cursor']);
   const filtered = sourceIds.filter((id) => safeIds.has(id));
-  if (filtered.length === 0) return { imported: 0, skipped: 0, sources: {} };
+  if (filtered.length === 0) return zero;
   const pnpm = (await resolveBinary('pnpm')) ?? 'pnpm';
-  // Selected IDs become env var so the CLI can filter them. Simpler than
-  // adding positional args. Also forward ANTHROPIC_API_KEY from .env so the
-  // LLM synthesis path can actually call Claude (otherwise it falls back to
-  // the deterministic extractor).
   const envKey = readAnthropicKeyFromRepoEnv();
-  try {
-    const { stdout } = await execFileAsync(
+
+  return new Promise<MemoryImportResult>((resolve) => {
+    const proc = spawn(
       pnpm,
       ['--silent', 'exec', 'tsx', 'scripts/run-import.ts'],
       {
         cwd: REPO_DIR,
-        timeout: 180_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
         env: {
           ...process.env,
           ...(envKey ? { ANTHROPIC_API_KEY: envKey } : {}),
@@ -1291,11 +1297,42 @@ export async function runMemoryImport(sourceIds: string[]): Promise<MemoryImport
         },
       },
     );
-    const result = JSON.parse(stdout.trim());
-    return result;
-  } catch (err) {
-    return { imported: 0, skipped: 0, sources: {} };
-  }
+
+    let buffer = '';
+    let finalResult: MemoryImportResult = zero;
+    const killTimer = setTimeout(() => proc.kill('SIGKILL'), 300_000);
+
+    proc.stdout.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString('utf-8');
+      let idx: number;
+      // eslint-disable-next-line no-cond-assign
+      while ((idx = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (!line) continue;
+        try {
+          const obj = JSON.parse(line) as { type?: string };
+          if (obj.type === 'phase') {
+            onProgress?.(obj as MemoryImportProgress);
+          } else if (obj.type === 'done') {
+            const r = (obj as { result: MemoryImportResult }).result;
+            if (r) finalResult = r;
+          }
+        } catch { /* partial JSON or other stdout — skip */ }
+      }
+    });
+
+    proc.stderr.on('data', () => { /* swallowed */ });
+
+    proc.on('exit', () => {
+      clearTimeout(killTimer);
+      resolve(finalResult);
+    });
+    proc.on('error', () => {
+      clearTimeout(killTimer);
+      resolve(zero);
+    });
+  });
 }
 
 function readAnthropicKeyFromRepoEnv(): string | null {

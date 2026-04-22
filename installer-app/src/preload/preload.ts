@@ -120,6 +120,13 @@ const api = {
       ipcRenderer.invoke('main:memory-detect-sources'),
     memoryImport: (sourceIds: string[]): Promise<{ imported: number; skipped: number; sources: Record<string, number> }> =>
       ipcRenderer.invoke('main:memory-import', sourceIds),
+    onMemoryImportProgress: (
+      cb: (p: { type: 'phase'; phase: string; label: string; pct: number; source?: string }) => void,
+    ): (() => void) => {
+      const listener = (_e: unknown, p: Parameters<typeof cb>[0]): void => cb(p);
+      ipcRenderer.on('main:memory-import-progress', listener);
+      return () => ipcRenderer.removeListener('main:memory-import-progress', listener);
+    },
   },
 };
 

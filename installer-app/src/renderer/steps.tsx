@@ -1122,16 +1122,30 @@ export function MemoryImportStep(props: { onNext: () => void; onBack: () => void
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<ImportResultView | null>(null);
+  const [progress, setProgress] = useState<{ label: string; pct: number } | null>(null);
+  const [phaseLog, setPhaseLog] = useState<string[]>([]);
 
   useEffect(() => {
     void (async () => {
       const s = await window.nexus.main.memoryDetectSources();
       setSources(s as DetectedSourceView[]);
-      // Preselect everything that's actually importable.
       const preset = new Set<string>();
       for (const src of s) if (src.status === 'ready') preset.add(src.id);
       setSelected(preset);
     })();
+  }, []);
+
+  // Subscribe to per-phase progress events from the import subprocess.
+  useEffect(() => {
+    const unsub = window.nexus.main.onMemoryImportProgress((p) => {
+      setProgress({ label: p.label, pct: p.pct });
+      // Keep a small log of the "source-done" lines so the user sees
+      // concrete counts per source as they stream in.
+      if (p.phase === 'source-done') {
+        setPhaseLog((prev) => [...prev, p.label].slice(-6));
+      }
+    });
+    return () => unsub();
   }, []);
 
   const toggle = (id: string): void => {
@@ -1145,9 +1159,12 @@ export function MemoryImportStep(props: { onNext: () => void; onBack: () => void
 
   const runImport = async (): Promise<void> => {
     setRunning(true);
+    setProgress({ label: 'Starting…', pct: 0 });
+    setPhaseLog([]);
     try {
       const r = await window.nexus.main.memoryImport([...selected]);
       setResult(r as ImportResultView);
+      setProgress({ label: 'Complete.', pct: 100 });
     } finally {
       setRunning(false);
     }
@@ -1219,6 +1236,27 @@ export function MemoryImportStep(props: { onNext: () => void; onBack: () => void
               </label>
             );
           })}
+        </div>
+      )}
+
+      {(running || (progress && !result)) && progress && (
+        <div style={{ marginTop: 20 }}>
+          <div className="progress-wrap">
+            <div className="progress-label">
+              <span>{progress.label}</span>
+              <span className="progress-pct">{Math.round(progress.pct)}%</span>
+            </div>
+            <div className="progress-bar">
+              <div className="progress-fill" style={{ width: `${Math.max(2, progress.pct)}%` }} />
+            </div>
+          </div>
+          {phaseLog.length > 0 && (
+            <div className="subtle" style={{ marginTop: 10, fontSize: 12, lineHeight: 1.6 }}>
+              {phaseLog.map((line) => (
+                <div key={line}>✓ {line}</div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

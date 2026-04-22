@@ -490,10 +490,14 @@ app.whenReady().then(() => {
   ipcMain.handle('main:action-dream', async () => triggerDream());
   ipcMain.handle('main:action-health', async () => runHealthCheck());
   ipcMain.handle('main:memory-detect-sources', async () => detectMemorySources());
-  ipcMain.handle('main:memory-import', async (_e, sourceIds: unknown) => {
+  ipcMain.handle('main:memory-import', async (event, sourceIds: unknown) => {
     if (!Array.isArray(sourceIds)) return { imported: 0, skipped: 0, sources: {} };
     const ids = sourceIds.filter((x): x is string => typeof x === 'string');
-    return runMemoryImport(ids);
+    return runMemoryImport(ids, (progress) => {
+      // Forward each phase event to the renderer that kicked off the import.
+      try { event.sender.send('main:memory-import-progress', progress); }
+      catch { /* window already closed */ }
+    });
   });
 
   // ── Nexus Hub ────────────────────────────────────────────────────
