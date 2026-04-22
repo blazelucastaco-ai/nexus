@@ -159,6 +159,14 @@ export function validateDisplayName(name: unknown): name is string {
   return typeof name === 'string' && name.length >= 1 && name.length <= 64;
 }
 
+// Usernames: 3-24 chars, must start with a letter, then a-z / 0-9 / _ / -.
+// Case-insensitive uniqueness enforced via username_lower index.
+const USERNAME_RE = /^[a-z][a-z0-9_-]{2,23}$/;
+
+export function validateUsername(u: unknown): u is string {
+  return typeof u === 'string' && USERNAME_RE.test(u);
+}
+
 // ─── Audit log writer — small, boring, never logs secrets ────────────
 
 export function writeAudit(

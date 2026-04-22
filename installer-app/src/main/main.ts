@@ -28,10 +28,12 @@ import {
   deleteMemory,
   takeScreenshot,
   triggerDream,
+  triggerHubPost,
   runHealthCheck,
   detectMemorySources,
   runMemoryImport,
   hubSignup,
+  hubSetUsername,
   hubLogin,
   hubLogout,
   hubActiveSession,
@@ -507,7 +509,12 @@ app.whenReady().then(() => {
     if (typeof p.email !== 'string' || typeof p.password !== 'string' || typeof p.displayName !== 'string') {
       return { ok: false, error: 'invalid_input' };
     }
-    return hubSignup({ email: p.email, password: p.password, displayName: p.displayName });
+    const username = typeof p.username === 'string' ? p.username : undefined;
+    return hubSignup({ email: p.email, password: p.password, displayName: p.displayName, username });
+  });
+  ipcMain.handle('hub:set-username', async (_e, username: unknown) => {
+    if (typeof username !== 'string') return { ok: false, error: 'invalid_username' };
+    return hubSetUsername(username);
   });
   ipcMain.handle('hub:login', async (_e, payload: unknown) => {
     if (!payload || typeof payload !== 'object') return { ok: false, error: 'invalid_input' };
@@ -525,10 +532,11 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('hub:list-instances', async () => hubListInstances());
   ipcMain.handle('hub:friends-list', async () => hubFriendsList());
-  ipcMain.handle('hub:friend-request', async (_e, email: unknown) => {
-    if (typeof email !== 'string') return { ok: false, error: 'invalid_email' };
-    return hubFriendRequest(email);
+  ipcMain.handle('hub:friend-request', async (_e, identifier: unknown) => {
+    if (typeof identifier !== 'string') return { ok: false, error: 'invalid_input' };
+    return hubFriendRequest(identifier);
   });
+  ipcMain.handle('main:trigger-hub-post', async () => triggerHubPost());
   ipcMain.handle('hub:friend-accept', async (_e, id: unknown) => {
     if (typeof id !== 'string') return { ok: false, error: 'invalid_id' };
     return hubFriendAccept(id);

@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { getDb } from '../db.js';
 import {
   hashPassword, verifyPassword, validateEmail, validatePassword, validateDisplayName,
+  validateUsername,
   signAccessToken, generateRefreshToken, hashRefreshToken, hashIp,
   registerFailedLogin, clearFailedLogins, isAccountLocked, writeAudit,
 } from '../auth.js';
@@ -18,6 +19,12 @@ const SignupBody = z.object({
   email: z.string().max(254).refine(validateEmail, 'invalid email'),
   password: z.string().min(8).max(256).refine(validatePassword, 'invalid password'),
   displayName: z.string().min(1).max(64).refine(validateDisplayName, 'invalid display name'),
+  // Optional during the rollout window — old clients don't send it. Once every
+  // client is upgraded we can mark this required and backfill placeholders.
+  username: z.string().optional().refine(
+    (u) => u === undefined || validateUsername(u),
+    'invalid username',
+  ),
 });
 
 const LoginBody = z.object({
@@ -41,9 +48,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const parsed = SignupBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: 'invalid_input' });
 
-    const { email, password, displayName } = parsed.data;
+    const { email, password, displayName, username } = parsed.data;
     const db = getDb();
     const emailLower = email.toLowerCase();
+    const usernameLower = username ? username.toLowerCase() : null;
 
     const existing = db.prepare('SELECT id FROM users WHERE email_lower = ?').get(emailLower);
     if (existing) {
@@ -52,15 +60,22 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'signup_unavailable' });
     }
 
+    if (usernameLower) {
+      const takenByUser = db.prepare('SELECT id FROM users WHERE username_lower = ?').get(usernameLower);
+      if (takenByUser) {
+        return reply.code(400).send({ error: 'username_taken' });
+      }
+    }
+
     const id = randomBytes(16).toString('hex');
     let passwordHash: string;
     try { passwordHash = await hashPassword(password); }
     catch { return reply.code(400).send({ error: 'invalid_input' }); }
 
     db.prepare(`
-      INSERT INTO users (id, email, email_lower, password_hash, display_name)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(id, email, emailLower, passwordHash, displayName);
+      INSERT INTO users (id, email, email_lower, password_hash, display_name, username, username_lower)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(id, email, emailLower, passwordHash, displayName, username ?? null, usernameLower);
 
     const { plaintext: refresh, hash: refreshHash } = generateRefreshToken();
     const sessionId = randomBytes(16).toString('hex');
@@ -77,7 +92,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const access = await signAccessToken(id);
     reply.setCookie(REFRESH_COOKIE, refresh, cookieOpts());
     return reply.code(201).send({
-      user: { id, email, displayName },
+      user: { id, email, displayName, username: username ?? null },
       accessToken: access,
     });
   });
@@ -90,9 +105,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const { email, password } = parsed.data;
     const db = getDb();
     const user = db.prepare(`
-      SELECT id, email, display_name, password_hash FROM users WHERE email_lower = ?
+      SELECT id, email, display_name, username, password_hash FROM users WHERE email_lower = ?
     `).get(email.toLowerCase()) as
-      | { id: string; email: string; display_name: string | null; password_hash: string }
+      | { id: string; email: string; display_name: string | null; username: string | null; password_hash: string }
       | undefined;
 
     if (!user) {
@@ -130,7 +145,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const access = await signAccessToken(user.id);
     reply.setCookie(REFRESH_COOKIE, refresh, cookieOpts());
     return reply.send({
-      user: { id: user.id, email: user.email, displayName: user.display_name },
+      user: { id: user.id, email: user.email, displayName: user.display_name, username: user.username },
       accessToken: access,
     });
   });

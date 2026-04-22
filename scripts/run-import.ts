@@ -33,7 +33,10 @@ function emit(event: {
 async function main(): Promise<void> {
   const raw = process.env.__NEXUS_IMPORT_SOURCES__ ?? '';
   const selected = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
-  const empty = { imported: 0, skipped: 0, skillsWritten: 0, sources: {}, llmUsed: false };
+  const empty = {
+    imported: 0, skipped: 0, skillsWritten: 0, sources: {},
+    llmUsed: false, alreadyImported: [] as string[],
+  };
   if (selected.size === 0) { console.log(JSON.stringify({ type: 'done', result: empty })); return; }
 
   emit({ type: 'phase', phase: 'detecting', label: 'Scanning for agents…', pct: 5 });
@@ -42,18 +45,44 @@ async function main(): Promise<void> {
   );
   if (sources.length === 0) { console.log(JSON.stringify({ type: 'done', result: empty })); return; }
 
+  // Open the DB first so we can check what's already imported per source —
+  // that lets us short-circuit and avoid spending LLM tokens on a no-op.
+  const db = getDatabase();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const countStmt = (db as any).prepare(
+    "SELECT COUNT(*) as count FROM memories WHERE source = ?",
+  );
+
   const ai = new AIManager('anthropic');
   const allMemories = [];
   const allSkills = [];
   let llmUsed = false;
+  const alreadyImported: string[] = [];
 
-  // Budget the 5-90% range across the source loop; leave 5% for detection
-  // (already done) and the remaining 10% for DB write + skill write.
-  const perSource = 85 / sources.length;
+  // Partition sources into fresh vs already-imported up front.
+  const freshSources: typeof sources = [];
+  for (const s of sources) {
+    const existing = (countStmt.get(`imported-${s.id}`) as { count: number }).count;
+    if (existing > 0) {
+      alreadyImported.push(s.name);
+      emit({
+        type: 'phase',
+        phase: 'already-imported',
+        label: `${s.name}: already merged (${existing} memor${existing === 1 ? 'y' : 'ies'})`,
+        pct: 10,
+        source: s.name,
+      });
+    } else {
+      freshSources.push(s);
+    }
+  }
 
-  for (let i = 0; i < sources.length; i++) {
-    const source = sources[i]!;
-    const base = 5 + i * perSource;
+  // Budget the 15-90% range across the fresh-source loop.
+  const perSource = freshSources.length > 0 ? 75 / freshSources.length : 0;
+
+  for (let i = 0; i < freshSources.length; i++) {
+    const source = freshSources[i]!;
+    const base = 15 + i * perSource;
 
     emit({
       type: 'phase', phase: 'reading',
@@ -86,14 +115,16 @@ async function main(): Promise<void> {
   }
 
   emit({ type: 'phase', phase: 'persisting', label: 'Writing memories to SQLite…', pct: 92 });
-  const db = getDatabase();
   const result = await importMemories(allMemories, db);
 
   emit({ type: 'phase', phase: 'skills', label: `Writing ${allSkills.length} skill file${allSkills.length === 1 ? '' : 's'}…`, pct: 97 });
   const skillsWritten = writeSkills(allSkills);
 
   emit({ type: 'phase', phase: 'done', label: 'Complete.', pct: 100 });
-  console.log(JSON.stringify({ type: 'done', result: { ...result, skillsWritten, llmUsed } }));
+  console.log(JSON.stringify({
+    type: 'done',
+    result: { ...result, skillsWritten, llmUsed, alreadyImported },
+  }));
 }
 
 main().catch((err: Error) => {

@@ -89,21 +89,24 @@ const api = {
     actionScreenshot: (): Promise<QuickActionResult> => ipcRenderer.invoke('main:action-screenshot'),
 
     // ── Hub ──────────────────────────────────────────────────
-    hubSignup: (payload: { email: string; password: string; displayName: string }): Promise<{ ok: boolean; session?: { userId: string; email: string; displayName: string; hubUrl: string; instanceId?: string }; error?: string }> =>
+    hubSignup: (payload: { email: string; password: string; displayName: string; username?: string }): Promise<{ ok: boolean; session?: { userId: string; email: string; displayName: string; username?: string | null; hubUrl: string; instanceId?: string }; error?: string }> =>
       ipcRenderer.invoke('hub:signup', payload),
-    hubLogin: (payload: { email: string; password: string }): Promise<{ ok: boolean; session?: { userId: string; email: string; displayName: string; hubUrl: string; instanceId?: string }; error?: string }> =>
+    hubLogin: (payload: { email: string; password: string }): Promise<{ ok: boolean; session?: { userId: string; email: string; displayName: string; username?: string | null; hubUrl: string; instanceId?: string }; error?: string }> =>
       ipcRenderer.invoke('hub:login', payload),
+    hubSetUsername: (username: string): Promise<{ ok: boolean; username?: string; error?: string }> =>
+      ipcRenderer.invoke('hub:set-username', username),
     hubLogout: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('hub:logout'),
-    hubSession: (): Promise<{ userId: string; email: string; displayName: string; hubUrl: string; instanceId?: string } | null> =>
+    hubSession: (): Promise<{ userId: string; email: string; displayName: string; username?: string | null; hubUrl: string; instanceId?: string } | null> =>
       ipcRenderer.invoke('hub:session'),
+    triggerHubPost: (): Promise<{ ok: boolean; output: string }> => ipcRenderer.invoke('main:trigger-hub-post'),
     hubRegisterInstance: (name: string): Promise<{ ok: boolean; instanceId?: string; error?: string }> =>
       ipcRenderer.invoke('hub:register-instance', name),
     hubListInstances: (): Promise<{ ok: boolean; instances?: Array<{ id: string; name: string; platform?: string; appVersion?: string; createdAt: string; lastSeenAt?: string | null; isMe?: boolean }>; error?: string }> =>
       ipcRenderer.invoke('hub:list-instances'),
-    hubFriendsList: (): Promise<{ ok: boolean; friends?: Array<{ id: string; otherUserId: string; email: string; displayName: string | null; state: 'pending' | 'accepted' | 'blocked'; requestedByMe: boolean; gossipEnabled: boolean; createdAt: string; updatedAt: string }>; error?: string }> =>
+    hubFriendsList: (): Promise<{ ok: boolean; friends?: Array<{ id: string; otherUserId: string; email: string; username: string | null; displayName: string | null; state: 'pending' | 'accepted' | 'blocked'; requestedByMe: boolean; gossipEnabled: boolean; createdAt: string; updatedAt: string }>; error?: string }> =>
       ipcRenderer.invoke('hub:friends-list'),
-    hubFriendRequest: (email: string): Promise<{ ok: boolean; id?: string; state?: string; error?: string }> =>
-      ipcRenderer.invoke('hub:friend-request', email),
+    hubFriendRequest: (identifier: string): Promise<{ ok: boolean; id?: string; state?: string; error?: string }> =>
+      ipcRenderer.invoke('hub:friend-request', identifier),
     hubFriendAccept: (id: string): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('hub:friend-accept', id),
     hubFriendBlock: (id: string): Promise<{ ok: boolean; error?: string }> =>
@@ -112,7 +115,7 @@ const api = {
       ipcRenderer.invoke('hub:friend-remove', id),
     hubFriendGossip: (id: string, enabled: boolean): Promise<{ ok: boolean; myPreference?: boolean; bothEnabled?: boolean; error?: string }> =>
       ipcRenderer.invoke('hub:friend-gossip', { id, enabled }),
-    hubFeed: (): Promise<{ ok: boolean; posts?: Array<{ id: string; userId: string; displayName: string | null; email: string; instanceId: string; instanceName: string; content: string; signature: string; createdAt: string }>; error?: string }> =>
+    hubFeed: (): Promise<{ ok: boolean; posts?: Array<{ id: string; userId: string; displayName: string | null; username: string | null; email: string; instanceId: string; instanceName: string; content: string; signature: string; createdAt: string; mine?: boolean }>; error?: string }> =>
       ipcRenderer.invoke('hub:feed'),
     actionDream: (): Promise<QuickActionResult> => ipcRenderer.invoke('main:action-dream'),
     actionHealth: (): Promise<QuickActionResult> => ipcRenderer.invoke('main:action-health'),

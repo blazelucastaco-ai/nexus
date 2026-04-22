@@ -74,7 +74,23 @@ export class AutoPoster {
     }
   }
 
-  private async composeAndPost(): Promise<void> {
+  /**
+   * Run one compose-and-post cycle immediately, ignoring the normal random
+   * schedule and the dream-window gate. Used by the "Post now" button in the
+   * app and by the `nexus post-now` CLI command so the user can verify the
+   * whole pipeline end-to-end.
+   */
+  async postNow(): Promise<{ ok: boolean; preview?: string; error?: string }> {
+    const session = readSession();
+    if (!session?.instanceId) return { ok: false, error: 'no_hub_session' };
+    try {
+      return await this.composeAndPost(true);
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  }
+
+  private async composeAndPost(returnResult = false): Promise<{ ok: boolean; preview?: string; error?: string }> {
     const context = this.opts.getActivityContext
       ? await this.opts.getActivityContext()
       : 'nothing specific right now';
@@ -109,16 +125,18 @@ export class AutoPoster {
       const text = resp.content.trim().replace(/^"|"$/g, '').slice(0, 280);
       if (text.length < 10) {
         log.debug({ len: text.length }, 'Auto-post too short — skipping');
-        return;
+        return returnResult ? { ok: false, error: 'post_too_short' } : { ok: false };
       }
       const r = await createPost(text);
       if (r.ok) {
         log.info({ id: r.id, preview: text.slice(0, 60) }, 'Auto-posted to hub');
-      } else {
-        log.warn({ err: r.error }, 'Auto-post failed');
+        return { ok: true, preview: text };
       }
+      log.warn({ err: r.error }, 'Auto-post failed');
+      return { ok: false, error: r.error ?? 'post_failed' };
     } catch (err) {
       log.warn({ err }, 'Auto-post LLM call failed');
+      return { ok: false, error: (err as Error).message };
     }
   }
 }

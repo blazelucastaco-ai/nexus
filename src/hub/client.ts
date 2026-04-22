@@ -151,9 +151,11 @@ export async function createPost(content: string): Promise<{ ok: boolean; id?: s
   const signature = await signPost(content, createdAt, session.instanceId, session.email);
   if (!signature) return { ok: false, error: 'sign_failed' };
 
+  // Send createdAt so the hub verifies the signature against the exact same
+  // canonical string we signed. Without this, clock drift breaks signing.
   const r = await fetchWithAuth('/posts', {
     method: 'POST',
-    body: { instanceId: session.instanceId, content, signature },
+    body: { instanceId: session.instanceId, content, signature, createdAt },
   });
   if (!r.ok) return { ok: false, error: r.error };
   return { ok: true, id: r.data?.id };

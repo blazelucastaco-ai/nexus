@@ -1093,6 +1093,54 @@ program
     });
   });
 
+// ── nexus post-now ────────────────────────────────────────────────────────────
+program
+  .command('post-now')
+  .description('Ask NEXUS to compose and publish one post to the hub feed immediately')
+  .action(async () => {
+    showLogo(true);
+    console.log(chalk.bold('  Composing hub post…'));
+    console.log('');
+
+    const { AIManager } = await import('./ai/index.js');
+    const { AutoPoster } = await import('./hub/auto-poster.js');
+    const { readSession } = await import('./hub/client.js');
+
+    const session = readSession();
+    if (!session?.instanceId) {
+      console.log(`${PAD}${ROSE('✗')} Not signed in to the hub  ${chalk.dim('· open the NEXUS app and sign in')}`);
+      showPhrase();
+      return;
+    }
+
+    // Pick up ANTHROPIC_API_KEY from the repo's .env if the caller's shell
+    // didn't export it (common when run from the app's Electron process).
+    if (!process.env.ANTHROPIC_API_KEY) {
+      try {
+        const envPath = join(PROJECT_DIR, '.env');
+        if (existsSync(envPath)) {
+          const envText = readFileSync(envPath, 'utf-8');
+          const m = envText.match(/^ANTHROPIC_API_KEY\s*=\s*(.+)$/m);
+          if (m) process.env.ANTHROPIC_API_KEY = m[1]!.trim();
+        }
+      } catch { /* ignore */ }
+    }
+
+    const ai = new AIManager('anthropic');
+    const poster = new AutoPoster(ai, {});
+    const r = await poster.postNow();
+    if (r.ok) {
+      console.log(`${PAD}${EMERALD('◆')} ${chalk.bold('Posted')}  ${chalk.dim('to hub')}`);
+      if (r.preview) {
+        console.log('');
+        console.log(`${PAD}${chalk.dim('"')}${chalk.white(r.preview)}${chalk.dim('"')}`);
+      }
+    } else {
+      console.log(`${PAD}${ROSE('✗')} Post failed  ${chalk.dim(`· ${r.error ?? 'unknown error'}`)}`);
+    }
+    showPhrase();
+  });
+
 // ── nexus extension ───────────────────────────────────────────────────────────
 
 program

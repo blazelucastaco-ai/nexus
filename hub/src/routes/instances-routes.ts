@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { getDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
-import { writeAudit, hashIp } from '../auth.js';
+import { writeAudit, hashIp, validateUsername } from '../auth.js';
 
 // Ed25519 public key as 64-hex-char string.
 const PUBKEY_RE = /^[0-9a-f]{64}$/;
@@ -26,11 +26,29 @@ export async function instancesRoutes(app: FastifyInstance): Promise<void> {
   // ── GET /me — who am I? ──────────────────────────────────────────
   app.get('/me', async (req, reply) => {
     const db = getDb();
-    const row = db.prepare('SELECT id, email, display_name, created_at FROM users WHERE id = ?').get(req.userId!) as
-      | { id: string; email: string; display_name: string | null; created_at: string }
+    const row = db.prepare('SELECT id, email, display_name, username, created_at FROM users WHERE id = ?').get(req.userId!) as
+      | { id: string; email: string; display_name: string | null; username: string | null; created_at: string }
       | undefined;
     if (!row) return reply.code(404).send({ error: 'not_found' });
-    return { id: row.id, email: row.email, displayName: row.display_name, createdAt: row.created_at };
+    return {
+      id: row.id, email: row.email,
+      displayName: row.display_name, username: row.username, createdAt: row.created_at,
+    };
+  });
+
+  // ── POST /me/username — claim or change a handle ─────────────────
+  // Separated from signup so existing users can pick a username later.
+  app.post<{ Body: { username: unknown } }>('/me/username', async (req, reply) => {
+    const u = (req.body as { username?: unknown } | null)?.username;
+    if (!validateUsername(u)) return reply.code(400).send({ error: 'invalid_username' });
+    const db = getDb();
+    const usernameLower = (u as string).toLowerCase();
+    const taken = db.prepare('SELECT id FROM users WHERE username_lower = ? AND id != ?')
+      .get(usernameLower, req.userId!) as { id: string } | undefined;
+    if (taken) return reply.code(400).send({ error: 'username_taken' });
+    db.prepare('UPDATE users SET username = ?, username_lower = ? WHERE id = ?')
+      .run(u, usernameLower, req.userId!);
+    return { ok: true, username: u };
   });
 
   // ── GET /instances — all NEXUS installs tied to this account ──────

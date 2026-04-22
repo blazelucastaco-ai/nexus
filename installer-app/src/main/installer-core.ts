@@ -1170,6 +1170,14 @@ export async function triggerDream(): Promise<{ ok: boolean; output: string }> {
   return runNexusCli(['dream'], 180_000);
 }
 
+/**
+ * Ask NEXUS to compose and publish one hub post right now (bypasses the
+ * normal 3-8h random schedule). Used by the "Post now" button in Friends tab.
+ */
+export async function triggerHubPost(): Promise<{ ok: boolean; output: string }> {
+  return runNexusCli(['post-now'], 120_000);
+}
+
 export async function runHealthCheck(): Promise<{ ok: boolean; output: string }> {
   return runNexusCli(['health']);
 }
@@ -1187,7 +1195,11 @@ export interface DetectedMemorySource {
 export interface MemoryImportResult {
   imported: number;
   skipped: number;
+  skillsWritten?: number;
   sources: Record<string, number>;
+  llmUsed?: boolean;
+  /** Sources that were selected but already imported on a previous run — skipped. */
+  alreadyImported?: string[];
 }
 
 /**
@@ -1275,7 +1287,7 @@ export async function runMemoryImport(
   sourceIds: string[],
   onProgress?: MemoryImportProgressCb,
 ): Promise<MemoryImportResult> {
-  const zero: MemoryImportResult = { imported: 0, skipped: 0, sources: {} };
+  const zero: MemoryImportResult = { imported: 0, skipped: 0, sources: {}, alreadyImported: [] };
   if (!Array.isArray(sourceIds) || sourceIds.length === 0) return zero;
   const safeIds = new Set(['claude-code', 'openai-codex', 'gemini-cli', 'cursor']);
   const filtered = sourceIds.filter((id) => safeIds.has(id));
@@ -1362,6 +1374,7 @@ export interface HubSignupInput {
   email: string;
   password: string;
   displayName: string;
+  username?: string;
 }
 
 export interface HubLoginInput {
@@ -1373,6 +1386,7 @@ export interface HubSessionView {
   userId: string;
   email: string;
   displayName: string;
+  username?: string | null;
   hubUrl: string;
   instanceId?: string;
 }
@@ -1444,7 +1458,7 @@ function extractRefreshCookie(setCookies: string[] | undefined): string | null {
 }
 
 export async function hubSignup(input: HubSignupInput): Promise<{ ok: boolean; session?: HubSessionView; error?: string }> {
-  const r = await hubFetch<{ user: { id: string; email: string; displayName: string }; accessToken: string }>(
+  const r = await hubFetch<{ user: { id: string; email: string; displayName: string; username: string | null }; accessToken: string }>(
     '/auth/signup',
     { method: 'POST', body: input },
   );
@@ -1452,10 +1466,11 @@ export async function hubSignup(input: HubSignupInput): Promise<{ ok: boolean; s
   const refresh = extractRefreshCookie(r.cookies);
   if (!refresh) return { ok: false, error: 'no_refresh_cookie' };
   await persistSession(input.email, r.data.accessToken, refresh);
-  const session = {
+  const session: HubSessionView = {
     userId: r.data.user.id,
     email: r.data.user.email,
     displayName: r.data.user.displayName,
+    username: r.data.user.username ?? null,
     hubUrl: HUB_URL,
   };
   writeHubSessionMarker(session);
@@ -1463,7 +1478,7 @@ export async function hubSignup(input: HubSignupInput): Promise<{ ok: boolean; s
 }
 
 export async function hubLogin(input: HubLoginInput): Promise<{ ok: boolean; session?: HubSessionView; error?: string }> {
-  const r = await hubFetch<{ user: { id: string; email: string; displayName: string }; accessToken: string }>(
+  const r = await hubFetch<{ user: { id: string; email: string; displayName: string; username: string | null }; accessToken: string }>(
     '/auth/login',
     { method: 'POST', body: input },
   );
@@ -1471,14 +1486,34 @@ export async function hubLogin(input: HubLoginInput): Promise<{ ok: boolean; ses
   const refresh = extractRefreshCookie(r.cookies);
   if (!refresh) return { ok: false, error: 'no_refresh_cookie' };
   await persistSession(input.email, r.data.accessToken, refresh);
-  const session = {
+  const session: HubSessionView = {
     userId: r.data.user.id,
     email: r.data.user.email,
     displayName: r.data.user.displayName,
+    username: r.data.user.username ?? null,
     hubUrl: HUB_URL,
   };
   writeHubSessionMarker(session);
   return { ok: true, session };
+}
+
+/**
+ * Set or change the username on the authenticated account. Returns the new
+ * username on success, or an error code ('username_taken' | 'invalid_username'
+ * | 'not_logged_in' | etc.) that the UI surfaces verbatim.
+ */
+export async function hubSetUsername(username: string): Promise<{ ok: boolean; username?: string; error?: string }> {
+  const token = await currentAccessToken();
+  if (!token) return { ok: false, error: 'not_logged_in' };
+  const r = await hubFetch<{ ok: boolean; username: string }>(
+    '/me/username',
+    { method: 'POST', body: { username }, accessToken: token },
+  );
+  if (!r.ok || !r.data) return { ok: false, error: r.error };
+  // Refresh the session marker so the renderer sees the new username.
+  const existing = readHubSessionMarker();
+  if (existing) writeHubSessionMarker({ ...existing, username: r.data.username });
+  return { ok: true, username: r.data.username };
 }
 
 async function persistSession(email: string, accessToken: string, refreshToken: string): Promise<void> {
@@ -1494,7 +1529,7 @@ async function persistSession(email: string, accessToken: string, refreshToken: 
  */
 const HUB_SESSION_FILE = join(NEXUS_DIR, 'hub-session.json');
 
-function writeHubSessionMarker(session: { userId: string; email: string; displayName: string; hubUrl: string; instanceId?: string }): void {
+function writeHubSessionMarker(session: { userId: string; email: string; displayName: string; username?: string | null; hubUrl: string; instanceId?: string }): void {
   mkdirSync(NEXUS_DIR, { recursive: true });
   writeFileSync(
     HUB_SESSION_FILE,
@@ -1502,12 +1537,45 @@ function writeHubSessionMarker(session: { userId: string; email: string; display
       userId: session.userId,
       email: session.email,
       displayName: session.displayName,
+      username: session.username ?? null,
       hubUrl: session.hubUrl,
       instanceId: session.instanceId ?? null,
       signedInAt: new Date().toISOString(),
     }, null, 2) + '\n',
     'utf-8',
   );
+}
+
+function readHubSessionMarker(): HubSessionView | null {
+  try {
+    const raw = readFileSync(HUB_SESSION_FILE, 'utf-8');
+    const j = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof j.userId !== 'string' || typeof j.email !== 'string') return null;
+    return {
+      userId: j.userId,
+      email: j.email,
+      displayName: typeof j.displayName === 'string' ? j.displayName : '',
+      username: typeof j.username === 'string' ? j.username : null,
+      hubUrl: typeof j.hubUrl === 'string' ? j.hubUrl : HUB_URL,
+      instanceId: typeof j.instanceId === 'string' ? j.instanceId : undefined,
+    };
+  } catch { return null; }
+}
+
+async function currentAccessToken(): Promise<string | null> {
+  const email = await keychainGet('active-email');
+  if (!email) return null;
+  const access = await keychainGet(`access:${email}`);
+  const refresh = await keychainGet(`refresh:${email}`);
+  if (!access || !refresh) return null;
+  const refreshed = await hubFetch<{ accessToken: string }>('/auth/refresh', {
+    method: 'POST', refreshCookie: refresh,
+  });
+  if (refreshed.ok && refreshed.data) {
+    await keychainSet(`access:${email}`, refreshed.data.accessToken);
+    return refreshed.data.accessToken;
+  }
+  return access;
 }
 
 function clearHubSessionMarker(): void {
@@ -1545,13 +1613,14 @@ export async function hubActiveSession(): Promise<HubSessionView | null> {
   });
   const token = refreshed.ok && refreshed.data ? refreshed.data.accessToken : access;
   if (refreshed.ok && refreshed.data) await keychainSet(`access:${email}`, refreshed.data.accessToken);
-  const me = await hubFetch<{ id: string; email: string; displayName: string }>('/me', { accessToken: token });
+  const me = await hubFetch<{ id: string; email: string; displayName: string; username: string | null }>('/me', { accessToken: token });
   if (!me.ok || !me.data) return null;
   const instanceId = (await keychainGet(`instance-id:${email}`)) ?? undefined;
   return {
     userId: me.data.id,
     email: me.data.email,
     displayName: me.data.displayName,
+    username: me.data.username,
     hubUrl: HUB_URL,
     instanceId,
   };
@@ -1658,6 +1727,7 @@ export interface HubFriend {
   id: string;
   otherUserId: string;
   email: string;
+  username: string | null;
   displayName: string | null;
   state: 'pending' | 'accepted' | 'blocked';
   requestedByMe: boolean;
@@ -1686,9 +1756,28 @@ export async function hubFriendsList(): Promise<{ ok: boolean; friends?: HubFrie
   return { ok: true, friends: r.data.friends };
 }
 
-export async function hubFriendRequest(email: string): Promise<{ ok: boolean; id?: string; state?: string; error?: string }> {
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return { ok: false, error: 'invalid_email' };
-  const r = await hubAuthedFetch<{ id: string; state: string }>('/friends/request', { method: 'POST', body: { email } });
+const USERNAME_RE = /^[a-z][a-z0-9_-]{2,23}$/;
+
+/**
+ * Send a friend request by either email or username. We sniff the input:
+ * anything with an @ goes through as email, otherwise we treat it as a
+ * username handle. The hub returns the same 404 either way so accounts
+ * cannot be enumerated.
+ */
+export async function hubFriendRequest(identifier: string): Promise<{ ok: boolean; id?: string; state?: string; error?: string }> {
+  const trimmed = identifier.trim();
+  const looksLikeEmail = trimmed.includes('@');
+  if (looksLikeEmail) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed) || trimmed.length > 254) {
+      return { ok: false, error: 'invalid_email' };
+    }
+    const r = await hubAuthedFetch<{ id: string; state: string }>('/friends/request', { method: 'POST', body: { email: trimmed } });
+    if (!r.ok || !r.data) return { ok: false, error: r.error };
+    return { ok: true, id: r.data.id, state: r.data.state };
+  }
+  const username = trimmed.toLowerCase();
+  if (!USERNAME_RE.test(username)) return { ok: false, error: 'invalid_username' };
+  const r = await hubAuthedFetch<{ id: string; state: string }>('/friends/request', { method: 'POST', body: { username } });
   if (!r.ok || !r.data) return { ok: false, error: r.error };
   return { ok: true, id: r.data.id, state: r.data.state };
 }
@@ -1724,12 +1813,14 @@ export interface HubFeedPost {
   id: string;
   userId: string;
   displayName: string | null;
+  username: string | null;
   email: string;
   instanceId: string;
   instanceName: string;
   content: string;
   signature: string;
   createdAt: string;
+  mine?: boolean;
 }
 
 export async function hubFeed(): Promise<{ ok: boolean; posts?: HubFeedPost[]; error?: string }> {

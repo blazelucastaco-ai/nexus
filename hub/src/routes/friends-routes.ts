@@ -9,9 +9,15 @@ import { getDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { writeAudit } from '../auth.js';
 
+// Accept either an email or a username — at least one must be present.
+// We don't make the client pick a field; whichever they supply we look up.
 const RequestBody = z.object({
-  email: z.string().max(254).refine((s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s), 'invalid email'),
-});
+  email: z.string().max(254).optional(),
+  username: z.string().max(64).optional(),
+}).refine(
+  (v) => Boolean(v.email) || Boolean(v.username),
+  { message: 'email_or_username_required' },
+);
 
 /** Always produce the (a,b) pair in the same order for storage. */
 function orderedPair(u1: string, u2: string): [string, string] {
@@ -30,12 +36,14 @@ interface FriendRow {
   other_id: string;
   other_email: string;
   other_display_name: string | null;
+  other_username: string | null;
 }
 
 function listFriendsFor(userId: string): Array<{
   id: string;
   otherUserId: string;
   email: string;
+  username: string | null;
   displayName: string | null;
   state: FriendRow['state'];
   requestedByMe: boolean;
@@ -48,18 +56,20 @@ function listFriendsFor(userId: string): Array<{
     SELECT f.*,
       CASE WHEN f.user_a_id = ? THEN f.user_b_id ELSE f.user_a_id END as other_id,
       CASE WHEN f.user_a_id = ? THEN ub.email ELSE ua.email END as other_email,
+      CASE WHEN f.user_a_id = ? THEN ub.username ELSE ua.username END as other_username,
       CASE WHEN f.user_a_id = ? THEN ub.display_name ELSE ua.display_name END as other_display_name
     FROM friendships f
     JOIN users ua ON ua.id = f.user_a_id
     JOIN users ub ON ub.id = f.user_b_id
     WHERE f.user_a_id = ? OR f.user_b_id = ?
     ORDER BY f.updated_at DESC
-  `).all(userId, userId, userId, userId, userId) as FriendRow[];
+  `).all(userId, userId, userId, userId, userId, userId) as FriendRow[];
 
   return rows.map((r) => ({
     id: r.id,
     otherUserId: r.other_id,
     email: r.other_email,
+    username: r.other_username,
     displayName: r.other_display_name,
     state: r.state,
     requestedByMe: r.requested_by === userId,
@@ -83,8 +93,17 @@ export async function friendsRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) return reply.code(400).send({ error: 'invalid_input' });
 
     const db = getDb();
-    const target = db.prepare('SELECT id FROM users WHERE email_lower = ?')
-      .get(parsed.data.email.toLowerCase()) as { id: string } | undefined;
+    let target: { id: string } | undefined;
+    if (parsed.data.username) {
+      target = db.prepare('SELECT id FROM users WHERE username_lower = ?')
+        .get(parsed.data.username.toLowerCase()) as { id: string } | undefined;
+    } else if (parsed.data.email) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(parsed.data.email)) {
+        return reply.code(400).send({ error: 'invalid_input' });
+      }
+      target = db.prepare('SELECT id FROM users WHERE email_lower = ?')
+        .get(parsed.data.email.toLowerCase()) as { id: string } | undefined;
+    }
     // Deliberately return the same 404 whether the user doesn't exist or you're
     // blocked — prevents account enumeration via friend-request probes.
     if (!target) return reply.code(404).send({ error: 'not_found' });

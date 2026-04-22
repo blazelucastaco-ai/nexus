@@ -902,10 +902,11 @@ export function AccountStep(props: { onNext: () => void; onBack: () => void }): 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
+  const [username, setUsername] = useState('');
   const [instanceName, setInstanceName] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [session, setSession] = useState<{ userId: string; email: string; displayName: string; hubUrl: string; instanceId?: string } | null>(null);
+  const [session, setSession] = useState<{ userId: string; email: string; displayName: string; username?: string | null; hubUrl: string; instanceId?: string } | null>(null);
 
   // On mount, pre-populate if the user is already signed in on this Mac.
   useEffect(() => {
@@ -925,6 +926,8 @@ export function AccountStep(props: { onNext: () => void; onBack: () => void }): 
       case 'signup_unavailable': return 'Could not create the account. Try signing in instead.';
       case 'account_locked': return 'Too many failed attempts. Wait 15 minutes and try again.';
       case 'invalid_input': return 'Email needs to be valid and password at least 8 characters.';
+      case 'invalid_username': return 'Username must be 3-24 chars, start with a letter, then letters / digits / _ / -.';
+      case 'username_taken': return 'That username is already in use — try another.';
       case 'no_refresh_cookie': return 'Hub responded oddly — try again.';
       default:
         return code?.startsWith('network_error')
@@ -937,7 +940,17 @@ export function AccountStep(props: { onNext: () => void; onBack: () => void }): 
     setError(null);
     setSubmitting(true);
     try {
-      const r = await window.nexus.main.hubSignup({ email, password, displayName });
+      // Username is optional during signup — user can always claim one later
+      // from the Friends tab. If provided, validate here so we fail fast.
+      const trimmedUsername = username.trim().toLowerCase();
+      if (trimmedUsername && !/^[a-z][a-z0-9_-]{2,23}$/.test(trimmedUsername)) {
+        setError(readableError('invalid_username'));
+        return;
+      }
+      const r = await window.nexus.main.hubSignup({
+        email, password, displayName,
+        ...(trimmedUsername ? { username: trimmedUsername } : {}),
+      });
       if (!r.ok || !r.session) { setError(readableError(r.error)); return; }
       const reg = await window.nexus.main.hubRegisterInstance(instanceName || 'This Mac');
       setSession({ ...r.session, instanceId: reg.instanceId });
@@ -994,17 +1007,30 @@ export function AccountStep(props: { onNext: () => void; onBack: () => void }): 
       {(mode === 'signup' || mode === 'login') && (
         <div style={{ maxWidth: 420, marginTop: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
           {mode === 'signup' && (
-            <label className="field">
-              <span className="field-label">Display name</span>
-              <input
-                type="text"
-                className="field-input"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="Lucas"
-                maxLength={64}
-              />
-            </label>
+            <>
+              <label className="field">
+                <span className="field-label">Display name</span>
+                <input
+                  type="text"
+                  className="field-input"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  placeholder="Lucas"
+                  maxLength={64}
+                />
+              </label>
+              <label className="field">
+                <span className="field-label">Username <span className="subtle" style={{ fontWeight: 400 }}>(optional — friends add you by this)</span></span>
+                <input
+                  type="text"
+                  className="field-input"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value.toLowerCase())}
+                  placeholder="lucas"
+                  maxLength={24}
+                />
+              </label>
+            </>
           )}
           <label className="field">
             <span className="field-label">Email</span>
@@ -1115,6 +1141,7 @@ interface ImportResultView {
   skillsWritten?: number;
   sources: Record<string, number>;
   llmUsed?: boolean;
+  alreadyImported?: string[];
 }
 
 export function MemoryImportStep(props: { onNext: () => void; onBack: () => void }): JSX.Element {
@@ -1260,30 +1287,47 @@ export function MemoryImportStep(props: { onNext: () => void; onBack: () => void
         </div>
       )}
 
-      {result && (
-        <div className="card" style={{ marginTop: 18, borderColor: '#A8C49F' }}>
-          <h3 style={{ marginTop: 0, marginBottom: 8 }}>
-            {result.llmUsed ? 'NEXUS read it and wrote its own memory' : 'Imported'}
-          </h3>
-          <p className="subtle" style={{ margin: '0 0 8px' }}>
-            {result.imported} memor{result.imported === 1 ? 'y' : 'ies'}
-            {result.skillsWritten ? ` + ${result.skillsWritten} skill${result.skillsWritten === 1 ? '' : 's'}` : ''}
-            {result.skipped > 0 ? ` · ${result.skipped} already present` : ''}
-          </p>
-          {Object.entries(result.sources).length > 0 && (
-            <ul className="subtle" style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.7 }}>
-              {Object.entries(result.sources).map(([src, n]) => (
-                <li key={src}><code>{src}</code>: {n}</li>
-              ))}
-            </ul>
-          )}
-          <p className="subtle" style={{ marginTop: 12, marginBottom: 0 }}>
-            {result.llmUsed
-              ? 'Synthesized memories are live. Skills were written to ~/.nexus/skills/ and will load on next restart.'
-              : 'NEXUS will surface these automatically in future conversations.'}
-          </p>
-        </div>
-      )}
+      {result && (() => {
+        const already = result.alreadyImported ?? [];
+        const didNothing = result.imported === 0 && already.length > 0;
+        const headline = didNothing
+          ? 'Already merged'
+          : result.llmUsed
+            ? 'NEXUS read it and wrote its own memory'
+            : 'Imported';
+        return (
+          <div className="card" style={{ marginTop: 18, borderColor: '#A8C49F' }}>
+            <h3 style={{ marginTop: 0, marginBottom: 8 }}>{headline}</h3>
+            {didNothing ? (
+              <p className="subtle" style={{ margin: '0 0 8px' }}>
+                {already.join(', ')} {already.length === 1 ? 'was' : 'were'} already imported
+                on a previous run. Re-running would have duplicated work — skipped.
+              </p>
+            ) : (
+              <p className="subtle" style={{ margin: '0 0 8px' }}>
+                {result.imported} memor{result.imported === 1 ? 'y' : 'ies'}
+                {result.skillsWritten ? ` + ${result.skillsWritten} skill${result.skillsWritten === 1 ? '' : 's'}` : ''}
+                {result.skipped > 0 ? ` · ${result.skipped} already present` : ''}
+                {already.length > 0 ? ` · ${already.join(', ')} skipped (already imported)` : ''}
+              </p>
+            )}
+            {Object.entries(result.sources).length > 0 && (
+              <ul className="subtle" style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.7 }}>
+                {Object.entries(result.sources).map(([src, n]) => (
+                  <li key={src}><code>{src}</code>: {n}</li>
+                ))}
+              </ul>
+            )}
+            <p className="subtle" style={{ marginTop: 12, marginBottom: 0 }}>
+              {didNothing
+                ? 'Your memory is unchanged. You can manage imported items from the Memory tab.'
+                : result.llmUsed
+                  ? 'Synthesized memories are live. Skills were written to ~/.nexus/skills/ and will load on next restart.'
+                  : 'NEXUS will surface these automatically in future conversations.'}
+            </p>
+          </div>
+        );
+      })()}
 
       <div className="btn-row" style={{ marginTop: 28 }}>
         <button type="button" className="btn-g" onClick={props.onBack} disabled={running}>← Back</button>

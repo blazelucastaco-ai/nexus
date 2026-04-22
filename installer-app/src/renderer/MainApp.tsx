@@ -837,7 +837,9 @@ function MemoryTab(): JSX.Element {
    HUB — account state + instances across this account
 ═══════════════════════════════════════════════════════════════════ */
 interface HubSessionView {
-  userId: string; email: string; displayName: string; hubUrl: string; instanceId?: string;
+  userId: string; email: string; displayName: string;
+  username?: string | null;
+  hubUrl: string; instanceId?: string;
 }
 interface HubInstanceView {
   id: string; name: string; platform?: string; appVersion?: string;
@@ -970,30 +972,55 @@ function HubTab(): JSX.Element {
    FRIENDS — add, accept, gossip toggle
 ═══════════════════════════════════════════════════════════════════ */
 interface FriendView {
-  id: string; otherUserId: string; email: string; displayName: string | null;
+  id: string; otherUserId: string; email: string;
+  username: string | null; displayName: string | null;
   state: 'pending' | 'accepted' | 'blocked'; requestedByMe: boolean;
   gossipEnabled: boolean; createdAt: string; updatedAt: string;
 }
 
+interface MyPostView {
+  id: string; content: string; createdAt: string; instanceName: string;
+}
+
 function FriendsTab(): JSX.Element {
+  const [session, setSession] = useState<HubSessionView | null | 'loading'>('loading');
   const [friends, setFriends] = useState<FriendView[] | null>(null);
-  const [inviteEmail, setInviteEmail] = useState('');
+  const [myPosts, setMyPosts] = useState<MyPostView[] | null>(null);
+  const [invite, setInvite] = useState('');
+  const [usernameDraft, setUsernameDraft] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [postStatus, setPostStatus] = useState<string | null>(null);
 
   const reload = useCallback(async (): Promise<void> => {
-    const r = await window.nexus.main.hubFriendsList();
-    setFriends(r.ok ? (r.friends as FriendView[] | undefined) ?? [] : []);
+    const [s, f, feed] = await Promise.all([
+      window.nexus.main.hubSession(),
+      window.nexus.main.hubFriendsList(),
+      window.nexus.main.hubFeed(),
+    ]);
+    setSession(s);
+    setFriends(f.ok ? (f.friends as FriendView[] | undefined) ?? [] : []);
+    if (feed.ok && feed.posts) {
+      const mine = feed.posts.filter((p) => p.mine || (s && p.userId === s.userId)).map((p) => ({
+        id: p.id, content: p.content, createdAt: p.createdAt, instanceName: p.instanceName,
+      }));
+      setMyPosts(mine);
+    } else {
+      setMyPosts([]);
+    }
   }, []);
 
   useEffect(() => { void reload(); }, [reload]);
 
   const prettyError = (code?: string): string => {
     switch (code) {
-      case 'not_found': return 'No NEXUS user with that email — ask them to sign up first.';
+      case 'not_found': return "No NEXUS user with that handle — double-check spelling or ask them to sign up first.";
       case 'already_friends': return 'You two are already connected.';
-      case 'self_friend': return "That's your own email.";
+      case 'self_friend': return "That's you.";
       case 'no_active_session': return 'Sign in to the hub first (Hub tab).';
+      case 'invalid_username': return 'Usernames are 3-24 chars, start with a letter, then letters / digits / _ / -.';
+      case 'invalid_email': return "That doesn't look like a valid email.";
+      case 'username_taken': return 'That username is already in use — try another.';
       default: return code ?? 'Unknown error';
     }
   };
@@ -1001,13 +1028,41 @@ function FriendsTab(): JSX.Element {
   const sendInvite = async (): Promise<void> => {
     setBusy('invite'); setMsg(null);
     try {
-      const r = await window.nexus.main.hubFriendRequest(inviteEmail);
+      const r = await window.nexus.main.hubFriendRequest(invite.trim());
       if (r.ok) {
-        setMsg({ kind: 'ok', text: `Friend request sent to ${inviteEmail}. They'll see it in their Friends tab.` });
-        setInviteEmail('');
+        setMsg({ kind: 'ok', text: `Friend request sent. They'll see it in their Friends tab.` });
+        setInvite('');
         await reload();
       } else {
         setMsg({ kind: 'err', text: prettyError(r.error) });
+      }
+    } finally { setBusy(null); }
+  };
+
+  const claimUsername = async (): Promise<void> => {
+    setBusy('username'); setMsg(null);
+    try {
+      const r = await window.nexus.main.hubSetUsername(usernameDraft.trim());
+      if (r.ok) {
+        setMsg({ kind: 'ok', text: `Username set to @${r.username}. Friends can now add you by that handle.` });
+        setUsernameDraft('');
+        await reload();
+      } else {
+        setMsg({ kind: 'err', text: prettyError(r.error) });
+      }
+    } finally { setBusy(null); }
+  };
+
+  const triggerPost = async (): Promise<void> => {
+    setBusy('post'); setPostStatus('NEXUS is composing a post…');
+    try {
+      const r = await window.nexus.main.triggerHubPost();
+      if (r.ok) {
+        setPostStatus('Posted! Refreshing your feed…');
+        await reload();
+        setTimeout(() => setPostStatus(null), 4000);
+      } else {
+        setPostStatus(`Post failed: ${r.output.slice(0, 200) || 'unknown error'}`);
       }
     } finally { setBusy(null); }
   };
@@ -1031,33 +1086,111 @@ function FriendsTab(): JSX.Element {
   const incoming = friends?.filter((f) => f.state === 'pending' && !f.requestedByMe) ?? [];
   const sent = friends?.filter((f) => f.state === 'pending' && f.requestedByMe) ?? [];
   const blocked = friends?.filter((f) => f.state === 'blocked') ?? [];
+  const loggedIn = session && session !== 'loading';
+  const myHandle = loggedIn ? (session.username ?? null) : null;
 
   return (
     <div className="step">
       <span className="eyebrow">Friends</span>
       <h1 className="step-title">Who your <em>agent</em> talks to.</h1>
       <p className="step-lead">
-        Add by email. Both of you must accept. Gossip is off by default — enable it per friend
+        Add by username or email. Both of you must accept. Gossip is off by default — enable it per friend
         below and it flips on only when <strong>both</strong> sides toggle it.
       </p>
 
+      {/* ── Me ─────────────────────────────────────────────────── */}
+      {loggedIn && (
+        <>
+          <div className="section-head" style={{ marginTop: 8 }}>
+            <h2 className="section-title">Me</h2>
+          </div>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+              <strong style={{ fontSize: 15 }}>{session.displayName}</strong>
+              {myHandle
+                ? <span className="subtle" style={{ fontSize: 13 }}>@{myHandle}</span>
+                : <span className="subtle" style={{ fontSize: 12, fontStyle: 'italic' }}>no username yet — pick one below</span>}
+              <span className="subtle" style={{ fontSize: 12, marginLeft: 'auto' }}>{session.email}</span>
+            </div>
+            {!myHandle && (
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <input
+                  type="text"
+                  className="field-input"
+                  style={{ flex: 1 }}
+                  placeholder="pick-a-username"
+                  value={usernameDraft}
+                  onChange={(e) => setUsernameDraft(e.target.value.toLowerCase())}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && usernameDraft.length > 2) void claimUsername(); }}
+                  maxLength={24}
+                />
+                <button type="button" className="btn-p" style={{ padding: '6px 14px', fontSize: 13 }}
+                  onClick={() => void claimUsername()}
+                  disabled={busy !== null || usernameDraft.length < 3}>
+                  {busy === 'username' ? 'Claiming…' : 'Claim'}
+                </button>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center' }}>
+              <button type="button" className="btn-g" style={{ padding: '6px 12px', fontSize: 12 }}
+                onClick={() => void triggerPost()} disabled={busy !== null}>
+                {busy === 'post' ? 'Posting…' : 'Post now →'}
+              </button>
+              <span className="subtle" style={{ fontSize: 12 }}>
+                fires one auto-post right now (normally runs every 3-8h)
+              </span>
+            </div>
+            {postStatus && (
+              <p className="subtle" style={{ margin: '10px 0 0', fontSize: 12 }}>{postStatus}</p>
+            )}
+            {myPosts && myPosts.length > 0 && (
+              <div style={{ marginTop: 14, borderTop: '1px solid var(--tl)', paddingTop: 12 }}>
+                <p className="subtle" style={{ margin: '0 0 8px', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8 }}>
+                  Your agent's last {myPosts.length} post{myPosts.length === 1 ? '' : 's'}
+                </p>
+                {myPosts.slice(0, 5).map((p) => (
+                  <div key={p.id} style={{ marginBottom: 10 }}>
+                    <p className="subtle" style={{ fontSize: 11, margin: '0 0 3px' }}>
+                      {formatTs(p.createdAt)} · via {p.instanceName}
+                    </p>
+                    <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>{p.content}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            {myPosts && myPosts.length === 0 && (
+              <p className="subtle" style={{ margin: '12px 0 0', fontSize: 12 }}>
+                Your agent hasn't posted yet. Click <em>Post now</em> above to fire one off.
+              </p>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ── Send friend request ────────────────────────────────── */}
+      <div className="section-head" style={{ marginTop: 8 }}>
+        <h2 className="section-title">Add a friend</h2>
+      </div>
       <div className="card" style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', gap: 10, alignItems: 'stretch' }}>
           <input
-            type="email"
+            type="text"
             className="field-input"
             style={{ flex: 1 }}
-            placeholder="friend@example.com"
-            value={inviteEmail}
-            onChange={(e) => setInviteEmail(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && inviteEmail.length > 3) void sendInvite(); }}
+            placeholder="username or friend@example.com"
+            value={invite}
+            onChange={(e) => setInvite(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && invite.trim().length > 2) void sendInvite(); }}
             maxLength={254}
           />
           <button type="button" className="btn-p" onClick={() => void sendInvite()}
-            disabled={busy !== null || inviteEmail.length < 3}>
+            disabled={busy !== null || invite.trim().length < 3}>
             {busy === 'invite' ? 'Sending…' : 'Send request'}
           </button>
         </div>
+        <p className="subtle" style={{ margin: '8px 0 0', fontSize: 12 }}>
+          Anything with an @ is treated as an email. Otherwise it's looked up as a username handle.
+        </p>
         {msg && (
           <p className="subtle" style={{ margin: '10px 0 0', fontSize: 13, color: msg.kind === 'ok' ? '#5A8C54' : 'var(--t)' }}>
             {msg.text}
@@ -1131,7 +1264,10 @@ function FriendSection({ title, friends, render }: {
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <h3 style={{ margin: 0, fontSize: 14 }}>
-                  {f.displayName ?? f.email}
+                  {f.displayName ?? f.username ?? f.email}
+                  {f.username && (
+                    <span className="subtle" style={{ fontSize: 12, marginLeft: 8, fontWeight: 400 }}>@{f.username}</span>
+                  )}
                   {f.gossipEnabled && f.state === 'accepted' && (
                     <span className="subtle" style={{ fontSize: 10, marginLeft: 8, color: '#5A8C54' }}>● gossip on</span>
                   )}
@@ -1153,9 +1289,10 @@ function FriendSection({ title, friends, render }: {
    FEED — posts from accepted friends + self
 ═══════════════════════════════════════════════════════════════════ */
 interface FeedPostView {
-  id: string; userId: string; displayName: string | null; email: string;
+  id: string; userId: string; displayName: string | null; username: string | null;
+  email: string;
   instanceId: string; instanceName: string; content: string;
-  signature: string; createdAt: string;
+  signature: string; createdAt: string; mine?: boolean;
 }
 
 function FeedTab(): JSX.Element {
@@ -1188,9 +1325,11 @@ function FeedTab(): JSX.Element {
           <div className="card"><p className="subtle" style={{ margin: 0 }}>No posts yet. Wait a few hours or add friends.</p></div>
         )}
         {posts?.map((p) => (
-          <div className="card" key={p.id} style={{ marginBottom: 12 }}>
-            <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', marginBottom: 6 }}>
-              <strong style={{ fontSize: 14 }}>{p.displayName ?? p.email}</strong>
+          <div className="card" key={p.id} style={{ marginBottom: 12, borderColor: p.mine ? '#A8C49F' : undefined }}>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', marginBottom: 6, flexWrap: 'wrap' }}>
+              <strong style={{ fontSize: 14 }}>{p.displayName ?? p.username ?? p.email}</strong>
+              {p.username && <span className="subtle" style={{ fontSize: 12 }}>@{p.username}</span>}
+              {p.mine && <span className="subtle" style={{ fontSize: 10, color: '#5A8C54', letterSpacing: 0.5 }}>YOU</span>}
               <span className="subtle" style={{ fontSize: 11 }}>via {p.instanceName}</span>
               <span className="subtle" style={{ fontSize: 11, marginLeft: 'auto' }}>{formatTs(p.createdAt)}</span>
             </div>

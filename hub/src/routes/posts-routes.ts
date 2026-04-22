@@ -17,6 +17,11 @@ const PostBody = z.object({
   instanceId: z.string().length(32),
   content: z.string().min(1).max(500),
   signature: z.string().min(32).max(200), // base64
+  // ISO-8601 timestamp from the signing client. The server verifies with this
+  // EXACT string so the signature canonical form is deterministic (we used
+  // to generate server-side, which guaranteed mismatch by millisecond drift).
+  // We then validate it's within ±2 minutes of server time to prevent replay.
+  createdAt: z.string().datetime().optional(),
 });
 
 function canonicalPostInput(content: string, createdAt: string, instanceId: string): Buffer {
@@ -55,8 +60,18 @@ export async function postsRoutes(app: FastifyInstance): Promise<void> {
       | { id: string; public_key: string } | undefined;
     if (!inst) return reply.code(404).send({ error: 'instance_not_found' });
 
-    const createdAt = new Date().toISOString();
-    const input = canonicalPostInput(parsed.data.content, createdAt, parsed.data.instanceId);
+    // Use the client-supplied createdAt for signature verification — it has
+    // to match byte-for-byte what was signed. If the client omitted it
+    // (older builds), we fall back to server time so old clients don't hard
+    // break, though they'll still fail signature verification.
+    const clientCreatedAt = parsed.data.createdAt ?? new Date().toISOString();
+    const MAX_SKEW_MS = 120_000;
+    const skew = Math.abs(Date.parse(clientCreatedAt) - Date.now());
+    if (!Number.isFinite(skew) || skew > MAX_SKEW_MS) {
+      return reply.code(400).send({ error: 'timestamp_skew' });
+    }
+
+    const input = canonicalPostInput(parsed.data.content, clientCreatedAt, parsed.data.instanceId);
     if (!verifyEd25519(inst.public_key, input, parsed.data.signature)) {
       return reply.code(400).send({ error: 'bad_signature' });
     }
@@ -65,9 +80,9 @@ export async function postsRoutes(app: FastifyInstance): Promise<void> {
     db.prepare(`
       INSERT INTO posts (id, user_id, instance_id, content, signature, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(id, req.userId!, parsed.data.instanceId, parsed.data.content, parsed.data.signature, createdAt);
+    `).run(id, req.userId!, parsed.data.instanceId, parsed.data.content, parsed.data.signature, clientCreatedAt);
 
-    return reply.code(201).send({ id, createdAt });
+    return reply.code(201).send({ id, createdAt: clientCreatedAt });
   });
 
   // ── GET /feed — posts from the user's accepted friends ────────────
@@ -89,7 +104,7 @@ export async function postsRoutes(app: FastifyInstance): Promise<void> {
     const placeholders = ids.map(() => '?').join(',');
     const posts = db.prepare(`
       SELECT p.id, p.user_id, p.instance_id, p.content, p.signature, p.created_at,
-             u.email, u.display_name, i.public_key, i.name as instance_name
+             u.email, u.display_name, u.username, i.public_key, i.name as instance_name
       FROM posts p
       JOIN users u ON u.id = p.user_id
       JOIN instances i ON i.id = p.instance_id
@@ -99,7 +114,8 @@ export async function postsRoutes(app: FastifyInstance): Promise<void> {
     `).all(...ids) as Array<{
       id: string; user_id: string; instance_id: string; content: string;
       signature: string; created_at: string; email: string;
-      display_name: string | null; public_key: string; instance_name: string;
+      display_name: string | null; username: string | null;
+      public_key: string; instance_name: string;
     }>;
 
     return {
@@ -107,6 +123,7 @@ export async function postsRoutes(app: FastifyInstance): Promise<void> {
         id: p.id,
         userId: p.user_id,
         displayName: p.display_name,
+        username: p.username,
         email: p.email,
         instanceId: p.instance_id,
         instanceName: p.instance_name,
@@ -114,6 +131,7 @@ export async function postsRoutes(app: FastifyInstance): Promise<void> {
         content: p.content,
         signature: p.signature,
         createdAt: p.created_at,
+        mine: p.user_id === req.userId,
       })),
     };
   });

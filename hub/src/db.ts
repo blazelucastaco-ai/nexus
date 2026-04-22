@@ -153,10 +153,23 @@ function migrate(d: Database.Database): void {
   // Additive column migration for existing hubs that deployed before
   // x25519 support landed. PRAGMA table_info introspects the schema so we
   // only attempt the ALTER when needed.
-  const cols = d.prepare('PRAGMA table_info(instances)').all() as Array<{ name: string }>;
-  if (!cols.some((c) => c.name === 'x25519_public_key')) {
+  const instanceCols = d.prepare('PRAGMA table_info(instances)').all() as Array<{ name: string }>;
+  if (!instanceCols.some((c) => c.name === 'x25519_public_key')) {
     d.exec('ALTER TABLE instances ADD COLUMN x25519_public_key TEXT');
   }
+
+  // Additive: username column on users. Older hubs only had email — we keep
+  // email as the canonical identifier and make username a friendlier handle
+  // used for friend search. username_lower is the lookup index.
+  const userCols = d.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>;
+  if (!userCols.some((c) => c.name === 'username')) {
+    d.exec('ALTER TABLE users ADD COLUMN username TEXT');
+  }
+  if (!userCols.some((c) => c.name === 'username_lower')) {
+    d.exec('ALTER TABLE users ADD COLUMN username_lower TEXT');
+  }
+  // Unique index — sparse so existing rows with NULL username don't collide.
+  d.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users(username_lower) WHERE username_lower IS NOT NULL');
 }
 
 // CLI entrypoint: `tsx src/db.ts --migrate` to run migrations without starting the server.
