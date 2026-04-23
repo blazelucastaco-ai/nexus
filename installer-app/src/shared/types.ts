@@ -165,21 +165,33 @@ export interface LogEntry {
 
 export type UpdatePhase =
   | 'checking'
+  | 'downloading'
+  | 'done'
+  | 'up-to-date'
+  | 'error'
+  // ── Legacy phases, kept so old renderer builds don't type-error ──
   | 'pulling'
   | 'installing'
   | 'building'
-  | 'restarting'
-  | 'done'
-  | 'up-to-date';
+  | 'restarting';
 
 export interface UpdateProgress {
   phase: UpdatePhase;
   label: string;
   pct: number;
   log?: string;
+  // New shape (GitHub Releases-based):
+  installedVersion?: string;
+  latestVersion?: string;
+  downloadUrl?: string;
+  releasePageUrl?: string;
+  updateAvailable?: boolean;
+  offline?: boolean;
+  // Legacy fields kept for backwards compat with older dashboard builds.
   localSha?: string;
   remoteSha?: string;
   commitsBehind?: number;
+  upToDate?: boolean;
 }
 
 export interface MemoryEntry {

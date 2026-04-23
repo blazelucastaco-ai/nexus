@@ -30,23 +30,35 @@ const TABS: Array<{ key: MainTab; label: string; Icon: () => JSX.Element }> = [
 
 export function MainApp(): JSX.Element {
   const [tab, setTab] = useState<MainTab>('dashboard');
-  const [commitsBehind, setCommitsBehind] = useState(0);
+  const [updateInfo, setUpdateInfo] = useState<{ available: boolean; latest?: string; installed?: string; releasePageUrl?: string; downloadUrl?: string }>({ available: false });
 
-  // Kick an update check on mount + every 30 minutes. If we're behind
-  // upstream, show a red dot on the Updates nav item so the user notices.
+  // Update-check on mount, then hourly. The banner appears the moment a
+  // newer release is published on GitHub — user doesn't have to open the
+  // Updates tab to notice.
   useEffect(() => {
     const check = async (): Promise<void> => {
       try {
-        const r = await window.nexus.main.updatesCheck();
-        setCommitsBehind(r.commitsBehind);
-      } catch {
-        /* offline or no repo — silently skip */
-      }
+        const r = await window.nexus.main.updatesCheck() as {
+          updateAvailable?: boolean; installedVersion?: string; latestVersion?: string;
+          releasePageUrl?: string; downloadUrl?: string;
+        };
+        setUpdateInfo({
+          available: r.updateAvailable === true,
+          latest: r.latestVersion,
+          installed: r.installedVersion,
+          releasePageUrl: r.releasePageUrl,
+          downloadUrl: r.downloadUrl,
+        });
+      } catch { /* offline — silently skip */ }
     };
     void check();
-    const id = setInterval(() => void check(), 30 * 60 * 1000);
+    const id = setInterval(() => void check(), 60 * 60 * 1000);
     return () => clearInterval(id);
   }, []);
+
+  const openDownload = async (): Promise<void> => {
+    await window.nexus.main.updatesRun();
+  };
 
   return (
     <div className="shell">
@@ -65,17 +77,53 @@ export function MainApp(): JSX.Element {
             >
               <div className="nav-icon"><t.Icon /></div>
               <span>{t.label}</span>
-              {t.key === 'updates' && commitsBehind > 0 && (
-                <span className="nav-badge" title={`${commitsBehind} commit${commitsBehind === 1 ? '' : 's'} behind`}>
-                  {commitsBehind > 9 ? '9+' : commitsBehind}
-                </span>
+              {t.key === 'updates' && updateInfo.available && (
+                <span className="nav-badge" title={`NEXUS v${updateInfo.latest} available`}>●</span>
               )}
             </button>
           ))}
         </div>
-        <div className="sidebar-footer">v0.1.0</div>
+        <div className="sidebar-footer">v{updateInfo.installed ?? '0.1.0'}</div>
       </aside>
       <main className="main">
+        {updateInfo.available && (
+          <div style={{
+            background: 'var(--p2)',
+            borderBottom: '1px solid var(--tl)',
+            padding: '10px 22px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 14,
+            fontSize: 13,
+          }}>
+            <span style={{ color: 'var(--t)', fontWeight: 600 }}>NEXUS v{updateInfo.latest}</span>
+            <span className="subtle">is out — you're on v{updateInfo.installed}.</span>
+            <button
+              type="button"
+              className="btn-p"
+              onClick={() => void openDownload()}
+              style={{ marginLeft: 'auto', padding: '6px 14px', fontSize: 12 }}
+            >
+              Download
+            </button>
+            <button
+              type="button"
+              className="btn-g"
+              onClick={() => setTab('updates')}
+              style={{ padding: '6px 14px', fontSize: 12 }}
+            >
+              Details
+            </button>
+            <button
+              type="button"
+              className="btn-g"
+              onClick={() => setUpdateInfo((u) => ({ ...u, available: false }))}
+              style={{ padding: '4px 10px', fontSize: 14, border: 'none', background: 'transparent' }}
+              aria-label="Dismiss"
+              title="Dismiss for this session"
+            >×</button>
+          </div>
+        )}
         {tab === 'dashboard' && <DashboardTab />}
         {tab === 'hub' && <HubTab />}
         {tab === 'friends' && <FriendsTab />}
@@ -632,89 +680,101 @@ function ChromeTab(): JSX.Element {
 /* ═══════════════════════════════════════════════════════════════════
    UPDATES
 ═══════════════════════════════════════════════════════════════════ */
+interface UpdateCheckView {
+  installedVersion?: string;
+  latestVersion?: string;
+  downloadUrl?: string;
+  releasePageUrl?: string;
+  updateAvailable?: boolean;
+  offline?: boolean;
+  // Legacy shape still in flight.
+  commitsBehind?: number;
+  upToDate?: boolean;
+}
+
 function UpdatesTab(): JSX.Element {
-  const [check, setCheck] = useState<{ localSha: string; remoteSha: string; commitsBehind: number; upToDate: boolean } | null>(null);
+  const [check, setCheck] = useState<UpdateCheckView | null>(null);
+  const [checking, setChecking] = useState(false);
   const [progress, setProgress] = useState<UpdateProgress | null>(null);
-  const [running, setRunning] = useState(false);
-  const [logLines, setLogLines] = useState<string[]>([]);
 
   const refresh = useCallback(async (): Promise<void> => {
-    const c = await window.nexus.main.updatesCheck();
-    setCheck(c);
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  useEffect(() => {
-    return window.nexus.main.onUpdateProgress((p) => {
-      setProgress(p);
-      if (p.log) setLogLines((ls) => [...ls.slice(-200), p.log!]);
-    });
-  }, []);
-
-  const runUpdate = async (): Promise<void> => {
-    setRunning(true);
-    setLogLines([]);
-    setProgress(null);
+    setChecking(true);
     try {
-      await window.nexus.main.updatesRun();
-      await refresh();
-    } finally {
-      setRunning(false);
-    }
+      const c = await window.nexus.main.updatesCheck();
+      setCheck(c as UpdateCheckView);
+    } finally { setChecking(false); }
+  }, []);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  useEffect(() => {
+    return window.nexus.main.onUpdateProgress((p) => setProgress(p));
+  }, []);
+
+  const download = async (): Promise<void> => {
+    setProgress(null);
+    await window.nexus.main.updatesRun();
+    await refresh();
   };
+
+  const installed = check?.installedVersion ?? '—';
+  const latest = check?.latestVersion ?? '—';
+  const available = check?.updateAvailable === true;
 
   return (
     <div className="step">
       <span className="eyebrow">Updates</span>
       <h1 className="step-title">
-        {check?.upToDate ? <>You're <em>up to date</em>.</> : <>New <em>version</em> available.</>}
+        {check === null
+          ? <>Checking <em>GitHub</em>…</>
+          : check.offline
+            ? <>Couldn't <em>reach GitHub</em>.</>
+            : available
+              ? <>New <em>version</em> available.</>
+              : <>You're <em>up to date</em>.</>}
       </h1>
       <p className="step-lead">
-        {check === null
-          ? 'Checking GitHub for new commits…'
-          : check.upToDate
-            ? `Local is at ${check.localSha}. No new commits on the main branch.`
-            : `${check.commitsBehind} commit${check.commitsBehind === 1 ? '' : 's'} behind upstream (${check.localSha} → ${check.remoteSha}).`}
+        {check === null && 'One moment — asking the releases API for the latest tag.'}
+        {check?.offline && 'Check your internet connection or try again in a minute.'}
+        {check && !check.offline && available && (
+          <>NEXUS <strong>v{latest}</strong> is out. You're on <strong>v{installed}</strong>.</>
+        )}
+        {check && !check.offline && !available && (
+          <>You're running <strong>v{installed}</strong> — the latest published release.</>
+        )}
       </p>
 
-      {progress && (
-        <div className="progress-wrap" style={{ marginBottom: 16 }}>
-          <div className="progress-label">
-            <span>{progress.label}</span>
-            <span className="progress-pct">{Math.round(progress.pct)}%</span>
-          </div>
-          <div className="progress-bar">
-            <div className="progress-fill" style={{ width: `${progress.pct}%` }} />
-          </div>
+      {available && (
+        <div className="card" style={{ marginTop: 12, marginBottom: 16, borderColor: 'var(--tl)' }}>
+          <h4 style={{ margin: '0 0 6px', fontSize: 13 }}>How updating works</h4>
+          <ol className="subtle" style={{ margin: '0 0 0 20px', padding: 0, fontSize: 13, lineHeight: 1.7 }}>
+            <li>Click <strong>Download update</strong> below — a browser tab opens with the new <code>NEXUS-Installer.dmg</code>.</li>
+            <li>When it finishes, open the DMG and drag the new NEXUS app over the one in your <code>Applications</code> folder. Replace when prompted.</li>
+            <li>Relaunch from Applications. Your account, memory, and settings all carry over.</li>
+          </ol>
         </div>
       )}
 
-      {logLines.length > 0 && (
-        <div className="dark-box" style={{ marginBottom: 16 }}>
-          <div className="dark-box-bar">
-            <div className="dark-box-dot" />
-            <span className="dark-box-label">update · live log</span>
-          </div>
-          <div className="dark-box-body">
-            {logLines.map((l, i) => <div key={`${i}-${l.slice(0, 20)}`}>{l}</div>)}
-          </div>
-        </div>
+      {progress && progress.phase !== 'up-to-date' && (
+        <p className="subtle" style={{ margin: '10px 0', fontSize: 13 }}>{progress.label}</p>
       )}
 
-      <div className="btn-row">
+      <div className="btn-row" style={{ marginTop: 16 }}>
         <button
           type="button"
           className="btn-p"
-          onClick={() => void runUpdate()}
-          disabled={running || check?.upToDate}
+          onClick={() => void download()}
+          disabled={!available || checking}
         >
-          {running ? 'Updating…' : check?.upToDate ? 'Up to date' : 'Pull & rebuild'}
+          {checking ? 'Checking…' : available ? `Download update (v${latest})` : 'Up to date'}
         </button>
-        <button type="button" className="btn-g" onClick={() => void refresh()} disabled={running}>
-          Re-check
+        {available && check?.releasePageUrl && (
+          <button type="button" className="btn-g" onClick={() => window.nexus.external.open(check.releasePageUrl!)}>
+            Read release notes ↗
+          </button>
+        )}
+        <button type="button" className="btn-g" style={{ marginLeft: 'auto' }} onClick={() => void refresh()} disabled={checking}>
+          {checking ? 'Re-checking…' : 'Re-check'}
         </button>
       </div>
     </div>

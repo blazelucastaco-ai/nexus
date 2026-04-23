@@ -5,6 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta name="color-scheme" content="light only" />
 
+<!-- Content Security Policy. Static landing page, so:
+     - scripts only from self + inline (ld+json + the live-commit fetcher block)
+     - styles from self + Google Fonts + inline (we use React-style inline props)
+     - connect to GitHub API for the live commit feed
+     - images self + data: (schema.org favicons) + https (avatars)
+     This prevents a compromised dependency (or a PR that slips in a script tag)
+     from exfiltrating anything outside these origins. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://api.github.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self';" />
+<meta name="referrer" content="no-referrer-when-downgrade" />
+
 <!-- SEO — primary -->
 <title>NEXUS — Personal AI Agent for Mac | Open Source</title>
 <meta name="description" content="NEXUS is an open-source personal AI agent that lives on your Mac. Persistent memory, Telegram interface, direct system control, browser automation. Powered by Claude." />

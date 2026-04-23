@@ -147,6 +147,92 @@ The daemon doesn't depend on GitHub at runtime — only at install, at `nexus up
 
 ---
 
+## One-time setup (do these once, when ready)
+
+These are things the operator needs to click through in a browser — they can't
+be automated from this repo because they require credentials / accounts.
+
+### Enable branch protection on `main`
+
+`main` should require a passing CI check and a PR (no direct pushes). Browse to:
+
+https://github.com/blazelucastaco-ai/nexus/settings/branches
+
+Click **Add branch ruleset** → target `main` → enable:
+- Require a pull request before merging
+- Require status checks to pass (select `check`)
+- Require linear history
+- Block force pushes
+- (Optional) Require signed commits
+
+### Set up uptime monitoring on the hub
+
+Pick one, both free tier:
+
+- **UptimeRobot** (easier): sign up at uptimerobot.com → add HTTP(s) monitor →
+  URL `https://nexus-hub-blazelucastaco.fly.dev/healthz` → interval 5 min →
+  alert contact = your email.
+- **Better Stack** (better integration): sign up at betterstack.com → add
+  monitor with the same URL → interval 30 sec → on-call routing if you want.
+
+Either way, the monitor should page you within a minute of `/healthz` returning
+non-200.
+
+### Wire Sentry error tracking (optional)
+
+1. Sign up at [sentry.io](https://sentry.io) → create project → copy DSN.
+2. Add it as a Fly secret on both apps:
+   ```bash
+   fly secrets set --app nexus-hub-blazelucastaco SENTRY_DSN=<dsn>
+   fly secrets set --app nexus-hub-staging-blazelucastaco SENTRY_DSN=<dsn> HUB_ENV=staging
+   ```
+3. Install the optional dep in hub/:
+   ```bash
+   cd hub && pnpm add @sentry/node
+   ```
+4. Deploy. Errors (500s + unhandled exceptions) now stream to Sentry with
+   method + url + userId tags (no headers, no body).
+
+The hub runs fine without Sentry installed — `src/error-reporter.ts` no-ops
+when the DSN isn't set.
+
+### Schedule the backup
+
+`hub/scripts/backup.sh` exists but isn't scheduled. Run it nightly via a
+Fly scheduled machine:
+
+```bash
+cd hub
+# Create a scheduled machine that runs the backup script daily at 02:00 UTC.
+fly machine run . --app nexus-hub-blazelucastaco \
+  --schedule daily \
+  --entrypoint "sh /app/scripts/backup.sh"
+```
+
+Verify backups are landing on the volume:
+```bash
+fly ssh console --app nexus-hub-blazelucastaco -C "ls -lh /data/backups"
+```
+
+### Release a new version
+
+- Bump the version in `package.json`, `hub/package.json`, and
+  `installer-app/package.json` (all three need to match).
+- Tag and push:
+  ```bash
+  git tag v0.1.1
+  git push origin v0.1.1
+  ```
+- `.github/workflows/release.yml` runs automatically:
+  - Builds the DMG on a macOS runner
+  - Generates `NEXUS-Installer.dmg.sha256` sidecar
+  - Uploads both to the GitHub Release
+  - Deploys the hub to Fly (if `FLY_API_TOKEN` is set)
+- Users running the installer-app see the new version banner within an hour
+  (the app polls GitHub Releases on mount + hourly).
+
+---
+
 If something's broken and it's not on this list, file a GitHub issue with:
 - What you tried to do
 - What happened instead

@@ -984,78 +984,165 @@ export function tailLog(onLine: LogLineCb): LogTail {
   };
 }
 
-// ── Update (git pull + rebuild + restart) ────────────────────────────
+// ── Update (GitHub Releases-based) ───────────────────────────────────
+//
+// We don't ship a code-signed DMG, so in-place electron-updater isn't an
+// option (it verifies signatures). Instead we poll the GitHub Releases API
+// once per session (plus any time the user opens the Updates tab), compare
+// the latest tag to the installed installer-app version, and — when newer —
+// surface a banner that opens the release page / DMG URL in the user's
+// browser. User drags the new DMG into /Applications as usual.
+//
+// Daemon source updates (git pull) still work for the CLI-install path;
+// they're not exposed from the installer-app anymore because the install
+// bundle itself is the source of truth.
 
 type UpdateProgressCb = (p: import('../shared/types').UpdateProgress) => void;
 
+const RELEASES_API = 'https://api.github.com/repos/blazelucastaco-ai/nexus/releases/latest';
+const DMG_DOWNLOAD_URL = 'https://github.com/blazelucastaco-ai/nexus/releases/latest/download/NEXUS-Installer.dmg';
+const RELEASE_PAGE_URL = 'https://github.com/blazelucastaco-ai/nexus/releases/latest';
+
+/** Installed installer-app version. Read from package.json of the packaged app. */
+function installedAppVersion(): string {
+  try {
+    // When packaged, app.asar unpacks package.json at root of __dirname's ancestor.
+    // Safer: require via process.resourcesPath which electron exposes.
+    const pkgPath = join(process.resourcesPath ?? REPO_DIR, 'app.asar', 'package.json');
+    if (existsSync(pkgPath)) {
+      return JSON.parse(readFileSync(pkgPath, 'utf-8')).version ?? '0.0.0';
+    }
+  } catch { /* fall through */ }
+  // Fallback for `pnpm dev` or unpackaged runs — read from the source tree.
+  try {
+    const local = join(__dirname, '..', '..', 'package.json');
+    if (existsSync(local)) return JSON.parse(readFileSync(local, 'utf-8')).version ?? '0.0.0';
+  } catch { /* ignore */ }
+  return '0.0.0';
+}
+
+/** Parse a semver "v1.2.3" or "1.2.3" into [major, minor, patch]. Garbage → [0,0,0]. */
+function parseSemver(v: string): [number, number, number] {
+  const m = v.replace(/^v/, '').match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return [0, 0, 0];
+  return [parseInt(m[1]!, 10), parseInt(m[2]!, 10), parseInt(m[3]!, 10)];
+}
+
+function isNewerSemver(remote: string, local: string): boolean {
+  const [a1, a2, a3] = parseSemver(remote);
+  const [b1, b2, b3] = parseSemver(local);
+  if (a1 !== b1) return a1 > b1;
+  if (a2 !== b2) return a2 > b2;
+  return a3 > b3;
+}
+
 export async function checkForUpdates(): Promise<{
+  /** Installed version on this Mac. */
+  installedVersion: string;
+  /** Latest version available on GitHub Releases. */
+  latestVersion: string;
+  /** Direct URL to the DMG for the latest release. */
+  downloadUrl: string;
+  /** Release page (so users can read release notes first). */
+  releasePageUrl: string;
+  /** True if an update is available. */
+  updateAvailable: boolean;
+  /** True if we couldn't reach GitHub (network issue). Callers should display "could not check". */
+  offline?: boolean;
+  // ── Legacy shape (kept for any old renderer code that still reads these).
   localSha: string;
   remoteSha: string;
   commitsBehind: number;
   upToDate: boolean;
 }> {
-  if (!existsSync(REPO_DIR)) {
-    return { localSha: '', remoteSha: '', commitsBehind: 0, upToDate: true };
+  const installedVersion = installedAppVersion();
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10_000);
+    const resp = await fetch(RELEASES_API, {
+      headers: {
+        accept: 'application/vnd.github+json',
+        'user-agent': `nexus-installer/${installedVersion}`,
+      },
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!resp.ok) throw new Error(`github_${resp.status}`);
+    const body = (await resp.json()) as { tag_name?: string; html_url?: string };
+    const latestVersion = (body.tag_name ?? '').replace(/^v/, '') || installedVersion;
+    const updateAvailable = isNewerSemver(latestVersion, installedVersion);
+    return {
+      installedVersion,
+      latestVersion,
+      downloadUrl: DMG_DOWNLOAD_URL,
+      releasePageUrl: body.html_url ?? RELEASE_PAGE_URL,
+      updateAvailable,
+      // Legacy compatibility fields
+      localSha: installedVersion,
+      remoteSha: latestVersion,
+      commitsBehind: updateAvailable ? 1 : 0,
+      upToDate: !updateAvailable,
+    };
+  } catch {
+    // Offline / rate-limited — report "up to date" rather than freaking out.
+    return {
+      installedVersion,
+      latestVersion: installedVersion,
+      downloadUrl: DMG_DOWNLOAD_URL,
+      releasePageUrl: RELEASE_PAGE_URL,
+      updateAvailable: false,
+      offline: true,
+      localSha: installedVersion,
+      remoteSha: installedVersion,
+      commitsBehind: 0,
+      upToDate: true,
+    };
   }
-  const { stdout: local } = await execFileAsync('git', ['-C', REPO_DIR, 'rev-parse', 'HEAD']);
-  await execFileAsync('git', ['-C', REPO_DIR, 'fetch', '--quiet']).catch(() => undefined);
-  const { stdout: remote } = await execFileAsync('git', ['-C', REPO_DIR, 'rev-parse', '@{u}']).catch(
-    async () => await execFileAsync('git', ['-C', REPO_DIR, 'rev-parse', 'origin/main']),
-  );
-  const { stdout: countStr } = await execFileAsync('git', [
-    '-C', REPO_DIR, 'rev-list', '--count', `${local.trim()}..${remote.trim()}`,
-  ]).catch(() => ({ stdout: '0' }));
-  const commitsBehind = Number.parseInt(countStr.trim(), 10) || 0;
-  return {
-    localSha: local.trim().slice(0, 7),
-    remoteSha: remote.trim().slice(0, 7),
-    commitsBehind,
-    upToDate: commitsBehind === 0,
-  };
 }
 
+/**
+ * "Run update" now just opens the DMG download in the user's browser.
+ * In-place patching requires a code-signed binary that verifies the new
+ * download; without signing the safest path is to let the user manually
+ * replace the app.
+ */
 export async function runUpdate(onProgress: UpdateProgressCb): Promise<void> {
-  onProgress({ phase: 'checking', label: 'Checking for updates…', pct: 5 });
+  onProgress({ phase: 'checking', label: 'Checking GitHub Releases…', pct: 10 });
   const check = await checkForUpdates();
-  if (check.upToDate) {
-    onProgress({ phase: 'up-to-date', label: 'Already up to date.', pct: 100, ...check });
+  if (!check.updateAvailable) {
+    onProgress({
+      phase: 'up-to-date',
+      label: check.offline ? 'Could not reach GitHub.' : `You're on the latest (v${check.installedVersion}).`,
+      pct: 100,
+      ...check,
+    });
     return;
   }
   onProgress({
-    phase: 'pulling',
-    label: `Pulling ${check.commitsBehind} new commit${check.commitsBehind === 1 ? '' : 's'}…`,
-    pct: 20,
+    phase: 'downloading',
+    label: `v${check.latestVersion} available — opening download…`,
+    pct: 50,
     ...check,
   });
-  await runStreamed('git', ['-C', REPO_DIR, 'pull', '--ff-only'], REPO_DIR, (line) =>
-    onProgress({ phase: 'pulling', label: 'Pulling…', pct: 25, log: line }),
-  );
-
-  onProgress({ phase: 'installing', label: 'Installing updated dependencies…', pct: 40 });
-  const pnpm = (await resolveBinary('pnpm')) ?? 'pnpm';
-  await runStreamed(pnpm, ['install'], REPO_DIR, (line) =>
-    onProgress({ phase: 'installing', label: 'Installing…', pct: 50, log: line }),
-  );
-
-  onProgress({ phase: 'building', label: 'Rebuilding…', pct: 65 });
-  await runStreamed(pnpm, ['run', 'build'], REPO_DIR, (line) =>
-    onProgress({ phase: 'building', label: 'Building…', pct: 75, log: line }),
-  );
-
-  // Copy new build to ~/.nexus/app/index.cjs
-  const built = join(REPO_DIR, 'dist', 'index.cjs');
-  if (existsSync(built)) {
-    mkdirSync(join(NEXUS_DIR, 'app'), { recursive: true });
-    await execFileAsync('cp', [built, join(NEXUS_DIR, 'app', 'index.cjs')]);
-  }
-
-  onProgress({ phase: 'restarting', label: 'Restarting NEXUS service…', pct: 90 });
+  // Open the DMG URL in the default browser. User downloads, drags to
+  // Applications, replaces the old NEXUS.app.
   try {
-    await restartService();
-  } catch {
-    /* not fatal — user can start manually */
+    const { shell } = await import('electron');
+    await shell.openExternal(check.downloadUrl);
+  } catch (err) {
+    onProgress({
+      phase: 'error',
+      label: `Could not open download: ${(err as Error).message}`,
+      pct: 100,
+    });
+    return;
   }
-  onProgress({ phase: 'done', label: 'Update complete.', pct: 100 });
+  onProgress({
+    phase: 'done',
+    label: 'Download started in your browser. Drag the new NEXUS into Applications to update.',
+    pct: 100,
+    ...check,
+  });
 }
 
 // ── Memory browser (read-only) ───────────────────────────────────────

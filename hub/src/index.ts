@@ -8,6 +8,7 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import sensible from '@fastify/sensible';
 import { getDb, type HubDb } from './db.js';
+import { initErrorReporter, reportError } from './error-reporter.js';
 import { authRoutes } from './routes/auth-routes.js';
 import { instancesRoutes } from './routes/instances-routes.js';
 import { friendsRoutes } from './routes/friends-routes.js';
@@ -157,11 +158,16 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     }
   });
 
+  // Error reporter (Sentry, opt-in via SENTRY_DSN). No-ops if disabled.
+  await initErrorReporter(app.log);
+
   // Centralised error handler. Logs the full error with request context but
   // only ships a generic shape back to the client (no stack traces).
   app.setErrorHandler((err: Error & { statusCode?: number }, req, reply) => {
     const statusCode = err.statusCode ?? 500;
     req.log.error({ err, url: req.url, method: req.method }, 'request_failed');
+    // Ship 5xx to Sentry if configured. 4xx stays local (they're expected).
+    if (statusCode >= 500) reportError(err, req);
     if (statusCode >= 500) return reply.code(500).send({ error: 'internal_error' });
     return reply.code(statusCode).send({ error: err.message || 'error' });
   });
