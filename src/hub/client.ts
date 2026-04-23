@@ -78,6 +78,47 @@ async function keychainGet(account: string): Promise<string | null> {
 
 // ─── HTTP with auto-refresh ──────────────────────────────────────────
 
+// Shared single-flight mutex for /auth/refresh. Without this, multiple
+// concurrent consumers (InboxPoller 60s tick, GossipGen, SoulGen, AutoPoster,
+// dashboard /me fetch) all present the same refresh cookie in parallel,
+// one wins + rotates it, the rest present a now-revoked token. Even with the
+// hub's 10s race-grace window, only a proper mutex guarantees no 401
+// cascades after a Mac wake-up.
+let refreshInFlight: Promise<string | null> | null = null;
+
+async function doRefresh(hubUrl: string, email: string, currentRefresh: string): Promise<string | null> {
+  const refreshResp = await fetch(`${hubUrl}/auth/refresh`, {
+    method: 'POST',
+    headers: { cookie: `nexus_refresh=${currentRefresh}` },
+  });
+  if (!refreshResp.ok) return null;
+  const body = (await refreshResp.json()) as { accessToken?: string };
+  if (!body.accessToken) return null;
+  // Absorb the rotated cookie BEFORE anyone else gets a chance to read it.
+  const setCookies = refreshResp.headers.getSetCookie?.() ?? [];
+  for (const c of setCookies) {
+    const m = c.match(/^nexus_refresh=([^;]+)/);
+    if (m?.[1]) {
+      await execFileAsync('security', [
+        'add-generic-password', '-U',
+        '-s', KEYCHAIN_SERVICE, '-a', `refresh:${email}`, '-w', m[1],
+      ]).catch(() => null);
+      break;
+    }
+  }
+  await execFileAsync('security', [
+    'add-generic-password', '-U',
+    '-s', KEYCHAIN_SERVICE, '-a', `access:${email}`, '-w', body.accessToken,
+  ]).catch(() => null);
+  return body.accessToken;
+}
+
+async function singleFlightRefresh(hubUrl: string, email: string, currentRefresh: string): Promise<string | null> {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = doRefresh(hubUrl, email, currentRefresh).finally(() => { refreshInFlight = null; });
+  return refreshInFlight;
+}
+
 async function fetchWithAuth(
   path: string,
   opts: { method?: string; body?: unknown } = {},
@@ -125,41 +166,18 @@ async function fetchWithAuth(
 
   let r = await makeRequestWithRetry(access);
   if (r.status === 401) {
-    // Refresh and retry once.
-    const refreshResp = await fetch(`${session.hubUrl}/auth/refresh`, {
-      method: 'POST',
-      headers: { cookie: `nexus_refresh=${refresh}` },
-    });
-    if (refreshResp.ok) {
-      const body = (await refreshResp.json()) as { accessToken?: string };
-      if (body.accessToken) {
-        access = body.accessToken;
-        // Hub now uses rotating refresh tokens: every /auth/refresh returns a
-        // NEW cookie and invalidates the old one. Absorb the new cookie so
-        // the next call doesn't trip refresh-reuse detection (which would
-        // nuke every session for this user).
-        const setCookies = refreshResp.headers.getSetCookie?.() ?? [];
-        for (const c of setCookies) {
-          const m = c.match(/^nexus_refresh=([^;]+)/);
-          if (m?.[1]) {
-            await execFileAsync('security', [
-              'add-generic-password', '-U',
-              '-s', KEYCHAIN_SERVICE, '-a', `refresh:${email}`, '-w', m[1],
-            ]).catch(() => null);
-            break;
-          }
-        }
-        // Update Keychain for future calls.
-        await execFileAsync('security', [
-          'add-generic-password', '-U',
-          '-s', KEYCHAIN_SERVICE, '-a', `access:${email}`, '-w', access,
-        ]).catch(() => null);
-        r = await makeRequestWithRetry(access);
-      }
-    } else if (refreshResp.status === 401) {
-      // Hub told us the refresh is revoked or the session family was
-      // detected as compromised. Clear the stale tokens so the next call
-      // surfaces "no_session" rather than re-hammering /auth/refresh.
+    // Single-flight refresh. If another consumer in this process is already
+    // refreshing, we wait for their result and reuse whichever token they
+    // got. This prevents the "two concurrent refreshes after Mac wake"
+    // storm that was revoking whole session families.
+    const newAccess = await singleFlightRefresh(session.hubUrl, email, refresh);
+    if (newAccess) {
+      access = newAccess;
+      r = await makeRequestWithRetry(access);
+    } else {
+      // Refresh failed — the token is genuinely dead or the hub returned
+      // a non-OK response. Clear Keychain so subsequent calls don't keep
+      // hammering /auth/refresh with a known-bad token.
       await Promise.all([
         execFileAsync('security', ['delete-generic-password', '-s', KEYCHAIN_SERVICE, '-a', `access:${email}`]).catch(() => null),
         execFileAsync('security', ['delete-generic-password', '-s', KEYCHAIN_SERVICE, '-a', `refresh:${email}`]).catch(() => null),

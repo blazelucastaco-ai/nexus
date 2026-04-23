@@ -175,9 +175,24 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(401).send({ error: 'invalid_refresh' });
     }
 
-    // Reuse of an already-revoked refresh = stolen-and-replayed. Nuke ALL
-    // sessions for this user and audit-log the event.
+    // Reuse of an already-revoked refresh = potential theft-and-replay,
+    // BUT also the natural outcome of a legitimate race between two
+    // processes sharing the same Keychain (the NEXUS daemon and the
+    // installer-app both read from Keychain; after Mac sleep/wake they
+    // both fire refresh catch-ups in the same 100-200ms window). If the
+    // revocation just happened (within GRACE_MS), we treat it as a race
+    // and 401 quietly — the caller will fall back to re-reading the
+    // rotated cookie from Keychain on its next attempt.
+    //
+    // Only trip family-wide revocation when the revocation is OLDER than
+    // the grace window — a real stolen cookie replay.
     if (session.revoked_at) {
+      const GRACE_MS = 10_000;
+      const revokedAgeMs = Date.now() - new Date(session.revoked_at).getTime();
+      if (Number.isFinite(revokedAgeMs) && revokedAgeMs <= GRACE_MS) {
+        reply.clearCookie(REFRESH_COOKIE, { path: '/' });
+        return reply.code(401).send({ error: 'refresh_race_lost' });
+      }
       db.prepare('UPDATE sessions SET revoked_at = datetime(\'now\') WHERE user_id = ? AND revoked_at IS NULL')
         .run(session.user_id);
       writeAudit(db, 'refresh_reuse_detected', {

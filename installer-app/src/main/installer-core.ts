@@ -1677,32 +1677,42 @@ function readHubSessionMarker(): HubSessionView | null {
   } catch { return null; }
 }
 
+// Single-flight mutex for the installer-app's refresh calls. The dashboard's
+// HubTab + FriendsTab + FeedTab + AccountStep all call hubActiveSession() /
+// currentAccessToken() on mount — if the app window wakes up from sleep and
+// the dashboard is on-screen, multiple calls fire concurrently within ~10ms.
+// Without this, we'd race the daemon over the refresh cookie and trip the
+// hub's reuse-detection (now softened, but we still want clean serialization).
+let refreshInFlight: Promise<string | null> | null = null;
+
 async function currentAccessToken(): Promise<string | null> {
   const email = await keychainGet('active-email');
   if (!email) return null;
   const access = await keychainGet(`access:${email}`);
   const refresh = await keychainGet(`refresh:${email}`);
   if (!access || !refresh) return null;
-  const refreshed = await hubFetch<{ accessToken: string }>('/auth/refresh', {
-    method: 'POST', refreshCookie: refresh,
-  });
-  if (refreshed.ok && refreshed.data) {
-    // Hub uses rotating refresh — absorb the new cookie so the next call
-    // doesn't trip refresh-reuse detection.
-    const newRefresh = extractRefreshCookie(refreshed.cookies);
-    if (newRefresh) await keychainSet(`refresh:${email}`, newRefresh);
-    await keychainSet(`access:${email}`, refreshed.data.accessToken);
-    return refreshed.data.accessToken;
+
+  if (!refreshInFlight) {
+    refreshInFlight = (async (): Promise<string | null> => {
+      const refreshed = await hubFetch<{ accessToken: string }>('/auth/refresh', {
+        method: 'POST', refreshCookie: refresh,
+      });
+      if (refreshed.ok && refreshed.data) {
+        const newRefresh = extractRefreshCookie(refreshed.cookies);
+        if (newRefresh) await keychainSet(`refresh:${email}`, newRefresh);
+        await keychainSet(`access:${email}`, refreshed.data.accessToken);
+        return refreshed.data.accessToken;
+      }
+      if (refreshed.status === 401) {
+        await keychainDelete(`access:${email}`);
+        await keychainDelete(`refresh:${email}`);
+        return null;
+      }
+      // Non-401 failure (network, 5xx). Keep the existing access token.
+      return access;
+    })().finally(() => { refreshInFlight = null; });
   }
-  if (refreshed.status === 401) {
-    // Session was revoked (either by user logout-all, password change, or
-    // the reuse-detection trip). Clear stale tokens so the next call doesn't
-    // keep hammering /auth/refresh.
-    await keychainDelete(`access:${email}`);
-    await keychainDelete(`refresh:${email}`);
-    return null;
-  }
-  return access;
+  return refreshInFlight;
 }
 
 function clearHubSessionMarker(): void {

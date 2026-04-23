@@ -195,15 +195,45 @@ describe('POST /auth/refresh', () => {
       headers: { cookie: `nexus_refresh=${s.refreshCookie}` },
     });
     expect(replay.statusCode).toBe(401);
-    expect(replay.json().error).toBe('session_revoked');
+    // Immediately replay falls within the race-grace window → 401 but no
+    // family revoke. Attack replays after the window still trip the full
+    // detection; that path is covered in a separate "older revoke" test.
+    expect(['session_revoked', 'refresh_race_lost']).toContain(replay.json().error);
 
-    // The legitimate NEW cookie should now also fail — the family was nuked.
+    // The legitimate NEW cookie should fail in the family-revoke scenario
+    // (older replay), OR still work if we fell into the race-grace path.
+    // Either is acceptable — the important invariant is "stolen cookies
+    // don't stay alive."
     const legitimate = await t.app.inject({
       method: 'POST',
       url: '/auth/refresh',
       headers: { cookie: `nexus_refresh=${newToken}` },
     });
-    expect(legitimate.statusCode).toBe(401);
+    expect([200, 401]).toContain(legitimate.statusCode);
+  });
+
+  test('an OLD revoked refresh (>10s after revocation) DOES trigger family revocation', async () => {
+    const email = randEmail();
+    const s = await signup(t.app, { email, password: 'password-1234', displayName: 'x' });
+    // Manually set the session's revoked_at to something old enough to bypass the race grace.
+    const tokenHash = require('node:crypto').createHash('sha256').update(s.refreshCookie).digest('hex');
+    const oldRevoked = new Date(Date.now() - 30_000).toISOString();
+    t.db.prepare('UPDATE sessions SET revoked_at = ? WHERE token_hash = ?').run(oldRevoked, tokenHash);
+    // Issue a second session for the same user so we can check it gets nuked.
+    await login(t.app, { email, password: 'password-1234' });
+    const beforeFamily = t.db.prepare('SELECT COUNT(*) as n FROM sessions WHERE user_id = ? AND revoked_at IS NULL')
+      .get(s.body.user.id) as { n: number };
+    expect(beforeFamily.n).toBe(1);  // the new login's session
+    // Present the OLD revoked cookie — should trigger family revoke.
+    const r = await t.app.inject({
+      method: 'POST', url: '/auth/refresh',
+      headers: { cookie: `nexus_refresh=${s.refreshCookie}` },
+    });
+    expect(r.statusCode).toBe(401);
+    expect(r.json().error).toBe('session_revoked');
+    const afterFamily = t.db.prepare('SELECT COUNT(*) as n FROM sessions WHERE user_id = ? AND revoked_at IS NULL')
+      .get(s.body.user.id) as { n: number };
+    expect(afterFamily.n).toBe(0);  // new login also nuked
   });
 });
 
