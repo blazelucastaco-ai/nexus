@@ -32,12 +32,20 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      - name: Prepare test HOME
+        # Create a HOME directory OUTSIDE the checked-out repo. If HOME is
+        # inside the workspace (e.g. `$workspace/.home`), the daemon's self-
+        # protection guard refuses writes under it because it's inside the
+        # NEXUS source tree — which breaks tests that intentionally write
+        # to `~/...`. Using RUNNER_TEMP puts HOME on a separate path.
+        run: |
+          mkdir -p "${RUNNER_TEMP}/nexus-home/.nexus"
+          echo "TEST_HOME=${RUNNER_TEMP}/nexus-home" >> "$GITHUB_ENV"
+
       - name: Test (main package)
         run: pnpm test
         env:
-          # Tests open a real SQLite DB at ~/.nexus/memory.db; make sure CI
-          # has a writable home.
-          HOME: ${{ github.workspace }}/.home
+          HOME: ${{ env.TEST_HOME }}
 
       # Hub package — install deps (reusing the monorepo store), typecheck,
       # and run the full integration suite against a fresh in-memory SQLite.
