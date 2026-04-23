@@ -144,6 +144,59 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     firstTimer.unref?.();
     const hourlyTimer = setInterval(purge, 60 * 60_000);
     hourlyTimer.unref?.();
+
+    // ── Nightly backup ─────────────────────────────────────────────
+    // Uses SQLite's online-backup API (.backup command) which is WAL-safe
+    // (unlike a cp of hub.db which may capture a torn checkpoint). Writes
+    // to /data/backups/hub-<ISO>.db.gz, rotates to the last 14 nights.
+    const DAY_MS = 24 * 60 * 60_000;
+    const BACKUP_DIR = '/data/backups';
+    const KEEP_NIGHTS = 14;
+
+    const runBackup = async (): Promise<void> => {
+      try {
+        const { mkdirSync, readdirSync, unlinkSync, statSync, createReadStream, createWriteStream } = await import('node:fs');
+        const { createGzip } = await import('node:zlib');
+        const { pipeline } = await import('node:stream/promises');
+        mkdirSync(BACKUP_DIR, { recursive: true });
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        const out = `${BACKUP_DIR}/hub-${ts}.db`;
+        const outGz = `${out}.gz`;
+        const db = getDb();
+        // SQLite's .backup is atomic + WAL-safe. Use the Node binding.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (db as any).backup(out);
+        // Gzip it so we're not storing a 10MB raw db per night.
+        await pipeline(createReadStream(out), createGzip(), createWriteStream(outGz));
+        unlinkSync(out);
+        // Rotate: keep only the N most recent.
+        const snapshots = readdirSync(BACKUP_DIR)
+          .filter((f) => f.startsWith('hub-') && f.endsWith('.db.gz'))
+          .map((f) => ({ f, m: statSync(`${BACKUP_DIR}/${f}`).mtimeMs }))
+          .sort((a, b) => b.m - a.m);
+        for (const { f } of snapshots.slice(KEEP_NIGHTS)) {
+          try { unlinkSync(`${BACKUP_DIR}/${f}`); } catch { /* ignore */ }
+        }
+        app.log.info({ file: outGz, totalKept: Math.min(snapshots.length, KEEP_NIGHTS) }, 'nightly backup complete');
+      } catch (err) {
+        app.log.warn({ err }, 'nightly backup failed');
+      }
+    };
+
+    // Fire at ~02:00 UTC each day. We schedule a one-shot to next 02:00
+    // then a 24h interval after.
+    const nextTwoAM = (): number => {
+      const now = new Date();
+      const target = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 2, 0, 0));
+      if (target.getTime() <= now.getTime()) target.setUTCDate(target.getUTCDate() + 1);
+      return target.getTime() - now.getTime();
+    };
+    const firstBackup = setTimeout(() => {
+      void runBackup();
+      const dailyTimer = setInterval(() => void runBackup(), DAY_MS);
+      dailyTimer.unref?.();
+    }, nextTwoAM());
+    firstBackup.unref?.();
   }
 
   // Deep health check: hits SQLite so we detect "server is up but DB is sick".
