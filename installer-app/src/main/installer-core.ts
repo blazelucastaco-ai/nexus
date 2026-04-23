@@ -389,7 +389,10 @@ async function registerLaunchd(input?: ConfigInput): Promise<void> {
   }
 
   const startScript = `#!/bin/bash\ncd "${NEXUS_DIR}"\nexec /usr/bin/env node "${appCjs}"\n`;
-  writeFileSync(startSh, startScript, { mode: 0o755 });
+  // mode 0o700: owner-execute-only. Previously 0o755 (world-readable). The
+  // script doesn't contain secrets but referencing it with 0o700 keeps the
+  // whole ~/.nexus tree consistently owner-only on shared Macs.
+  writeFileSync(startSh, startScript, { mode: 0o700 });
 
   // Pull credentials from the just-written .env so the service process
   // has them in its environment too — required because the built
@@ -1525,23 +1528,36 @@ interface HubResponse<T> { ok: boolean; status: number; data: T | null; error?: 
 
 async function hubFetch<T>(
   path: string,
-  opts: { method?: string; body?: unknown; accessToken?: string; refreshCookie?: string } = {},
+  opts: { method?: string; body?: unknown; accessToken?: string; refreshCookie?: string; timeoutMs?: number } = {},
 ): Promise<HubResponse<T>> {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (opts.accessToken) headers.authorization = `Bearer ${opts.accessToken}`;
   if (opts.refreshCookie) headers.cookie = `nexus_refresh=${opts.refreshCookie}`;
+
+  // AbortController timeout so a wedged hub connection doesn't freeze the
+  // renderer. 15s is generous for a mobile-style hub on a cold start.
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 15_000);
+
   try {
     const r = await fetch(`${HUB_URL}${path}`, {
       method: opts.method ?? (opts.body ? 'POST' : 'GET'),
       headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
+      signal: ctrl.signal,
     });
     const text = await r.text();
-    const data = text ? JSON.parse(text) : null;
+    let data: unknown = null;
+    try { data = text ? JSON.parse(text) : null; } catch { /* non-JSON body */ }
     const setCookies = r.headers.getSetCookie?.() ?? [];
-    return { ok: r.ok, status: r.status, data: r.ok ? (data as T) : null, error: r.ok ? undefined : (data?.error ?? 'request_failed'), cookies: setCookies };
+    return { ok: r.ok, status: r.status, data: r.ok ? (data as T) : null, error: r.ok ? undefined : ((data as { error?: string })?.error ?? 'request_failed'), cookies: setCookies };
   } catch (err) {
-    return { ok: false, status: 0, data: null, error: `network_error: ${(err as Error).message}` };
+    const msg = (err as Error).name === 'AbortError'
+      ? `timeout after ${opts.timeoutMs ?? 15_000}ms`
+      : (err as Error).message;
+    return { ok: false, status: 0, data: null, error: `network_error: ${msg}` };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

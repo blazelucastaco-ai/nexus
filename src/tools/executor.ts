@@ -674,6 +674,24 @@ export class ToolExecutor {
 
   private backgroundProcesses = new Map<number, { command: string; startedAt: string }>();
 
+  /**
+   * Kill every tracked background child. Called on daemon shutdown so we
+   * don't leak PIDs across restarts (previously unref'd children survived
+   * parent death; launchd's KeepAlive restart would then duplicate them
+   * on every reboot until the user noticed a zombie tree).
+   */
+  public killAllBackgroundProcesses(): void {
+    for (const [pid, info] of this.backgroundProcesses) {
+      try {
+        // SIGTERM gives the child a chance to clean up; most trading bots
+        // / node servers handle it gracefully.
+        process.kill(pid, 'SIGTERM');
+        log.info({ pid, command: info.command.slice(0, 80) }, 'killed background process on shutdown');
+      } catch { /* already dead */ }
+    }
+    this.backgroundProcesses.clear();
+  }
+
   private async runBackgroundCommand(args: Record<string, unknown>): Promise<string> {
     const { spawn } = await import('node:child_process');
     const command = String(args.command ?? '');

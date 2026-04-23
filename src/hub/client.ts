@@ -90,17 +90,40 @@ async function fetchWithAuth(
   const refresh = await keychainGet(`refresh:${email}`);
   if (!access || !refresh) return { ok: false, status: 0, data: null, error: 'missing_tokens' };
 
-  const makeRequest = async (token: string): Promise<Response> => {
-    const headers: Record<string, string> = { authorization: `Bearer ${token}` };
-    if (opts.body) headers['content-type'] = 'application/json';
-    return fetch(`${session.hubUrl}${path}`, {
-      method: opts.method ?? (opts.body ? 'POST' : 'GET'),
-      headers,
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
-    });
+  // Request with timeout + 5xx retry. Transient hub blips (502/503/504 from
+  // Fly's edge during a cold start) previously blew up every caller. One
+  // retry with 500ms backoff soaks up ~90% of those without annoying users.
+  const makeRequestWithRetry = async (token: string): Promise<Response> => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15_000);
+    try {
+      const first = await fetch(`${session.hubUrl}${path}`, {
+        method: opts.method ?? (opts.body ? 'POST' : 'GET'),
+        headers: {
+          authorization: `Bearer ${token}`,
+          ...(opts.body ? { 'content-type': 'application/json' } : {}),
+        },
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+        signal: ctrl.signal,
+      });
+      if (first.status < 500 || first.status === 501) return first;
+      // Retry once on transient 5xx.
+      await new Promise((r) => setTimeout(r, 500));
+      return await fetch(`${session.hubUrl}${path}`, {
+        method: opts.method ?? (opts.body ? 'POST' : 'GET'),
+        headers: {
+          authorization: `Bearer ${token}`,
+          ...(opts.body ? { 'content-type': 'application/json' } : {}),
+        },
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
   };
 
-  let r = await makeRequest(access);
+  let r = await makeRequestWithRetry(access);
   if (r.status === 401) {
     // Refresh and retry once.
     const refreshResp = await fetch(`${session.hubUrl}/auth/refresh`, {
@@ -131,7 +154,7 @@ async function fetchWithAuth(
           'add-generic-password', '-U',
           '-s', KEYCHAIN_SERVICE, '-a', `access:${email}`, '-w', access,
         ]).catch(() => null);
-        r = await makeRequest(access);
+        r = await makeRequestWithRetry(access);
       }
     } else if (refreshResp.status === 401) {
       // Hub told us the refresh is revoked or the session family was

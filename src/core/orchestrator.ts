@@ -638,6 +638,13 @@ export class Orchestrator {
       this.dreamInterval = null;
     }
 
+    // Kill any tracked background child processes (bot servers, file watchers,
+    // etc. spawned via run_background_command). Without this, PIDs leak across
+    // restarts and the user ends up with zombie processes after every launchd
+    // KeepAlive restart.
+    try { this.toolExecutor.killAllBackgroundProcesses(); }
+    catch (err) { log.warn({ err }, 'Background process cleanup failed'); }
+
     this.briefingEngine?.stop();
 
     this.proactive?.stop();

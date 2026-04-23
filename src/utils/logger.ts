@@ -11,12 +11,19 @@ const SENSITIVE_PATTERNS: { re: RegExp; replace: string }[] = [
   // Explicit "password"/"passwd"/"secret"/"token"/"api_key" key=value forms,
   // both JSON-style and form-style.
   { re: /(["']?(?:password|passwd|secret|token|api[_-]?key|auth[_-]?token|access[_-]?token)["']?\s*[:=]\s*["']?)[^"'\s,}]+/gi, replace: '$1[redacted]' },
+  // Anthropic API keys — catch `sk-ant-api*` explicitly BEFORE the generic
+  // sk- match so the redaction label distinguishes them in logs.
+  { re: /\bsk-ant-api\d{2,}-[A-Za-z0-9_-]{40,}/g, replace: '[redacted-anthropic]' },
   // Common API-key prefixes (Stripe sk_/pk_, GitHub ghp_ ghs_ github_pat_, OpenAI sk-)
   { re: /\bsk-[A-Za-z0-9_-]{16,}/g, replace: '[redacted-sk]' },
   { re: /\b(?:ghp|ghs|gho|ghu|ghr)_[A-Za-z0-9_-]{16,}/g, replace: '[redacted-gh]' },
   { re: /\bgithub_pat_[A-Za-z0-9_-]{16,}/g, replace: '[redacted-ghpat]' },
   { re: /\b(?:sk_live|sk_test|pk_live|pk_test)_[A-Za-z0-9_-]{16,}/g, replace: '[redacted-stripe]' },
   { re: /\bxox[baprs]-[A-Za-z0-9-]{10,}/g, replace: '[redacted-slack]' },
+  // Telegram bot tokens, including when embedded in api.telegram.org URLs
+  // (e.g. /file/bot<id>:<secret>/... — without this, media-download errors
+  // could log the full token).
+  { re: /bot\d{6,}:[A-Za-z0-9_-]{20,}/g, replace: 'bot[redacted]' },
   // Bearer tokens
   { re: /\bBearer\s+[A-Za-z0-9._-]{16,}/g, replace: 'Bearer [redacted]' },
   // Phone numbers (narrow: 10-11 digits with common separators)

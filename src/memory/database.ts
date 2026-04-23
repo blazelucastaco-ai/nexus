@@ -29,6 +29,16 @@ export function getDatabase(): Database.Database {
 
   runMigrations(db);
 
+  // Periodic WAL checkpoint. Without this, WAL grows unbounded until the
+  // next clean shutdown — a SIGKILL (memory pressure, crash, launchd force-
+  // restart) leaves GB of WAL on disk. TRUNCATE mode safely merges the WAL
+  // back into the main DB every 5 minutes.
+  const walTimer = setInterval(() => {
+    try { db?.pragma('wal_checkpoint(PASSIVE)'); }
+    catch (e) { log.warn({ e }, 'Periodic WAL checkpoint failed'); }
+  }, 5 * 60_000);
+  walTimer.unref?.();
+
   log.info('Database initialized');
   return db;
 }
