@@ -573,8 +573,10 @@ function LogsTab(): JSX.Element {
           style={{ maxHeight: 'calc(100vh - 340px)' }}
         >
           {filtered.length === 0 && <span className="dim">No lines yet… waiting for NEXUS output.</span>}
-          {filtered.map((l) => (
-            <div key={l.ts + l.msg + Math.random()} className={`log-line log-lvl-${l.level}`}>
+          {filtered.map((l, i) => (
+            // Sequence-based key (not Math.random — that broke React's reconciliation
+            // and caused the whole log DOM to re-render on every new line).
+            <div key={`${l.ts}-${i}`} className={`log-line log-lvl-${l.level}`}>
               <span className="log-ts">{formatTs(l.ts)}</span>{' '}
               {l.component && <span className="log-comp">{l.component}</span>}{' '}
               <span className="log-msg">{l.msg}</span>
@@ -586,18 +588,33 @@ function LogsTab(): JSX.Element {
   );
 }
 
+/**
+ * Strip terminal control codes + NUL bytes from a string before rendering.
+ * Log lines sometimes contain ANSI escapes (from spawned child processes
+ * that logged to the NEXUS log file) which would render as garbage in a
+ * <div>.
+ */
+function sanitizeLogText(s: string): string {
+  return s
+    .replace(/\x1b\[[?0-9;]*[a-zA-Z]/g, '') // CSI sequences
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '') // OSC sequences
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ''); // all control chars except \n, \t, \r
+}
+
 function parseLogLine(raw: string): LogEntry {
+  const cleanRaw = sanitizeLogText(raw);
   try {
-    const j = JSON.parse(raw) as { time?: string; level?: number; component?: string; msg?: string };
+    const j = JSON.parse(cleanRaw) as { time?: string; level?: number; component?: string; msg?: string };
     return {
       ts: j.time ?? '',
       level: typeof j.level === 'number' ? j.level : 30,
       component: j.component,
-      msg: j.msg ?? raw,
-      raw,
+      msg: sanitizeLogText(j.msg ?? cleanRaw),
+      raw: cleanRaw,
     };
   } catch {
-    return { ts: '', level: 30, msg: raw, raw };
+    return { ts: '', level: 30, msg: cleanRaw, raw: cleanRaw };
   }
 }
 
@@ -885,7 +902,7 @@ function MemoryTab(): JSX.Element {
                 {deleting === m.id ? '…' : '✕'}
               </button>
             </div>
-            <div className="mem-content">{m.content}</div>
+            <div className="mem-content">{sanitizeLogText(m.content)}</div>
           </div>
         ))}
       </div>
@@ -1023,7 +1040,7 @@ function HubTab(): JSX.Element {
         </button>
       </div>
 
-      {err && <p className="subtle" style={{ color: 'var(--t)', marginTop: 14, fontSize: 13 }}>{err}</p>}
+      {err && <p className="subtle" style={{ color: 'var(--t)', marginTop: 14, fontSize: 13 }}>{sanitizeLogText(err).slice(0, 200)}</p>}
     </div>
   );
 }
@@ -1213,7 +1230,7 @@ function FriendsTab(): JSX.Element {
                     <p className="subtle" style={{ fontSize: 11, margin: '0 0 3px' }}>
                       {formatTs(p.createdAt)} · via {p.instanceName}
                     </p>
-                    <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>{p.content}</p>
+                    <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>{sanitizeLogText(p.content)}</p>
                   </div>
                 ))}
               </div>
@@ -1393,7 +1410,7 @@ function FeedTab(): JSX.Element {
               <span className="subtle" style={{ fontSize: 11 }}>via {p.instanceName}</span>
               <span className="subtle" style={{ fontSize: 11, marginLeft: 'auto' }}>{formatTs(p.createdAt)}</span>
             </div>
-            <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55 }}>{p.content}</p>
+            <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55 }}>{sanitizeLogText(p.content)}</p>
           </div>
         ))}
       </div>

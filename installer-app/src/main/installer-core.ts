@@ -625,14 +625,26 @@ function runStreamed(
   onLine: (line: string) => void,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    // FORCE_COLOR=0 + CI=1 + TERM=dumb disables chalk colors, ora spinners,
+    // and most progress-bar libraries in Node child processes. Without these,
+    // `pnpm install` / `pnpm build` emit braille spinner frames + cursor
+    // control codes that render as garbage in the install wizard's log pane.
+    const child = spawn(cmd, args, {
+      cwd,
+      env: { ...process.env, FORCE_COLOR: '0', CI: '1', TERM: 'dumb', NO_COLOR: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     let buf = '';
     const pump = (chunk: Buffer): void => {
       buf += chunk.toString('utf-8');
       let nl = buf.indexOf('\n');
       while (nl !== -1) {
-        const line = buf.slice(0, nl).trim();
+        const rawLine = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
+        // Belt-and-suspenders — even with the env vars above, some tools
+        // still emit control codes (`.catch(() => ...)` prints native error
+        // messages, npm spinners, etc.). Strip them here too.
+        const line = stripTerminalJunk(rawLine);
         if (line) onLine(line);
         nl = buf.indexOf('\n');
       }
@@ -641,7 +653,8 @@ function runStreamed(
     child.stderr.on('data', pump);
     child.on('error', reject);
     child.on('close', (code) => {
-      if (buf.trim()) onLine(buf.trim());
+      const tail = stripTerminalJunk(buf);
+      if (tail) onLine(tail);
       if (code === 0) resolve();
       else reject(new Error(`${cmd} ${args.join(' ')} exited with code ${code}`));
     });
@@ -1243,17 +1256,47 @@ export async function deleteMemory(id: string): Promise<{ ok: boolean; error?: s
 
 // ── Quick-action helpers (run real nexus CLI commands) ───────────────
 
+/**
+ * Strip ALL ANSI escape sequences plus spinner artefacts from CLI output so
+ * the dashboard's <pre> blocks render clean text. The previous regex only
+ * caught SGR color codes ending in `m`, leaving cursor-control sequences
+ * (`\x1b[?25l`, `\x1b[K`, `\x1b[2A`) and `ora` spinner frames rendering as
+ * "random letters" — the exact bug reported in the Dashboard actions.
+ */
+function stripTerminalJunk(s: string): string {
+  return s
+    // Full CSI sequence — `\x1b[` then optional `?` + digits/semicolons + final byte.
+    .replace(/\x1b\[[?0-9;]*[a-zA-Z]/g, '')
+    // OSC sequences (e.g. terminal titles): `\x1b]...\x07` or `\x1b]...\x1b\\`
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+    // ora/cli-spinners: braille + other common spinner glyphs, when they're
+    // surrounded by whitespace (isolated Unicode spinner frames only — we
+    // don't want to nuke legitimate Unicode in skill/memory content).
+    .replace(/[\u2800-\u28FF]\s*/g, '')
+    // Carriage returns without newlines — ora uses `\r` to overwrite the
+    // spinner line. After stripping the spinner chars, these become dead
+    // weight that makes the output look misaligned in a <pre>.
+    .replace(/\r(?!\n)/g, '')
+    .trim();
+}
+
 async function runNexusCli(args: string[], timeoutMs = 60_000): Promise<{ ok: boolean; output: string }> {
   const nexusBin = (await resolveBinary('nexus')) ?? 'nexus';
   return new Promise((resolve) => {
-    const proc = spawn(nexusBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(nexusBin, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // Tell the CLI it's not on a TTY so ora falls back to a quiet non-spinner
+      // mode in libraries that check. Many ora-based CLIs will also disable
+      // color + progress bars when FORCE_COLOR=0 + CI=1.
+      env: { ...process.env, FORCE_COLOR: '0', CI: '1', TERM: 'dumb' },
+    });
     let out = '';
     proc.stdout.on('data', (d) => { out += String(d); });
     proc.stderr.on('data', (d) => { out += String(d); });
     const kill = setTimeout(() => proc.kill('SIGKILL'), timeoutMs);
     proc.on('exit', (code) => {
       clearTimeout(kill);
-      resolve({ ok: code === 0, output: out.replace(/\x1b\[[0-9;]*m/g, '').trim() });
+      resolve({ ok: code === 0, output: stripTerminalJunk(out) });
     });
     proc.on('error', () => {
       clearTimeout(kill);
