@@ -615,14 +615,19 @@ export class ToolExecutor {
 
     // Source user shell config so nvm, pyenv, rbenv, and project PATH entries work.
     // We run as a login shell (-l) AND explicitly source .zshrc for interactive-only setups.
-    const wrappedCommand = `source ~/.zshrc 2>/dev/null; source ~/.zprofile 2>/dev/null; ${command}`;
+    const wrappedCommand = `source ~/.zshrc 2>/dev/null; source ~/.zprofile 2>/dev/null; source ~/.bashrc 2>/dev/null; source ~/.profile 2>/dev/null; ${command}`;
+
+    // Prefer zsh on macOS (Lucas's primary target), but fall back to bash on
+    // systems that don't ship zsh — notably GitHub's ubuntu-latest runners.
+    const { existsSync } = await import('node:fs');
+    const shell = existsSync('/bin/zsh') ? '/bin/zsh' : '/bin/bash';
 
     let stdout = '';
     let stderr = '';
     let exitCode = 0;
 
     try {
-      const result = await execFileAsync('/bin/zsh', ['-l', '-c', wrappedCommand], {
+      const result = await execFileAsync(shell, ['-l', '-c', wrappedCommand], {
         timeout: timeoutMs,
         cwd,
         maxBuffer: 10 * 1024 * 1024,
@@ -703,9 +708,13 @@ export class ToolExecutor {
       return `Command rejected as dangerous: ${command}`;
     }
 
-    const wrappedCommand = `source ~/.zshrc 2>/dev/null; source ~/.zprofile 2>/dev/null; ${command}`;
+    const wrappedCommand = `source ~/.zshrc 2>/dev/null; source ~/.zprofile 2>/dev/null; source ~/.bashrc 2>/dev/null; source ~/.profile 2>/dev/null; ${command}`;
 
-    const child = spawn('/bin/zsh', ['-l', '-c', wrappedCommand], {
+    // Same fallback as run_terminal_command: zsh on macOS, bash on CI.
+    const { existsSync: fsExistsSync } = await import('node:fs');
+    const bgShell = fsExistsSync('/bin/zsh') ? '/bin/zsh' : '/bin/bash';
+
+    const child = spawn(bgShell, ['-l', '-c', wrappedCommand], {
       cwd,
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
