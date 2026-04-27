@@ -29,8 +29,8 @@
     "node": ">=22.0.0"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.90.0",
-    "@inquirer/prompts": "^8.3.2",
+    "@anthropic-ai/sdk": "^0.91.1",
+    "@inquirer/prompts": "^8.4.2",
     "better-sqlite3": "^11.7.0",
     "chalk": "^5.4.1",
     "cheerio": "^1.2.0",
@@ -38,7 +38,7 @@
     "dotenv": "^16.4.7",
     "grammy": "^1.35.0",
     "inquirer": "^12.4.0",
-    "nanoid": "^5.1.2",
+    "nanoid": "^5.1.9",
     "openai": "^4.85.0",
     "pdf-parse": "^2.4.5",
     "pino": "^9.6.0",
