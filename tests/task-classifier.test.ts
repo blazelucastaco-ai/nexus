@@ -264,5 +264,54 @@ describe('detectMissingRequirements', () => {
     it('non-task message — should return null regardless', () => {
       expect(detectMissingRequirements('what is the weather today?')).toBeNull();
     });
+
+    // ── Analysis-verb requests on existing things (regression: ClearComp screenshot) ──
+
+    it('security audit on a URL — exact case from ClearComp screenshot', () => {
+      expect(
+        detectMissingRequirements(
+          'hey, this is my dads website. can you run a security audit on it ? http://Getclearcomp.com',
+        ),
+      ).toBeNull();
+    });
+
+    it('audit verb without build verb — "audit my website"', () => {
+      expect(detectMissingRequirements('audit my website for security issues')).toBeNull();
+    });
+
+    it('review verb without build verb — "review my landing page"', () => {
+      expect(detectMissingRequirements('review my landing page')).toBeNull();
+    });
+
+    it('scan verb without build verb — "scan this app for vulnerabilities"', () => {
+      expect(detectMissingRequirements('scan this app for vulnerabilities')).toBeNull();
+    });
+
+    it('inspect verb without build verb — "inspect this site"', () => {
+      expect(detectMissingRequirements('inspect this website and tell me whats broken')).toBeNull();
+    });
+
+    it('analyze verb without build verb — "analyze the dashboard"', () => {
+      expect(detectMissingRequirements('analyze the dashboard performance')).toBeNull();
+    });
+
+    it('URL alone is enough context — "build a clone of https://x.com"', () => {
+      expect(detectMissingRequirements('build a clone of https://stripe.com')).toBeNull();
+    });
+
+    it('URL alone is enough context — short request with URL', () => {
+      expect(detectMissingRequirements('make me a website like https://example.com')).toBeNull();
+    });
+
+    // ── Guard: analysis-verb early-return must NOT swallow vague build requests ──
+
+    it('"create a review form" — has BUILD verb, gate must still fire', () => {
+      // "review" is the noun, "create" is the actual intent — short vague build request
+      expect(detectMissingRequirements('create a review form')).not.toBeNull();
+    });
+
+    it('"build a website auditor" — has BUILD verb, gate must still fire', () => {
+      expect(detectMissingRequirements('build a website auditor')).not.toBeNull();
+    });
   });
 });

@@ -129,6 +129,17 @@ const THIRD_PARTY_PATTERNS: RegExp[] = [
 const FIX_VERBS = /\b(?:fix|debug|repair|troubleshoot|diagnose|solve|investigate|patch|correct|resolve)\b/i;
 
 /**
+ * Analysis verbs — read-only operations on something that already exists
+ * (audit a site, review a PR, scan a repo). Identical semantics to FIX_VERBS:
+ * the target exists, so build-style requirements are not needed.
+ *
+ * Only short-circuits when no BUILD_VERBS are also present, so that requests
+ * like "create a review form" still go through the requirements gate.
+ */
+const ANALYSIS_VERBS = /\b(?:audit|audits|audited|auditing|review|reviews|reviewed|reviewing|assess|assesses|assessed|assessing|scan|scans|scanned|scanning|evaluate|evaluates|evaluated|evaluating|inspect|inspects|inspected|inspecting|examine|examines|examined|examining|analyse|analyses|analysed|analysing|analyze|analyzes|analyzed|analyzing)\b/i;
+const BUILD_VERBS = /\b(?:build|builds|building|built|create|creates|creating|created|make|makes|making|develop|develops|developing|developed|generate|generates|generating|generated|scaffold|scaffolds|scaffolded|scaffolding|implement|implements|implementing|implemented|write|writes|writing|wrote|written|code|codes|coding|coded|program|programs|programming|programmed|design|designs|designing|designed)\b/i;
+
+/**
  * Signals that the message contains enough context to proceed without asking.
  * If any of these match, requirements are likely present.
  */
@@ -144,6 +155,8 @@ const HAS_CONTEXT_PATTERNS: RegExp[] = [
   /\b(?:with\s+(?:a|an|the)\s+\w+|including\s+(?:a|an)\s+\w+|pages?\s+for|sections?\s+for|features?\s+(?:like|including|such as))\b/i,
   // Describes the subject/purpose clearly: "about X", "for selling X", "focused on X"
   /\b(?:about|focused\s+on|centered\s+on|related\s+to|based\s+on|regarding)\s+\w+/i,
+  // Explicit URL — request references an existing resource, not a build-from-scratch
+  /\bhttps?:\/\/\S+/i,
   // Tech stack specified — explicit framework or "using/built with"
   /\b(?:using|built\s+with|powered\s+by|in\s+(?:react|vue|svelte|next|nuxt|python|node|rails|django|flask|laravel))\b/i,
   // Direct tech mention: "HTML, CSS", "HTML and JS", "just HTML" — clearly spec'd
@@ -193,6 +206,11 @@ export function detectMissingRequirements(text: string): string | null {
 
   // Fix/debug verbs mean existing code — never ask for requirements
   if (FIX_VERBS.test(trimmed)) return null;
+
+  // Analysis verbs (audit/review/scan/...) without a build verb mean an
+  // operation on something that already exists (e.g. "audit https://x.com",
+  // "review my dad's website") — same semantics as fix/debug.
+  if (ANALYSIS_VERBS.test(trimmed) && !BUILD_VERBS.test(trimmed)) return null;
 
   // Modification requests on existing things — "add X to it/to the Y", "built earlier", "already have"
   if (MODIFICATION_TARGET_RE.test(trimmed) && MODIFICATION_VERB_RE.test(trimmed)) return null;
