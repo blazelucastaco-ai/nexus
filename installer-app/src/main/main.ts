@@ -28,24 +28,9 @@ import {
   deleteMemory,
   takeScreenshot,
   triggerDream,
-  triggerHubPost,
   runHealthCheck,
   detectMemorySources,
   runMemoryImport,
-  hubSignup,
-  hubSetUsername,
-  hubLogin,
-  hubLogout,
-  hubActiveSession,
-  hubRegisterInstance,
-  hubListInstances,
-  hubFriendsList,
-  hubFriendRequest,
-  hubFriendAccept,
-  hubFriendBlock,
-  hubFriendRemove,
-  hubFriendGossip,
-  hubFeed,
   getAboutInfo,
 } from './installer-core';
 import type { ConfigInput, InstallProgress, UpdateProgress } from '../shared/types';
@@ -501,61 +486,6 @@ app.whenReady().then(() => {
       catch { /* window already closed */ }
     });
   });
-
-  // ── Nexus Hub ────────────────────────────────────────────────────
-  ipcMain.handle('hub:signup', async (_e, payload: unknown) => {
-    if (!payload || typeof payload !== 'object') return { ok: false, error: 'invalid_input' };
-    const p = payload as Record<string, unknown>;
-    if (typeof p.email !== 'string' || typeof p.password !== 'string' || typeof p.displayName !== 'string') {
-      return { ok: false, error: 'invalid_input' };
-    }
-    const username = typeof p.username === 'string' ? p.username : undefined;
-    return hubSignup({ email: p.email, password: p.password, displayName: p.displayName, username });
-  });
-  ipcMain.handle('hub:set-username', async (_e, username: unknown) => {
-    if (typeof username !== 'string') return { ok: false, error: 'invalid_username' };
-    return hubSetUsername(username);
-  });
-  ipcMain.handle('hub:login', async (_e, payload: unknown) => {
-    if (!payload || typeof payload !== 'object') return { ok: false, error: 'invalid_input' };
-    const p = payload as Record<string, unknown>;
-    if (typeof p.email !== 'string' || typeof p.password !== 'string') {
-      return { ok: false, error: 'invalid_input' };
-    }
-    return hubLogin({ email: p.email, password: p.password });
-  });
-  ipcMain.handle('hub:logout', async () => hubLogout());
-  ipcMain.handle('hub:session', async () => hubActiveSession());
-  ipcMain.handle('hub:register-instance', async (_e, name: unknown) => {
-    if (typeof name !== 'string' || !name) return { ok: false, error: 'invalid_name' };
-    return hubRegisterInstance(name);
-  });
-  ipcMain.handle('hub:list-instances', async () => hubListInstances());
-  ipcMain.handle('hub:friends-list', async () => hubFriendsList());
-  ipcMain.handle('hub:friend-request', async (_e, identifier: unknown) => {
-    if (typeof identifier !== 'string') return { ok: false, error: 'invalid_input' };
-    return hubFriendRequest(identifier);
-  });
-  ipcMain.handle('main:trigger-hub-post', async () => triggerHubPost());
-  ipcMain.handle('hub:friend-accept', async (_e, id: unknown) => {
-    if (typeof id !== 'string') return { ok: false, error: 'invalid_id' };
-    return hubFriendAccept(id);
-  });
-  ipcMain.handle('hub:friend-block', async (_e, id: unknown) => {
-    if (typeof id !== 'string') return { ok: false, error: 'invalid_id' };
-    return hubFriendBlock(id);
-  });
-  ipcMain.handle('hub:friend-remove', async (_e, id: unknown) => {
-    if (typeof id !== 'string') return { ok: false, error: 'invalid_id' };
-    return hubFriendRemove(id);
-  });
-  ipcMain.handle('hub:friend-gossip', async (_e, payload: unknown) => {
-    if (!payload || typeof payload !== 'object') return { ok: false, error: 'invalid_input' };
-    const p = payload as { id?: unknown; enabled?: unknown };
-    if (typeof p.id !== 'string' || typeof p.enabled !== 'boolean') return { ok: false, error: 'invalid_input' };
-    return hubFriendGossip(p.id, p.enabled);
-  });
-  ipcMain.handle('hub:feed', async () => hubFeed());
 
   if (isMenubarMode) {
     startMenubarMode();

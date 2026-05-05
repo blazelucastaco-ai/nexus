@@ -10,18 +10,9 @@ export type StepKey =
   | 'permissions'
   | 'install'
   | 'chrome'
-  | 'account'
   | 'memory-import'
   | 'uninstall'
   | 'done';
-
-export interface HubAccountSession {
-  userId: string;
-  email: string;
-  displayName: string;
-  accessToken: string;
-  instanceId?: string; // populated once this install has registered
-}
 
 export interface DetectionResult {
   configExists: boolean;
@@ -136,7 +127,7 @@ export const PERSONALITY_PRESETS = {
 
 // ─── Main-app types (post-install management UI) ──────────────────────
 
-export type MainTab = 'dashboard' | 'hub' | 'friends' | 'feed' | 'config' | 'logs' | 'chrome' | 'updates' | 'memory' | 'about';
+export type MainTab = 'dashboard' | 'config' | 'logs' | 'chrome' | 'updates' | 'memory' | 'about';
 
 export interface QuickActionResult {
   ok: boolean;
