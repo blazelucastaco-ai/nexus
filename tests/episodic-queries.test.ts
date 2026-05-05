@@ -10,6 +10,7 @@ import {
   getLatestDreamJournal,
   listRecentSessionSummaries,
   countByTag,
+  findGoalsByContentSubstring,
 } from '../src/data/episodic-queries.js';
 import { nanoid } from 'nanoid';
 
@@ -196,6 +197,74 @@ describe('EpisodicQueryRepo', () => {
 
       const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
       expect(countByTag('x', since)).toBe(1);
+    });
+  });
+
+  // ─── findGoalsByContentSubstring (powers /resolve <substring>) ─────────
+
+  describe('findGoalsByContentSubstring', () => {
+    beforeEach(() => clearMemories());
+
+    it('returns active goals matching the query case-insensitively', () => {
+      insertMemory({
+        content: 'ship the chrome extension to the store this month',
+        tags: '["goal","user-goal","active"]',
+      });
+      insertMemory({
+        content: 'learn rust ownership semantics',
+        tags: '["goal","user-goal","active"]',
+      });
+
+      const matches = findGoalsByContentSubstring('CHROME');
+      expect(matches.length).toBe(1);
+      expect(matches[0]?.content).toContain('chrome extension');
+    });
+
+    it('returns stalled goals as well as active (so the user can resolve a stale one)', () => {
+      insertMemory({
+        content: 'launch the redesign by end of quarter',
+        tags: '["goal","user-goal","stale"]',
+      });
+      const matches = findGoalsByContentSubstring('redesign');
+      expect(matches.length).toBe(1);
+    });
+
+    it('excludes goals already tagged resolved (no zombies in the picker)', () => {
+      insertMemory({
+        content: 'finish the iOS port of the app',
+        tags: '["goal","user-goal","resolved"]',
+      });
+      const matches = findGoalsByContentSubstring('ios');
+      expect(matches.length).toBe(0);
+    });
+
+    it('returns empty for queries shorter than 2 chars (avoids accidental match-everything)', () => {
+      insertMemory({
+        content: 'do a thing',
+        tags: '["goal","user-goal","active"]',
+      });
+      expect(findGoalsByContentSubstring('a')).toEqual([]);
+      expect(findGoalsByContentSubstring(' ')).toEqual([]);
+      expect(findGoalsByContentSubstring('')).toEqual([]);
+    });
+
+    it('returns empty when nothing matches', () => {
+      insertMemory({
+        content: 'ship the chrome extension',
+        tags: '["goal","user-goal","active"]',
+      });
+      expect(findGoalsByContentSubstring('rust')).toEqual([]);
+    });
+
+    it('respects the limit parameter', () => {
+      for (let i = 0; i < 8; i++) {
+        insertMemory({
+          content: `goal number ${i} for the redesign work`,
+          tags: '["goal","user-goal","active"]',
+        });
+      }
+      expect(findGoalsByContentSubstring('redesign', 3).length).toBe(3);
+      expect(findGoalsByContentSubstring('redesign', 10).length).toBe(8);
     });
   });
 });

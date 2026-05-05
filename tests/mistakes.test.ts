@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { MistakeTracker } from '../src/learning/mistakes.js';
+import { MistakeTracker, formatMistakeWarning } from '../src/learning/mistakes.js';
+import type { Mistake } from '../src/types.js';
 
 // Minimal in-memory cortex mock for MistakeTracker
 function makeMockCortex() {
@@ -152,7 +153,11 @@ describe('MistakeTracker', () => {
       expect(typeof result.safe).toBe('boolean');
       if (!result.safe) {
         expect(result.warning).toBeDefined();
-        expect(result.warning!.length).toBeGreaterThan(10);
+        // The new warning format should surface root cause + prevention,
+        // framed as memory ("you ran into this before") not a generic flag.
+        expect(result.warning).toMatch(/(?:you've hit|you ran into)/i);
+        expect(result.warning).toContain('Skipped backup step');
+        expect(result.warning).toContain('Prevention:');
       }
     });
 
@@ -164,6 +169,55 @@ describe('MistakeTracker', () => {
 
       const result = tracker.checkAgainstHistory('deploy the backend API server to production');
       expect(result.safe).toBe(true);
+    });
+  });
+
+  describe('formatMistakeWarning (pure helper)', () => {
+    function fixture(overrides: Partial<Mistake> = {}): Mistake {
+      return {
+        id: 'm1',
+        description: 'deployed without backup',
+        category: 'execution',
+        whatHappened: 'deployed without backing up first',
+        whatShouldHaveHappened: 'always back up before deployment',
+        rootCause: 'forgot the pre-flight checklist',
+        preventionStrategy: 'run the deploy.sh script which gates on backup',
+        severity: 'minor',
+        resolved: false,
+        recurrenceCount: 0,
+        createdAt: '2026-05-04T00:00:00.000Z',
+        ...overrides,
+      };
+    }
+
+    it('uses memory-voiced phrasing on first hit (recurrenceCount 0)', () => {
+      const out = formatMistakeWarning(fixture());
+      expect(out).toContain('You ran into this before:');
+      expect(out).toContain('"deployed without backup"');
+      expect(out).toContain('Last time the root cause was: forgot the pre-flight checklist.');
+      expect(out).toContain('Prevention: run the deploy.sh script which gates on backup');
+    });
+
+    it('reports the actual recurrence count when this is a repeat', () => {
+      // recurrenceCount stored is offset-by-one (incremented on the SECOND occurrence),
+      // so count=2 means the user has hit this 3 times total.
+      const out = formatMistakeWarning(fixture({ recurrenceCount: 2 }));
+      expect(out).toContain("You've hit this 3 times now");
+    });
+
+    it('surfaces severity callout only for major/critical, not minor/moderate', () => {
+      expect(formatMistakeWarning(fixture({ severity: 'minor' }))).not.toMatch(/Severity:/);
+      expect(formatMistakeWarning(fixture({ severity: 'moderate' }))).not.toMatch(/Severity:/);
+      expect(formatMistakeWarning(fixture({ severity: 'major' }))).toContain('Severity: major.');
+      expect(formatMistakeWarning(fixture({ severity: 'critical' }))).toContain('Severity: critical.');
+    });
+
+    it('skips the root-cause line when rootCause is "unknown" (avoids vacuous noise)', () => {
+      const out = formatMistakeWarning(fixture({ rootCause: 'unknown' }));
+      expect(out).not.toMatch(/root cause was/i);
+      // But still surfaces the description and prevention.
+      expect(out).toContain('You ran into this before:');
+      expect(out).toContain('Prevention:');
     });
   });
 

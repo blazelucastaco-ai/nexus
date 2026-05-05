@@ -1,5 +1,5 @@
-# Dependabot automates weekly dependency updates for the three npm surfaces
-# NEXUS ships (daemon + hub + installer-app) plus GitHub Actions itself.
+# Dependabot automates weekly dependency updates for the two npm surfaces
+# NEXUS ships (daemon + installer-app) plus GitHub Actions itself.
 # Security updates come in automatically; regular updates batch weekly.
 version: 2
 updates:
@@ -15,19 +15,6 @@ updates:
       minor-and-patch:
         update-types: [minor, patch]
     labels: [dependencies, daemon]
-
-  - package-ecosystem: npm
-    directory: /hub
-    schedule:
-      interval: weekly
-      day: monday
-      time: '09:00'
-      timezone: America/New_York
-    open-pull-requests-limit: 5
-    groups:
-      minor-and-patch:
-        update-types: [minor, patch]
-    labels: [dependencies, hub]
 
   - package-ecosystem: npm
     directory: /installer-app

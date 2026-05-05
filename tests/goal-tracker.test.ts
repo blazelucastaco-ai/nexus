@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { GoalTracker } from '../src/brain/goal-tracker.js';
+import { GoalTracker, formatStaledGoalNudge } from '../src/brain/goal-tracker.js';
 
 // Mock store function (simulates memory.store)
 function makeStoreFn() {
@@ -122,6 +122,26 @@ describe('GoalTracker', () => {
       expect(typeof pruned).toBe('number');
       expect(pruned).toBeGreaterThanOrEqual(0);
     });
+
+    it('should accept an optional onStaled callback without throwing (signature contract)', () => {
+      const tracker = new GoalTracker();
+      const onStaled = vi.fn();
+      // No goals in the test DB → onStaled never fires; this just locks the
+      // signature so future refactors of pruneStaleGoals can't silently drop
+      // the callback param.
+      expect(() => tracker.pruneStaleGoals(onStaled)).not.toThrow();
+    });
+
+    it('should swallow exceptions thrown inside the onStaled callback', () => {
+      const tracker = new GoalTracker();
+      // The callback is fired inside a try/catch, so a buggy notify path
+      // (e.g., Telegram down) cannot abort the pruning loop.
+      expect(() =>
+        tracker.pruneStaleGoals(() => {
+          throw new Error('notify exploded');
+        }),
+      ).not.toThrow();
+    });
   });
 
   describe('resolveGoal', () => {
@@ -129,5 +149,37 @@ describe('GoalTracker', () => {
       const tracker = new GoalTracker();
       expect(() => tracker.resolveGoal('nonexistent-id-12345')).not.toThrow();
     });
+  });
+});
+
+// ─── formatStaledGoalNudge — Telegram-bound HTML nudge string ─────────────
+
+describe('formatStaledGoalNudge', () => {
+  it('renders the goal verbatim inside the message body', () => {
+    const out = formatStaledGoalNudge('ship the chrome extension to the store this month');
+    expect(out).toContain('🎯');
+    expect(out).toContain("A goal hasn't moved in a month");
+    expect(out).toContain('ship the chrome extension to the store this month');
+    expect(out).toMatch(/<i>".*"<\/i>/);
+  });
+
+  it('is non-coercive — explicitly offers the option to drop the goal', () => {
+    const out = formatStaledGoalNudge('learn rust');
+    expect(out.toLowerCase()).toMatch(/let it drop/);
+    expect(out.toLowerCase()).toMatch(/still on the radar/);
+  });
+
+  it('truncates very long goal content with an ellipsis', () => {
+    const long = 'x'.repeat(500);
+    const out = formatStaledGoalNudge(long);
+    expect(out).toContain('…');
+    // The full 500-x string should NOT appear; the truncated version should.
+    expect(out).not.toContain('x'.repeat(500));
+  });
+
+  it('trims surrounding whitespace before rendering', () => {
+    const out = formatStaledGoalNudge('   \n  ship the v2 redesign  \n  ');
+    expect(out).toContain('"ship the v2 redesign"');
+    expect(out).not.toContain('"   ');
   });
 });

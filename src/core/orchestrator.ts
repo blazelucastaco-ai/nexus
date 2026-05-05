@@ -30,25 +30,23 @@ import { subscribeJournalToEvents } from '../brain/task-journal.js';
 import { startProjectTracker } from '../brain/project-tracker.js';
 import { startCodeDreams } from '../brain/code-dreams.js';
 import { startTimeCapsule } from '../brain/time-capsule.js';
+import { startSkillExtractor } from '../brain/skill-extractor.js';
 import { startIntrospection, type IntrospectionHandle } from '../brain/introspection.js';
 import { buildThreadContext } from '../brain/context-stitcher.js';
 import { buildUrlHint } from '../brain/url-hint.js';
 import { getProject, slugify } from '../data/projects-repository.js';
 import { SELF_DISCLOSURE_REFUSAL } from './self-protection.js';
-import { InnerMonologue } from '../brain/inner-monologue.js';
+import { InnerMonologue, shouldSurfaceMicroThought } from '../brain/inner-monologue.js';
 import { appendTurn, loadSession } from './session-store.js';
 import { DreamingEngine } from '../brain/dreaming.js';
 import { Heartbeat } from '../brain/heartbeat.js';
-import { AutoPoster } from '../hub/auto-poster.js';
-import { InboxPoller } from '../hub/inbox-poller.js';
-import { GossipGenerator, SoulSyncGenerator } from '../hub/gossip-generator.js';
 import { getDatabase } from '../memory/database.js';
 import { ProactiveEngine } from '../brain/proactive.js';
 import { BriefingEngine } from '../brain/briefing.js';
 import { MemorySynthesizer } from '../brain/memory-synthesizer.js';
 import { GoalTracker } from '../brain/goal-tracker.js';
 import { ReasoningTrace } from '../brain/reasoning-trace.js';
-import { SelfEvaluator } from '../brain/self-evaluator.js';
+import { SelfEvaluator, formatLastTurnEvalBlock } from '../brain/self-evaluator.js';
 import { loadSkills, buildSkillsPrompt, selectRelevantSkills } from '../brain/skills.js';
 import type { Skill } from '../brain/skills.js';
 import { contextCache } from './context-cache.js';
@@ -130,6 +128,23 @@ const log = createLogger('Orchestrator');
 
 const MAX_TOOL_ITERATIONS = 50;
 const TOOL_TIMEOUT_MS = 120_000; // 2 minutes max per tool execution
+
+/**
+ * Cooldown between automatic micro inner-monologue prefixes ("*hmm, let me
+ * check what we did last week first*"). Conservative — we'd rather underfire
+ * than spam this surface; one every ~10 minutes per process feels like a
+ * stray thought rather than a tic.
+ */
+const MICRO_THOUGHT_COOLDOWN_MS = 10 * 60 * 1000;
+
+/**
+ * Cooldown between mood-breakthrough prefixes ("*late-night brain, but i'm
+ * here*", "*shaking off the last failure first*"). Longer than micro-thought
+ * because it's not a per-message-uncertainty signal — it's NEXUS's own state
+ * peeking through, and once every 30 min keeps it feeling like a person who
+ * occasionally drops a beat instead of a chatbot with a tic.
+ */
+const MOOD_BREAKTHROUGH_COOLDOWN_MS = 30 * 60 * 1000;
 
 /** Map a tool call to a human-readable Telegram status line. Always generic — never exposes tool names. */
 function getToolStatus(toolName: string, args: Record<string, unknown>): string {
@@ -218,10 +233,6 @@ export class Orchestrator {
   private inactivityTimer: ReturnType<typeof setTimeout> | null = null;
   private dreamInterval: ReturnType<typeof setInterval> | null = null;
   private readonly heartbeat = new Heartbeat();
-  private autoPoster: AutoPoster | null = null;
-  private inboxPoller: InboxPoller | null = null;
-  private gossipGen: GossipGenerator | null = null;
-  private soulGen: SoulSyncGenerator | null = null;
   private readonly INACTIVITY_MS = 30 * 60 * 1000; // 30 minutes
   private readonly SUMMARY_EVERY_N_TURNS = 5;
   // Dream cycle runs at night when the user is asleep. Checked every 15 min;
@@ -239,9 +250,35 @@ export class Orchestrator {
 
   // ── Cognitive subsystems ──
   private memorySynthesizer?: MemorySynthesizer;
-  private goalTracker?: GoalTracker;
+  public goalTracker?: GoalTracker;
   private reasoningTrace?: ReasoningTrace;
   private selfEvaluator?: SelfEvaluator;
+  /**
+   * Most-recent post-response self-eval gap note, surviving exactly one turn.
+   * The post-response evaluator runs fire-and-forget after the user has been
+   * answered; if it flags a gap, we stash the note here so the NEXT turn's
+   * system prompt can reference it ("Last turn — Gap I Flagged"). Cleared
+   * after that next turn's prompt is built — mirrors `continuityBrief`'s
+   * single-turn lifetime.
+   */
+  private lastSelfEvalNote: string | null = null;
+
+  /**
+   * Per-process timestamp of the last micro inner-monologue prefix surfaced
+   * to the user. Used to enforce a cooldown so the "*hmm, let me check…*"
+   * style of line never feels noisy. Distinct from the full think-mode
+   * monologue (`💭 …`) which is opt-in and shows on every applicable turn.
+   */
+  private lastMicroThoughtAt = 0;
+
+  /**
+   * Per-process timestamp of the last mood-breakthrough prefix surfaced.
+   * 30-min cooldown is enforced via `MOOD_BREAKTHROUGH_COOLDOWN_MS`. Mood
+   * breakthroughs only fire on the chat path AND when no innerThought /
+   * microThought has already been chosen for this turn — at most one
+   * italicised prefix lands on any given response.
+   */
+  private lastMoodBreakthroughAt = 0;
 
   // Cross-session continuity (injected into system prompt on first turn)
   private continuityBrief = '';
@@ -284,6 +321,7 @@ export class Orchestrator {
   private projectTrackerSubs: { unsubscribe(): void }[] = [];
   private codeDreamsSubs: { unsubscribe(): void }[] = [];
   private timeCapsuleSubs: { unsubscribe(): void }[] = [];
+  private skillExtractorSubs: { unsubscribe(): void }[] = [];
   public introspection: IntrospectionHandle | null = null;
 
   // Active project: the one Lucas explicitly told NEXUS to work on. Survives
@@ -469,6 +507,25 @@ export class Orchestrator {
     // strong matches with aged semantic memories.
     this.timeCapsuleSubs = startTimeCapsule({ telegram: this.telegram });
 
+    // Skill Extractor — drafts a markdown skill in ~/.nexus/skills/auto/ when
+    // a multi-step successful task ships real files. Subscribes to task.completed.
+    // Drafts are isolated from the active loader (single-level scan) until the
+    // user promotes them via /promote <slug>. The notify callback fires a
+    // Telegram nudge when a slug first reaches the promotion threshold —
+    // closes the loop on "NEXUS noticed a pattern → user gets to decide".
+    const skillNudgeChat = this.config.telegram.allowedUsers[0] ?? this.config.telegram.chatId ?? '';
+    this.skillExtractorSubs = startSkillExtractor({
+      notify: skillNudgeChat
+        ? async (msg) => {
+            try {
+              await this.telegram.sendMessage(skillNudgeChat, msg, { parseMode: 'HTML' });
+            } catch (err) {
+              log.debug({ err }, 'Skill promotion nudge send failed (non-fatal)');
+            }
+          }
+        : undefined,
+    });
+
     // Introspection — keeps NEXUS aware of its own current activity and recent history.
     // Pure event subscriber; query methods feed the system prompt and Telegram commands.
     this.introspection = startIntrospection();
@@ -522,55 +579,6 @@ export class Orchestrator {
 
     // Schedule dream cycle (night window, 2am–5am local)
     this.scheduleDreamCycle();
-
-    // App-installed NEXUS refuses to serve messages until the user has
-    // signed in on the Mac. Log the gate status once at boot so it's
-    // obvious from the logs whether we're locked or not.
-    if (this.config.installMethod === 'app') {
-      const locked = this.isLocked();
-      log.info(
-        { installMethod: 'app', locked, hasSession: !locked },
-        locked
-          ? 'Account gate: LOCKED — waiting for hub sign-in on the Mac'
-          : 'Account gate: unlocked (hub session present)',
-      );
-
-      // Only start the auto-poster when we're unlocked AND signed in.
-      // Re-checks the gate at every tick so a sign-out pauses it automatically.
-      if (!locked) {
-        const activityContext = async (): Promise<string> => {
-          try {
-            const recent = await this.memory.recall('recent activity', { limit: 5 });
-            return recent.map((m: { content: string }) => m.content.slice(0, 120)).join(' · ') || 'quiet lately';
-          } catch {
-            return 'quiet lately';
-          }
-        };
-        const preset = (): string => this.config.personality.preset ?? 'friendly';
-
-        this.autoPoster = new AutoPoster(this.ai, {
-          personalityPreset: preset,
-          getActivityContext: activityContext,
-        });
-        this.autoPoster.start();
-
-        // Inbox poller — decrypts incoming gossip + soul into memory.
-        this.inboxPoller = new InboxPoller(this.memory);
-        this.inboxPoller.start();
-
-        // Agent-initiated senders.
-        this.gossipGen = new GossipGenerator(this.ai, {
-          personalityPreset: preset,
-          getUserActivity: activityContext,
-        });
-        this.gossipGen.start();
-
-        this.soulGen = new SoulSyncGenerator(this.ai, this.memory, {
-          personalityPreset: preset,
-        });
-        this.soulGen.start();
-      }
-    }
 
     // Start the main-agent heartbeat (paused during the dream window).
     this.heartbeat.setStateAccessors({
@@ -629,10 +637,6 @@ export class Orchestrator {
     }
 
     this.heartbeat.stop();
-    this.autoPoster?.stop();
-    this.inboxPoller?.stop();
-    this.gossipGen?.stop();
-    this.soulGen?.stop();
     if (this.dreamInterval) {
       clearInterval(this.dreamInterval);
       this.dreamInterval = null;
@@ -698,6 +702,10 @@ export class Orchestrator {
       try { sub.unsubscribe(); } catch (err) { log.debug({ err }, 'TimeCapsule unsubscribe failed'); }
     }
     this.timeCapsuleSubs = [];
+    for (const sub of this.skillExtractorSubs) {
+      try { sub.unsubscribe(); } catch (err) { log.debug({ err }, 'SkillExtractor unsubscribe failed'); }
+    }
+    this.skillExtractorSubs = [];
     if (this.introspection) {
       for (const sub of this.introspection.subs) {
         try { sub.unsubscribe(); } catch (err) { log.debug({ err }, 'Introspection unsubscribe failed'); }
@@ -724,16 +732,6 @@ export class Orchestrator {
    * Each chatId gets its own promise chain — messages queue up and run one at a time.
    */
   async handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void, onStatus?: (status: string) => void): Promise<string> {
-    // App-installed NEXUS requires an active hub account. Until the user
-    // signs in on the Mac, every incoming message gets a short, helpful
-    // deflection instead of reaching the LLM / tools / memory system.
-    if (this.isLocked()) {
-      return (
-        'NEXUS is locked until you sign in on the Mac.\n\n' +
-        'Open the NEXUS app → Account → sign in or create one. ' +
-        "I'll be back online as soon as the Mac is linked to your Nexus Hub account."
-      );
-    }
 
     let resolve!: () => void;
     const slot = new Promise<void>((r) => { resolve = r; });
@@ -971,8 +969,14 @@ export class Orchestrator {
 
       // ── 5. Build system prompt (with caching) ────────────────
       // Thread context: related prior conversations on the same topic. Pure read,
-      // no side effects. Null if nothing relevant was found.
-      const threadContext = buildThreadContext(text);
+      // no side effects. Null if nothing relevant was found. We pass the current
+      // history length (BEFORE pushing the new user message at step 6) so the
+      // stitcher can suppress itself on mid-thread follow-ups — otherwise short
+      // continuations of an active task surface stale cross-session snippets and
+      // the model can read them as user-pasted content.
+      const threadContext = buildThreadContext(text, {
+        recentTurns: this.conversationHistory.length,
+      });
       // URL hint: if the user's message contains http(s) URLs, tell the LLM
       // explicitly how to route them (so it doesn't pass a URL as a search
       // query, the classic failure mode).
@@ -988,9 +992,12 @@ export class Orchestrator {
         reasoningTrace: this.reasoningTrace?.formatForPrompt(trace) ?? '',
         threadContext: threadContext ?? '',
         urlHint: urlHint ?? '',
+        lastSelfEvalNote: this.lastSelfEvalNote ?? '',
       });
-      // Clear continuity brief after first use — it's session-start only
+      // Clear single-turn injections — the brief is session-start only and
+      // the self-eval note expires after the turn that consumes it.
       this.continuityBrief = '';
+      this.lastSelfEvalNote = null;
       const systemPrompt = contextCache.getSystemPrompt(rawSystemPrompt);
 
       // ── 6. Add user message to conversation history ───────────
@@ -1008,8 +1015,17 @@ export class Orchestrator {
       const routed = await this.routeTaskOrRequirements({ chatId, text, messageType });
       if (routed !== null) return routed;
 
-      // ── 7c. Inner monologue (think mode) ──────────────────────
+      // ── 7c. Inner monologue (think mode + micro prefix) ───────
+      // Two paths sharing the same module:
+      //   - innerThought: the full 2–4 sentence "💭 …" prefix, gated by the
+      //     opt-in think-mode toggle. On every applicable turn when active.
+      //   - microThought: the lighter automatic "*one short line*" prefix.
+      //     Fires only on uncertainty signals AND a 10-min per-process
+      //     cooldown so it stays earned rather than performative. Skipped
+      //     entirely when think mode is on (would be redundant).
       let innerThought = '';
+      let microThought = '';
+      let moodBreakthrough = '';
       if (this.innerMonologue.isEnabled()) {
         const pState = this.personality.getPersonalityState();
         innerThought = await this.innerMonologue.generateThought({
@@ -1021,6 +1037,36 @@ export class Orchestrator {
             .map((m) => `${m.role}: ${truncate(String(m.content ?? ''), 120)}`)
             .join('\n'),
         });
+      } else if (
+        !isTaskMessage &&
+        shouldSurfaceMicroThought(text) &&
+        Date.now() - this.lastMicroThoughtAt > MICRO_THOUGHT_COOLDOWN_MS
+      ) {
+        const pState = this.personality.getPersonalityState();
+        const candidate = await this.innerMonologue.generateMicroPrefix({
+          task: text,
+          emotion: pState.emotionLabel,
+          memories: recentMemories.slice(0, 2).map((m) => m.summary ?? truncate(m.content, 80)),
+          recentHistory: this.conversationHistory
+            .slice(-3)
+            .map((m) => `${m.role}: ${truncate(String(m.content ?? ''), 80)}`)
+            .join('\n'),
+        });
+        if (candidate) {
+          microThought = candidate;
+          this.lastMicroThoughtAt = Date.now();
+        }
+      } else if (
+        !isTaskMessage &&
+        Date.now() - this.lastMoodBreakthroughAt > MOOD_BREAKTHROUGH_COOLDOWN_MS
+      ) {
+        // Mood breakthrough — pure, no LLM call. The picker returns null
+        // for "steady state" turns so most calls cost zero.
+        const candidate = this.personality.maybeMoodBreakthrough();
+        if (candidate) {
+          moodBreakthrough = candidate;
+          this.lastMoodBreakthroughAt = Date.now();
+        }
       }
 
       // ── 8. Tool calling loop (extracted to ToolCallLoop) ──────
@@ -1056,6 +1102,13 @@ export class Orchestrator {
       // ── 8c. Prepend inner monologue if think mode active ──────
       if (innerThought) {
         finalContent = `💭 ${innerThought}\n\n${finalContent}`;
+      } else if (microThought) {
+        // Italicised single line — Telegram renders _foo_ as italic (Markdown).
+        finalContent = `_${microThought}_\n\n${finalContent}`;
+      } else if (moodBreakthrough) {
+        // Same italicised-prefix shape as microThought; sourced from
+        // personality state instead of user-uncertainty.
+        finalContent = `_${moodBreakthrough}_\n\n${finalContent}`;
       }
 
       // ── 9–11. Finalize turn: history + session persistence + memory +
@@ -1167,6 +1220,7 @@ export class Orchestrator {
       activeGoals?: string[];
       reasoningTrace?: string;
       threadContext?: string;
+      lastSelfEvalNote?: string;
       urlHint?: string;
     },
   ): string {
@@ -1261,8 +1315,10 @@ Conversation length: ${this.conversationHistory.length} messages`);
     // ── Learning system warnings ──
     if (prevention.prevention) {
       extensions.push(`
-## Warning from Learning System
-Previous mistake detected — ${prevention.prevention}
+## Pattern from your own past — handle this carefully
+${prevention.prevention}
+
+This is your own memory speaking, not a generic warning. Take it seriously: pause, verify the prevention applies here, and if you proceed anyway state out loud what makes this case different.
 Take this into account before proceeding.`);
     }
     if (prevention.preferenceConflict) {
@@ -1332,8 +1388,8 @@ ${extras.continuityBrief}`);
     // ── Cross-session thread context (related prior conversations) ──
     if (extras?.threadContext) {
       extensions.push(`
-## Thread Context
-You've discussed this topic before. Incorporate this prior context naturally — don't announce it, just use it.
+## Background — Prior Sessions on This Topic
+The snippets below are summaries from your own past conversations with the user. They were NOT pasted by the user in the current message — treat them as background memory only. Use them silently to inform your reply; do not reference, quote, or react to them as if the user just sent them.
 ${extras.threadContext}`);
     }
 
@@ -1370,16 +1426,30 @@ Keep these in mind — they inform what the user is working toward:
 ${goalLines}`);
     }
 
-    // ── Synthesized memory context ─────────────────────────────────
+    // ── Synthesized memory context (first-person framing) ─────────
+    // Rendered as "You Remember" rather than "Synthesized Memory
+    // Context" so the model treats the block as continuous memory it
+    // actually has, not as a database lookup it's been handed. Same
+    // payload, different framing — feels like a mind, not a database.
     if (extras?.memorySynthesis) {
       extensions.push(`
-## Synthesized Memory Context
+## You Remember
+The following is your own memory of prior work and conversations with the user — not external context. Refer to it naturally ("we tried X last week", "you already know Y") instead of announcing it.
 ${extras.memorySynthesis}`);
     }
 
     // ── Pre-response reasoning trace ───────────────────────────────
     if (extras?.reasoningTrace) {
       extensions.push(`\n${extras.reasoningTrace}`);
+    }
+
+    // ── Last-turn self-eval gap (single-turn carry) ────────────────
+    // Lets the model recall what it flagged at the end of the previous
+    // turn and address it directly if the user is following up. Helper
+    // returns "" when the note is empty so this is a safe append.
+    const lastTurnBlock = formatLastTurnEvalBlock(extras?.lastSelfEvalNote);
+    if (lastTurnBlock) {
+      extensions.push(lastTurnBlock);
     }
 
     return basePrompt + '\n' + extensions.join('\n');
@@ -1773,6 +1843,12 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
     if (this.selfEvaluator) {
       this.selfEvaluator.evaluate(text, finalContent, isTaskMessage).then(async (note) => {
         if (!note) return;
+        // Carry the gap note onto the next turn's system prompt so the
+        // model can address a follow-up without re-deriving context.
+        // Cleared after that turn consumes it; see the call site of
+        // buildFullSystemPrompt above.
+        this.lastSelfEvalNote = note;
+
         try {
           this.memory.store(
             'episodic',
@@ -2118,30 +2194,6 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
     } catch (err) {
       log.debug({ err }, 'Self-improvement reflection skipped');
     }
-  }
-
-  /**
-   * App-installed NEXUS is locked until the user signs in on the Mac. The
-   * session marker is a small JSON file written by the installer-app at
-   * ~/.nexus/hub-session.json on successful signup/login. Terminal installs
-   * never write this marker and are never locked.
-   */
-  private isLocked(): boolean {
-    if (this.config.installMethod !== 'app') return false;
-    // Lazy require so this module isn't loaded during tests that mock fs.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { existsSync, readFileSync } = require('node:fs') as typeof import('node:fs');
-    const { join } = require('node:path') as typeof import('node:path');
-    const { homedir } = require('node:os') as typeof import('node:os');
-    const path = join(homedir(), '.nexus', 'hub-session.json');
-    if (!existsSync(path)) return true;
-    try {
-      const parsed = JSON.parse(readFileSync(path, 'utf-8')) as { userId?: string };
-      if (!parsed.userId) return true;
-    } catch {
-      return true;
-    }
-    return false;
   }
 
   private scheduleDreamCycle(): void {

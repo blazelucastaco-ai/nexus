@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import type { Orchestrator } from '../core/orchestrator.js';
 import { createLogger } from '../utils/logger.js';
 import { getDatabase } from '../memory/database.js';
-import { listRecentSessionSummaries } from '../data/episodic-queries.js';
+import { listRecentSessionSummaries, findGoalsByContentSubstring } from '../data/episodic-queries.js';
 import {
   listProjects,
   getProject,
@@ -69,6 +69,9 @@ export const commands: BotCommand[] = [
   { command: 'dreams', description: 'Recent Code Dreams observations — /dreams [project]' },
   { command: 'thinking', description: 'What NEXUS is currently doing and recent context' },
   { command: 'resume', description: 'Resume a project and set it active — /resume <name>' },
+  { command: 'promote', description: 'Promote a draft skill — /promote <slug>' },
+  { command: 'timeline', description: 'Cross-project timeline — /timeline [days]' },
+  { command: 'resolve', description: 'Mark a stalled goal as resolved — /resolve <substring>' },
   { command: 'stop', description: 'Graceful shutdown' },
   { command: 'help', description: 'Show all available commands' },
 ];
@@ -648,7 +651,7 @@ export async function handleLoud(ctx: Context, orchestrator: Orchestrator): Prom
 
 export async function handleHelp(ctx: Context): Promise<void> {
   try {
-    await ctx.reply(truncateMessage(formatHelp()), { parse_mode: 'HTML' });
+    await ctx.reply(truncateMessage(formatHelp(commands)), { parse_mode: 'HTML' });
   } catch (err) {
     log.error({ err }, 'Error in /help');
     await ctx.reply(
@@ -1283,4 +1286,303 @@ async function requireSubsystem(ctx: Context, value: unknown, name: string): Pro
   if (value) return true;
   await ctx.reply(`${name} not connected.`, { parse_mode: 'HTML' });
   return false;
+}
+
+// ─── /timeline [days] ────────────────────────────────────────────────────
+//
+// A cross-cutting "what we built together" view. Interleaves:
+//   • Project task entries (kind=task in project_journal)
+//   • Code Dreams observations (kind=note + metadata.source=code-dreams)
+//   • Session summaries (episodic memories of conversations)
+//
+// All three streams sorted newest-first, grouped by day for readability.
+// Default window: 7 days. Cap: 30 days (longer windows blow the message
+// limit and aren't actionable anyway). Pure-read; no writes.
+
+const TIMELINE_DEFAULT_DAYS = 7;
+const TIMELINE_MAX_DAYS = 30;
+const TIMELINE_MAX_EVENTS = 25; // hard cap on rendered events to fit one Telegram message
+
+/**
+ * Parse the user-provided days argument with sane fallbacks. Pure helper
+ * exported for unit tests so the input-handling contract is locked.
+ */
+export function parseTimelineDays(raw: string | undefined): number {
+  if (!raw) return TIMELINE_DEFAULT_DAYS;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return TIMELINE_DEFAULT_DAYS;
+  const n = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(n) || n <= 0) return TIMELINE_DEFAULT_DAYS;
+  if (n > TIMELINE_MAX_DAYS) return TIMELINE_MAX_DAYS;
+  return n;
+}
+
+/**
+ * Render a "day group" header for the timeline. Pure helper. Returns
+ * "Today" / "Yesterday" for the recent two days, otherwise an ISO-style
+ * "Mon, May 5" label. `now` injectable for deterministic tests.
+ */
+export function formatTimelineDay(ts: number, now: number = Date.now()): string {
+  const d = new Date(ts);
+  const today = new Date(now);
+  const yesterday = new Date(now - 24 * 60 * 60 * 1000);
+
+  const sameDay = (a: Date, b: Date): boolean =>
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
+
+  if (sameDay(d, today)) return 'Today';
+  if (sameDay(d, yesterday)) return 'Yesterday';
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+export async function handleTimeline(
+  ctx: Context,
+  _orchestrator: Orchestrator,
+  daysArg?: string,
+): Promise<void> {
+  try {
+    const days = parseTimelineDays(daysArg);
+    const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
+
+    interface TimelineEvent {
+      ts: number;
+      kind: 'task' | 'dream' | 'session';
+      project?: string;
+      headline: string;
+    }
+    const events: TimelineEvent[] = [];
+
+    // Session summaries (no per-project tag — these are the conversation thread).
+    for (const s of listRecentSessionSummaries(50)) {
+      const ts = new Date(s.created_at).getTime();
+      if (ts < sinceMs) continue;
+      events.push({
+        ts,
+        kind: 'session',
+        headline: s.content.replace(/\n+/g, ' ').slice(0, 180),
+      });
+    }
+
+    // Project journal entries (task work + code-dream observations).
+    const projects = listProjects({ limit: 20 });
+    for (const p of projects) {
+      for (const e of listJournalEntries(p.name, 30)) {
+        const ts = new Date(e.created_at).getTime();
+        if (ts < sinceMs) continue;
+
+        let kind: 'task' | 'dream' | null = null;
+        if (e.kind === 'task') {
+          kind = 'task';
+        } else if (e.kind === 'note') {
+          try {
+            const meta = JSON.parse(e.metadata ?? '{}') as { source?: string };
+            if (meta.source === 'code-dreams') kind = 'dream';
+          } catch {
+            /* ignore — treat as non-timeline note */
+          }
+        }
+        if (!kind) continue;
+
+        events.push({
+          ts,
+          kind,
+          project: p.display_name,
+          headline: e.summary.slice(0, 180),
+        });
+      }
+    }
+
+    events.sort((a, b) => b.ts - a.ts);
+    const top = events.slice(0, TIMELINE_MAX_EVENTS);
+
+    const headerSuffix = days === 1 ? 'last 1 day' : `last ${days} days`;
+    const lines: string[] = [`<b>📜 Timeline · ${headerSuffix}</b>`, ''];
+
+    if (top.length === 0) {
+      lines.push('<i>Nothing tracked in this window.</i>');
+    } else {
+      let lastDay = '';
+      for (const ev of top) {
+        const day = formatTimelineDay(ev.ts);
+        if (day !== lastDay) {
+          if (lastDay) lines.push('');
+          lines.push(`<b>${escapeHtml(day)}</b>`);
+          lastDay = day;
+        }
+        const icon = ev.kind === 'task' ? '⚙️' : ev.kind === 'dream' ? '🌙' : '💬';
+        const proj = ev.project ? ` <i>· ${escapeHtml(ev.project)}</i>` : '';
+        lines.push(`${icon} ${escapeHtml(ev.headline)}${proj}`);
+      }
+
+      if (events.length > TIMELINE_MAX_EVENTS) {
+        lines.push('');
+        lines.push(`<i>… and ${events.length - TIMELINE_MAX_EVENTS} more events not shown.</i>`);
+      }
+    }
+
+    await ctx.reply(truncateMessage(lines.join('\n')), { parse_mode: 'HTML' });
+    log.info({ chatId: ctx.chat?.id, days, events: top.length }, '/timeline command');
+  } catch (err) {
+    log.error({ err }, 'Error in /timeline');
+    await ctx.reply('Failed to render timeline — see logs.', { parse_mode: 'HTML' });
+  }
+}
+
+// ─── /resolve <substring> ────────────────────────────────────────────────
+//
+// Closes the loop on T4.1 stalled-goal pings. When NEXUS sends a "this goal
+// hasn't moved in a month" nudge, the user can either:
+//   • ignore (goal stays tagged 'stale' in the DB but never re-pings)
+//   • reply /resolve <part-of-goal-text> to actively dismiss the goal
+//
+// Substring match across non-resolved goals (active or stale). Three
+// outcomes:
+//   • 0 matches → helpful "no goal matches" reply
+//   • 1 match  → resolve immediately, confirm
+//   • 2+ matches → list them, ask user to be more specific
+
+const RESOLVE_MAX_MATCHES = 5;
+
+export async function handleResolveGoal(
+  ctx: Context,
+  orchestrator: Orchestrator,
+  query?: string,
+): Promise<void> {
+  try {
+    if (!query || query.trim().length < 2) {
+      await ctx.reply(
+        'Usage: <code>/resolve &lt;substring&gt;</code> — type part of the goal text. Use /thinking to see what NEXUS is tracking.',
+        { parse_mode: 'HTML' },
+      );
+      return;
+    }
+    const matches = findGoalsByContentSubstring(query, RESOLVE_MAX_MATCHES);
+
+    if (matches.length === 0) {
+      await ctx.reply(
+        `No active or stalled goals match <i>"${escapeHtml(query)}"</i>.`,
+        { parse_mode: 'HTML' },
+      );
+      return;
+    }
+
+    if (matches.length > 1) {
+      const lines: string[] = [
+        `Multiple goals match <i>"${escapeHtml(query)}"</i> — be more specific:`,
+        '',
+      ];
+      for (const m of matches) {
+        const snippet = m.content.length > 120 ? `${m.content.slice(0, 120)}…` : m.content;
+        lines.push(`• <i>${escapeHtml(snippet)}</i>`);
+      }
+      await ctx.reply(truncateMessage(lines.join('\n')), { parse_mode: 'HTML' });
+      return;
+    }
+
+    // Exactly one match — resolve it.
+    const goal = matches[0]!;
+    if (!orchestrator.goalTracker) {
+      await ctx.reply('Goal tracker not connected.', { parse_mode: 'HTML' });
+      return;
+    }
+    orchestrator.goalTracker.resolveGoal(goal.id);
+    const snippet = goal.content.length > 160 ? `${goal.content.slice(0, 160)}…` : goal.content;
+    await ctx.reply(
+      `✅ Marked resolved: <i>"${escapeHtml(snippet)}"</i>`,
+      { parse_mode: 'HTML' },
+    );
+    log.info({ goalId: goal.id }, '/resolve command');
+  } catch (err) {
+    log.error({ err }, 'Error in /resolve');
+    await ctx.reply('Resolve failed — see logs.', { parse_mode: 'HTML' });
+  }
+}
+
+// ─── /promote <slug> ─────────────────────────────────────────────────────
+//
+// Promotes a draft skill from ~/.nexus/skills/auto/<slug>.md up to
+// ~/.nexus/skills/<slug>.md so the active-skills loader picks it up. The
+// SkillExtractor sends a Telegram nudge inviting promotion when a draft
+// matures (3+ successful repeats of the same task pattern); this command
+// is the user's one-step way to act on that nudge.
+//
+// Slug is validated against the same regex `titleToSlug` produces — no
+// path-traversal characters allowed. The file is read, `draft: true` is
+// flipped to `draft: false`, written to the parent directory, and the
+// auto/ copy is removed.
+
+export async function handleSkillPromote(
+  ctx: Context,
+  _orchestrator: Orchestrator,
+  rawSlug?: string,
+): Promise<void> {
+  try {
+    if (!rawSlug) {
+      await ctx.reply(
+        'Usage: <code>/promote &lt;slug&gt;</code> — see <code>~/.nexus/skills/auto/</code> for available drafts.',
+        { parse_mode: 'HTML' },
+      );
+      return;
+    }
+    const slug = rawSlug.trim().toLowerCase();
+    const { isValidSkillSlug } = await import('../brain/skill-extractor.js');
+    if (!isValidSkillSlug(slug)) {
+      await ctx.reply(
+        `Invalid slug "${escapeHtml(slug)}". Slugs are lowercase letters, digits, and dashes only (max 81 chars).`,
+        { parse_mode: 'HTML' },
+      );
+      return;
+    }
+
+    const { homedir } = await import('node:os');
+    const path = await import('node:path');
+    const fs = await import('node:fs/promises');
+
+    const autoPath = path.join(homedir(), '.nexus', 'skills', 'auto', `${slug}.md`);
+    const targetPath = path.join(homedir(), '.nexus', 'skills', `${slug}.md`);
+
+    let raw: string;
+    try {
+      raw = await fs.readFile(autoPath, 'utf-8');
+    } catch {
+      await ctx.reply(
+        `No draft at <code>~/.nexus/skills/auto/${escapeHtml(slug)}.md</code>. Has it already been promoted?`,
+        { parse_mode: 'HTML' },
+      );
+      return;
+    }
+
+    // Refuse to overwrite an existing active skill — Lucas should resolve
+    // the conflict manually rather than let promotion silently clobber.
+    try {
+      await fs.access(targetPath);
+      await ctx.reply(
+        `<code>~/.nexus/skills/${escapeHtml(slug)}.md</code> already exists. Resolve manually before promoting again.`,
+        { parse_mode: 'HTML' },
+      );
+      return;
+    } catch {
+      // ENOENT → target doesn't exist → safe to write. Continue.
+    }
+
+    // Flip draft: true → draft: false. Conservative — we don't strip the
+    // other auto-extracted frontmatter fields (source, successes, etc.) so
+    // promoted skills keep their provenance.
+    const promoted = raw.replace(/^draft:\s*true\s*$/m, 'draft: false');
+
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, promoted, 'utf-8');
+    await fs.unlink(autoPath);
+
+    await ctx.reply(
+      `✅ Promoted <b>${escapeHtml(slug)}</b>. The active-skills loader will pick it up on next reload.`,
+      { parse_mode: 'HTML' },
+    );
+    log.info({ slug }, '/promote command');
+  } catch (err) {
+    log.error({ err }, 'Error in /promote');
+    await ctx.reply('Promotion failed — see logs.', { parse_mode: 'HTML' });
+  }
 }

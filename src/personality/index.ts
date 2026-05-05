@@ -281,6 +281,27 @@ export class PersonalityEngine {
     }
   }
 
+  /**
+   * Optional one-line "mood breakthrough" — a templated, no-LLM line the
+   * orchestrator may surface as an italicised prefix on user-facing messages
+   * when NEXUS's own state warrants it (frustrated/impatient emotion, low
+   * mood, or late-night phase). Returns null when none of the triggers apply.
+   *
+   * Pure given a fixed RNG. The orchestrator owns the cooldown so this can
+   * be called every turn without consequence — most calls return null and
+   * cost zero.
+   */
+  maybeMoodBreakthrough(rng: () => number = Math.random): string | null {
+    return pickMoodBreakthrough(
+      {
+        emotionLabel: this.emotions.getLabel(),
+        mood: this.mood,
+        phase: this.getCircadianPhase(),
+      },
+      rng,
+    );
+  }
+
   /** Human-readable description of the current circadian phase for the system prompt. */
   getCircadianMoodDescription(phase: string): string {
     switch (phase) {
@@ -448,6 +469,75 @@ export class PersonalityEngine {
   tick(): void {
     this.emotions.decay();
   }
+}
+
+// ─── Mood-breakthrough picker (pure, exported for unit tests) ───────────────
+//
+// Maps NEXUS's current emotional/circadian state to an optional one-line
+// templated surfacing. Pure: same input → deterministic output (given a
+// pinned RNG). Returns null for "steady state" — no breakthrough warranted.
+//
+// Templates are intentionally short, lower-case, no punctuation — the
+// orchestrator wraps them in `_…_` for Telegram italics.
+
+const MOOD_BREAKTHROUGH_TEMPLATES: Record<string, string[]> = {
+  frustrated: [
+    'shaking off the last failure first',
+    'a bit knotted up about the last one — let me reset',
+    'still chewing on what went sideways earlier',
+  ],
+  impatient: [
+    "let's just get this done",
+    'cutting straight to it',
+  ],
+  'late-night': [
+    "late-night brain, but i'm here",
+    'running on fumes — keeping this terse',
+    'burning the midnight oil with you',
+    'past midnight — terse mode',
+  ],
+  'low-mood': [
+    'a touch off-kilter today — bear with me',
+    'not quite myself today — keeping it grounded',
+  ],
+};
+
+const LOW_MOOD_THRESHOLD = -0.3;
+
+export interface MoodBreakthroughState {
+  emotionLabel: EmotionLabel;
+  mood: number;
+  phase: string;
+}
+
+/**
+ * Pure helper. Given the current personality state and a deterministic RNG,
+ * returns one templated mood-breakthrough line or null. Trigger order:
+ *   1. emotion is `frustrated` or `impatient` (strongest signal — fires first)
+ *   2. circadian phase is `late-night`
+ *   3. mood is below LOW_MOOD_THRESHOLD
+ * Otherwise null.
+ */
+export function pickMoodBreakthrough(
+  state: MoodBreakthroughState,
+  rng: () => number = Math.random,
+): string | null {
+  let key: keyof typeof MOOD_BREAKTHROUGH_TEMPLATES | null = null;
+
+  if (state.emotionLabel === 'frustrated' || state.emotionLabel === 'impatient') {
+    key = state.emotionLabel;
+  } else if (state.phase === 'late-night') {
+    key = 'late-night';
+  } else if (state.mood < LOW_MOOD_THRESHOLD) {
+    key = 'low-mood';
+  }
+
+  if (!key) return null;
+
+  const pool = MOOD_BREAKTHROUGH_TEMPLATES[key];
+  if (!pool || pool.length === 0) return null;
+  const idx = Math.min(Math.floor(rng() * pool.length), pool.length - 1);
+  return pool[idx] ?? null;
 }
 
 // Re-export sub-engines and types

@@ -99,4 +99,30 @@ describe('buildThreadContext', () => {
       expect(l.length).toBeLessThan(350);
     }
   });
+
+  it('suppresses injection on mid-thread follow-ups (recentTurns >= 2)', () => {
+    // Even when matches exist, an active in-thread follow-up should NOT
+    // pull in cross-session snippets — that's the source of the
+    // "looks like you pasted some old messages" misread.
+    insertEpisodic({
+      content: 'Earlier session: built a chrome extension scaffold with manifest v3',
+      createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+    const query = 'can you move it into my chrome extension?';
+    // Sanity check: query is long enough and there is a real match available.
+    expect(buildThreadContext(query, { recentTurns: 0 })).not.toBeNull();
+    // Mid-thread: must be suppressed.
+    expect(buildThreadContext(query, { recentTurns: 2 })).toBeNull();
+    expect(buildThreadContext(query, { recentTurns: 10 })).toBeNull();
+  });
+
+  it('still injects on first turn (recentTurns 0 or 1)', () => {
+    insertEpisodic({
+      content: 'Set up Stripe webhook signature validation with raw body middleware for Express',
+      createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+    const query = 'How do I configure Stripe webhooks?';
+    expect(buildThreadContext(query, { recentTurns: 0 })).not.toBeNull();
+    expect(buildThreadContext(query, { recentTurns: 1 })).not.toBeNull();
+  });
 });

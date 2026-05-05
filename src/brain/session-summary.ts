@@ -41,7 +41,15 @@ export async function summarizeSession(
     const response = await ai.complete({
       messages: [{ role: 'user', content: transcript }],
       systemPrompt:
-        `You are a memory summarizer. Summarize the following conversation in 2-4 sentences covering: (1) main topics discussed, (2) tasks accomplished, (3) files created or modified, (4) any key decisions or findings. ${contextHint} Be specific and concrete. Output only the summary, nothing else.`,
+        `You are NEXUS writing yourself a memory of this session — a note your future self will read at the start of the next conversation to remember what happened. Preserve voice and judgment, not just a to-do list. ${contextHint}
+
+In 2-4 sentences, capture:
+- The main topics, but framed as continuity ("we wrapped up the auth refactor"), not bullet points.
+- Tasks actually completed, with the artifact ("shipped human-typer-extension/, 4 files"), not what was attempted.
+- Decisions made — especially contested ones, and what tipped the call.
+- Any shift in direction mid-session (the user changing their mind, abandoning an approach) — that's the kind of thing your future self will need most.
+
+Skip generic phrasing ("we discussed various topics"). Be specific. If a task failed, say so plainly. Output only the summary, nothing else.`,
       model: config.model,
       maxTokens: 250,
       temperature: 0.3,

@@ -212,7 +212,7 @@ export class MistakeTracker {
       const overlap = this.computeOverlap(actionWords, mistakeWords);
 
       if (overlap >= SIMILARITY_THRESHOLD) {
-        const warning = `This action resembles a past mistake: "${mistake.description}". Prevention: ${mistake.preventionStrategy}`;
+        const warning = formatMistakeWarning(mistake);
         log.warn({ proposedAction, matchId: mistake.id, overlap: overlap.toFixed(2) }, 'Action matches mistake pattern');
         return { safe: false, warning };
       }
@@ -291,6 +291,45 @@ export class MistakeTracker {
 function severityRank(severity: string): number {
   const ranks: Record<string, number> = { critical: 4, major: 3, moderate: 2, minor: 1 };
   return ranks[severity] ?? 0;
+}
+
+// ─── Warning-block formatter (pure, exported for unit tests) ───────────────
+//
+// Renders a structured Mistake into the one-paragraph warning string the
+// orchestrator injects into the system prompt. Designed to feel like
+// memory ("you've hit this 3 times before") rather than a generic flag
+// ("this resembles a past mistake"). Severity callout only fires for
+// major/critical so casual minor matches don't sound alarming.
+
+const HIGH_SEVERITIES: ReadonlyArray<Mistake['severity']> = ['major', 'critical'];
+
+export function formatMistakeWarning(mistake: Mistake): string {
+  const parts: string[] = [];
+
+  // Lead with recurrence — that's the pattern signal that lands hardest.
+  // recurrenceCount is 0 on the first record + bumps to 1 on the second hit
+  // (per recordMistake's increment). So count >= 1 means we've seen it twice.
+  if (mistake.recurrenceCount >= 1) {
+    const total = mistake.recurrenceCount + 1;
+    parts.push(`You've hit this ${total} times now: "${mistake.description}"`);
+  } else {
+    parts.push(`You ran into this before: "${mistake.description}"`);
+  }
+
+  // Severity callout — only for high-stakes mistakes, otherwise skipped.
+  if (HIGH_SEVERITIES.includes(mistake.severity)) {
+    parts.push(`Severity: ${mistake.severity}.`);
+  }
+
+  // Root cause — the thing that matters most for avoiding it again.
+  if (mistake.rootCause && mistake.rootCause !== 'unknown') {
+    parts.push(`Last time the root cause was: ${mistake.rootCause}.`);
+  }
+
+  // Prevention strategy.
+  parts.push(`Prevention: ${mistake.preventionStrategy}`);
+
+  return parts.join(' ');
 }
 
 function rowToMistake(row: Record<string, unknown>): Mistake {

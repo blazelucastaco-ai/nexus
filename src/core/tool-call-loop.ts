@@ -399,8 +399,41 @@ export class ToolCallLoop {
         if (!finalContent) {
           if (screenshotWasSent) {
             finalContent = aiResponse.content?.trim() || 'Done — screenshot sent.';
+          } else if (aiResponse.content?.trim()) {
+            // The model produced text alongside the looping tool calls — use it.
+            finalContent = aiResponse.content.trim();
           } else {
-            finalContent = 'I hit a repeated action and stopped to avoid a loop. Let me know how you\'d like me to proceed.';
+            // No usable assistant text. The model burned its budget on
+            // repeated tool calls and never typed an answer. Try ONE final
+            // completion with tools forbidden so the model is forced to
+            // answer the user's question directly from conversation history.
+            // This rescues the common case where a clarifying question
+            // ("what was the fix?", "why did you do X?") sends the model
+            // hunting for files instead of just summarising prior turns.
+            try {
+              const recovery = await ai.complete({
+                messages: loopMessages,
+                systemPrompt: `${systemPrompt}\n\n[RECOVERY MODE: A previous tool-calling attempt produced repeated identical actions and was halted. Answer the user's most recent message directly from your conversation context. Do NOT call any tools. Do NOT mention the loop or this recovery — just give a concise, direct answer.]`,
+                model: config.ai.model,
+                maxTokens,
+                temperature: config.ai.chatTemperature,
+                tools: [],
+                tool_choice: 'none',
+              });
+              if (recovery.tokensUsed && onTokenUsage) {
+                onTokenUsage(recovery.tokensUsed.input, recovery.tokensUsed.output);
+              }
+              const recovered = recovery.content?.trim();
+              if (recovered) {
+                log.info({ contentLen: recovered.length }, 'Loop bail recovered via no-tool completion');
+                finalContent = recovered;
+              }
+            } catch (err) {
+              log.warn({ err }, 'Loop bail recovery completion failed');
+            }
+            if (!finalContent) {
+              finalContent = 'I hit a repeated action and stopped to avoid a loop. Let me know how you\'d like me to proceed.';
+            }
           }
         }
         break;

@@ -398,33 +398,18 @@ export function formatWelcome(): string {
 // ─── Help Message ───────────────────────────────────────────────────
 
 /**
- * Format the help text listing all available commands.
+ * Format the help text listing all available commands. Takes the canonical
+ * commands array (single source of truth in commands.ts) so help output
+ * cannot drift from the actual registered commands. Caller passes the
+ * array; we don't import it directly to avoid a circular dep with commands.ts.
  */
-export function formatHelp(): string {
-  const commands = [
-    { cmd: '/status', desc: 'Full system status — uptime, tokens, learning stats' },
-    { cmd: '/mood', desc: 'My current emotional state' },
-    { cmd: '/preferences', desc: 'What I\'ve learned about your preferences' },
-    { cmd: '/patterns', desc: 'Behavioral patterns I\'ve detected' },
-    { cmd: '/opinions', desc: 'My current opinions and stances' },
-    { cmd: '/journal', desc: 'Recent tool activity log' },
-    { cmd: '/mistakes', desc: 'Mistakes I\'ve tracked and learned from' },
-    { cmd: '/memory', desc: 'Memory layer statistics' },
-    { cmd: '/agents', desc: 'Available agents' },
-    { cmd: '/tasks', desc: 'Active tasks' },
-    { cmd: '/workspace', desc: 'Files in my workspace folder' },
-    { cmd: '/screenshot', desc: 'Capture a screenshot' },
-    { cmd: '/think', desc: 'Inner monologue — /think &lt;topic&gt;' },
-    { cmd: '/quiet', desc: 'Disable proactive alerts' },
-    { cmd: '/loud', desc: 'Enable proactive alerts' },
-    { cmd: '/settings', desc: 'Current configuration' },
-    { cmd: '/stop', desc: 'Graceful shutdown' },
-  ];
-
+export function formatHelp(
+  commands: ReadonlyArray<{ command: string; description: string }>,
+): string {
   const lines: string[] = [
     '<b>NEXUS Commands</b>',
     '',
-    ...commands.map((c) => `${c.cmd} — ${c.desc}`),
+    ...commands.map((c) => `/${c.command} — ${escapeHtml(c.description)}`),
     '',
     'Or just send me a message and I\'ll figure out the rest.',
   ];

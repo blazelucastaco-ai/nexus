@@ -2,57 +2,10 @@
 
 "When X goes wrong, here's exactly what to do." Written for the solo maintainer; if you're a user, most of this doesn't apply.
 
-## 1. Hub is down (users report they can't post / friend-request / sync)
-
-**Diagnose:**
-```bash
-curl -sS https://nexus-hub-blazelucastaco.fly.dev/healthz
-fly status --app nexus-hub-blazelucastaco
-fly logs --app nexus-hub-blazelucastaco | tail -100
-```
-
-**Recover in descending order of disruption:**
-
-1. **Machine is down / stuck** — `fly machine restart --app nexus-hub-blazelucastaco`.
-2. **Bad deploy** — roll back to previous release:
-   ```bash
-   fly releases --app nexus-hub-blazelucastaco
-   fly releases rollback <id> --app nexus-hub-blazelucastaco
-   ```
-3. **Volume is full / DB sick** — SSH in, check disk:
-   ```bash
-   fly ssh console --app nexus-hub-blazelucastaco
-   df -h /data
-   sqlite3 /data/hub.db 'PRAGMA integrity_check;'
-   ```
-   If full, run the purge queries from `src/index.ts` manually, or grow the volume:
-   ```bash
-   fly volumes extend <vol-id> --size 2 --app nexus-hub-blazelucastaco
-   ```
-4. **Fly-wide outage** — check [status.fly.io](https://status.fly.io). Post a GitHub issue; users will see.
-
-After recovery, verify:
-```bash
-curl -sS https://nexus-hub-blazelucastaco.fly.dev/healthz
-# expect {"ok":true}
-```
-
-## 2. JWT secret compromised
-
-```bash
-# Generate a new secret
-NEW=$(node -e 'console.log(require("node:crypto").randomBytes(48).toString("base64"))')
-# Pipe via stdin, not CLI arg
-echo "$NEW" | fly secrets set JWT_SECRET=- --app nexus-hub-blazelucastaco
-# Invalidate every refresh token too (access tokens die in 15 min regardless)
-fly ssh console --app nexus-hub-blazelucastaco -C \
-  "sqlite3 /data/hub.db 'UPDATE sessions SET revoked_at = datetime(\"now\") WHERE revoked_at IS NULL'"
-# Deploy the restart
-fly deploy --app nexus-hub-blazelucastaco
-unset NEW
-```
-
-All users are kicked and must re-login. Communicate via GitHub issue + the social feed.
+> **Hub removed (2026-05-04).** NEXUS is now fully local. The previous Sections 1
+> (Hub is down), 2 (JWT secret compromised), and 8 (Bad hub deploy rollback) no
+> longer apply and have been removed. Numbering below is preserved for git-blame
+> traceability — gaps are intentional.
 
 ## 3. Anthropic API key compromised (user-side)
 
@@ -110,23 +63,6 @@ gh release upload v0.1.1 ../NEXUS-Installer.dmg --clobber
 ```
 
 Verify: download the DMG from the Releases page and install it on a clean Mac (or a scratch VM).
-
-## 8. Bad hub deploy rollback (with data migration)
-
-If the bad deploy added a migration that changed schema:
-
-1. `fly releases rollback <id>` gets you back the old code but leaves the migrated schema.
-2. If that causes new errors, you need a schema rollback. Since SQLite doesn't support `DROP COLUMN` pre-3.35, this may require manually dumping, editing, and restoring:
-   ```bash
-   fly ssh console --app nexus-hub-blazelucastaco
-   sqlite3 /data/hub.db .dump > /tmp/dump.sql
-   # edit dump.sql to remove the bad column
-   rm /data/hub.db /data/hub.db-wal /data/hub.db-shm
-   sqlite3 /data/hub.db < /tmp/dump.sql
-   fly machine restart
-   ```
-
-Always test migrations on staging (`bash scripts/deploy.sh --staging`) before pushing to prod.
 
 ## 9. User reports "0 memories imported" or similar import bug
 

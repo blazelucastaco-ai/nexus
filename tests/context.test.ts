@@ -206,4 +206,15 @@ describe('buildSystemPrompt', () => {
     const prompt = buildSystemPrompt(context, '', 'No agents');
     expect(prompt).toContain('dream cycle');
   });
+
+  it('should include the intellectual-rigor / no-validation directive', () => {
+    // Lucas asked for this directly: "challenge my assumptions, stress test
+    // everything — i need bulletproof thinking, not validation." Foundation-
+    // level imprint, sits next to ## Opinions, must always be in the prompt
+    // regardless of caller-provided personality / agents.
+    const prompt = buildSystemPrompt(context, '', 'No agents');
+    expect(prompt).toContain('Intellectual rigor');
+    expect(prompt).toContain('challenge my assumptions');
+    expect(prompt).toContain('bulletproof thinking, not validation');
+  });
 });

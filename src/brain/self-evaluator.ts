@@ -93,3 +93,32 @@ export class SelfEvaluator {
     }
   }
 }
+
+// ─── Prompt-block helper ────────────────────────────────────────────────────
+//
+// Exported pure helper so the prompt block format can be unit-tested in
+// isolation. The orchestrator carries the most-recent gap note across one
+// turn and renders it into the next system prompt via this helper, then
+// clears it (single-turn decay, mirroring `continuityBrief`).
+
+const MAX_NOTE_CHARS_IN_PROMPT = 280;
+
+/**
+ * Render the "Last Turn — Gap I Flagged" block for the next system prompt.
+ *
+ * Returns an empty string when the note is missing/blank so callers can
+ * append unconditionally. The note itself is truncated so a runaway eval
+ * never blows out the context window.
+ */
+export function formatLastTurnEvalBlock(note: string | null | undefined): string {
+  if (!note) return '';
+  const trimmed = note.trim();
+  if (trimmed.length === 0) return '';
+  const clipped = trimmed.length > MAX_NOTE_CHARS_IN_PROMPT
+    ? `${trimmed.slice(0, MAX_NOTE_CHARS_IN_PROMPT)}…`
+    : trimmed;
+  return `
+## Last Turn — Gap I Flagged
+At the end of your previous turn, the post-response self-check noticed: "${clipped}". If the user's current message follows up on this, address it directly without re-deriving the context. If they've moved on, do not mention it.`;
+}
+

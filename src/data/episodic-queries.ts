@@ -72,6 +72,39 @@ export function countRecentTaskFailures(windowMs: number): { count: number; titl
  * Fetch the content of active goals (tags include both 'goal' and 'active').
  * Ordered by importance then recency. Truncate content to reasonable length upstream.
  */
+/**
+ * Find goals (active or stale) whose content contains the given substring.
+ * Powers the /resolve <query> Telegram command — the user types part of the
+ * goal text and we surface matches. Case-insensitive via SQLite's LIKE.
+ *
+ * Skips resolved goals — once resolved, a goal shouldn't reappear in the
+ * resolve picker.
+ */
+export function findGoalsByContentSubstring(
+  query: string,
+  limit = 5,
+): Array<{ id: string; content: string; tags: string }> {
+  const trimmed = query.trim();
+  if (trimmed.length < 2) return [];
+  try {
+    const db = getDatabase();
+    const like = `%${trimmed.toLowerCase()}%`;
+    return db
+      .prepare(
+        `SELECT id, content, tags FROM memories
+         WHERE layer = 'episodic'
+           AND tags LIKE '%"goal"%'
+           AND tags NOT LIKE '%"resolved"%'
+           AND lower(content) LIKE ?
+         ORDER BY importance DESC, created_at DESC
+         LIMIT ?`,
+      )
+      .all(like, limit) as Array<{ id: string; content: string; tags: string }>;
+  } catch {
+    return [];
+  }
+}
+
 export function listActiveGoalContents(limit = 5): string[] {
   try {
     const db = getDatabase();

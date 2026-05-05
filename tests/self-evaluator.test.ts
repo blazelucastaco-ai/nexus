@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { SelfEvaluator } from '../src/brain/self-evaluator.js';
+import { SelfEvaluator, formatLastTurnEvalBlock } from '../src/brain/self-evaluator.js';
 import type { AIManager } from '../src/ai/index.js';
 
 function makeMockAI(responseContent: string): AIManager {
@@ -172,5 +172,44 @@ describe('SelfEvaluator', () => {
       const mockAI = ai as any;
       expect(mockAI.complete).not.toHaveBeenCalled();
     });
+  });
+});
+
+// ─── Pure helper: prompt-block format ───────────────────────────────────────
+//
+// The orchestrator carries the most-recent gap note onto the next turn's
+// system prompt via this helper. Tested in isolation so we can lock the
+// block format down without spinning up the orchestrator.
+
+describe('formatLastTurnEvalBlock', () => {
+  it('returns "" for null/undefined/blank notes (safe to append unconditionally)', () => {
+    expect(formatLastTurnEvalBlock(null)).toBe('');
+    expect(formatLastTurnEvalBlock(undefined)).toBe('');
+    expect(formatLastTurnEvalBlock('')).toBe('');
+    expect(formatLastTurnEvalBlock('   ')).toBe('');
+  });
+
+  it('renders a "Last Turn — Gap I Flagged" block with the note quoted verbatim', () => {
+    const out = formatLastTurnEvalBlock(
+      'Worth noting: I can also wire up the Stripe webhook signature middleware if you want.',
+    );
+    expect(out).toContain('## Last Turn — Gap I Flagged');
+    expect(out).toContain('Worth noting: I can also wire up the Stripe webhook');
+    // The block instructs the model both how to use it AND when not to.
+    expect(out).toMatch(/follows up on this/i);
+    expect(out).toMatch(/moved on, do not mention/i);
+  });
+
+  it('truncates very long notes so a runaway eval cannot blow the context', () => {
+    const long = 'I can also: ' + 'x'.repeat(2_000);
+    const out = formatLastTurnEvalBlock(long);
+    expect(out.length).toBeLessThan(800);
+    expect(out).toContain('…');
+  });
+
+  it('trims surrounding whitespace before quoting', () => {
+    const out = formatLastTurnEvalBlock('   \n  Worth noting: check the migration order.   \n');
+    expect(out).toContain('"Worth noting: check the migration order."');
+    expect(out).not.toContain('"   \n');
   });
 });

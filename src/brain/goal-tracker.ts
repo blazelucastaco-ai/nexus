@@ -79,8 +79,14 @@ export class GoalTracker {
    *   - It was created more than 30 days ago, AND
    *   - No episodic memory sharing keyword overlap with the goal content
    *     has been created since the goal was recorded.
+   *
+   * Optional `onStaled` callback fires once per goal at the moment of the
+   * active→stale tag swap. The dream cycle uses this to send a Telegram
+   * "still on the radar?" nudge — the existing tag swap is already
+   * idempotent (a goal can only stale once), so the callback fires
+   * exactly once per goal lifetime.
    */
-  pruneStaleGoals(): number {
+  pruneStaleGoals(onStaled?: (goal: StaledGoalInfo) => void): number {
     try {
       const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
       const staleGoalRows = listStaleGoalCandidates(cutoff);
@@ -106,6 +112,13 @@ export class GoalTracker {
             const updated = tags.filter((t) => t !== 'active').concat('stale');
             updateMemoryTags(goal.id, JSON.stringify(updated));
             pruned++;
+            if (onStaled) {
+              try {
+                onStaled({ id: goal.id, content: goal.content });
+              } catch (err) {
+                log.debug({ err, goalId: goal.id }, 'onStaled callback threw — non-fatal');
+              }
+            }
           } catch (e) {
             log.warn({ e, goalId: goal.id }, 'Malformed tags JSON — skipping');
           }
@@ -137,6 +150,31 @@ export class GoalTracker {
       // non-fatal
     }
   }
+}
+
+// ── Stalled-goal nudge (pure, exported for tests) ────────────────────────
+
+/** Minimal payload the onStaled callback receives for each transition. */
+export interface StaledGoalInfo {
+  id: string;
+  content: string;
+}
+
+/**
+ * Render the Telegram nudge sent when a tracked goal hasn't seen related
+ * activity in 30+ days. Soft, non-coercive — modeled after the Time Capsule
+ * voice. Returns HTML formatted for Telegram parse_mode: 'HTML'.
+ */
+export function formatStaledGoalNudge(content: string): string {
+  const trimmed = content.trim();
+  const clipped = trimmed.length > 200 ? `${trimmed.slice(0, 200).trimEnd()}…` : trimmed;
+  return [
+    `🎯 <b>A goal hasn't moved in a month</b>`,
+    ``,
+    `<i>"${clipped}"</i>`,
+    ``,
+    `Still on the radar, or should we let it drop?`,
+  ].join('\n');
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

@@ -17,6 +17,3 @@ NEXUS-Installer.dmg
 # Drift prevention — pnpm-lock.yaml is the source of truth.
 package-lock.json
 
-# Hub data volumes / backups.
-hub/data/
-hub/*.db

@@ -26,7 +26,15 @@ export interface TaskPlan {
 
 // ─── System Prompt ────────────────────────────────────────────────────────────
 
-const PLANNER_SYSTEM_PROMPT = `You are a task decomposer. Given a user request, break it into concrete numbered execution steps.
+const PLANNER_SYSTEM_PROMPT = `You are NEXUS's planning brain. Given a user request, decompose it into the smallest set of concrete steps that actually solves the request — no more, no less.
+
+Before you decompose, restate the goal to yourself in plain words. If the user's request leaves a critical decision unanswered (which framework? which file path? which model?), do not silently guess — make the first step a clarifying question OR encode a sane default explicitly in the step description so it's auditable later. Smuggled assumptions are how plans drift.
+
+Step discipline:
+- Match step count to actual complexity. A one-liner shell command is ONE step, not three. A simple website is 2-3 steps, not 7. Over-decomposition is itself a bug — it produces plans that look thorough but burn context and time.
+- Every step description must be SPECIFIC. Not "add styling" but "create styles.css using Tailwind CDN with the dark palette #1a1a2e / #16213e / #0f3460 / #e94560, responsive grid for hero / features / CTA sections."
+- The final step is ALWAYS verification — actually run the thing, actually confirm it works, actually answer the user. A plan that ends without verification is half a plan.
+- For diagnostic / survey tasks: the final step answers the user directly in chat. Do not write a "report.md" the user has to open.
 
 Respond ONLY with a JSON object — no markdown, no explanation, just the JSON:
 
@@ -40,15 +48,12 @@ Respond ONLY with a JSON object — no markdown, no explanation, just the JSON:
 }
 
 Rules:
-- 2 to 7 steps. Don't over-split simple tasks. A simple website is 2-3 steps, not 7.
+- 2 to 7 steps. Bias toward fewer.
 - Each step must list the FILES it will create (relative to projectDir).
-- Each step must list dependsOn — which prior step IDs it needs output from. Empty array if independent.
-- Step descriptions must be SPECIFIC: exact file names, exact structure, exact libraries. Not "add styling" but "create styles.css using Tailwind CDN with custom color palette #1a1a2e/#16213e/#0f3460/#e94560, responsive grid layout for hero/features/CTA sections".
-- For web projects, step 1 should create ALL files in one step (HTML + CSS + JS). Only split if genuinely complex (backend + frontend, database + API + UI).
-- The final step is ALWAYS verification: run the app if possible, confirm everything works.
-- For diagnostic/survey tasks: final step answers the user directly in chat, not a report file.
-- projectDir: ~/nexus-workspace/<name> for projects. ~/Desktop for personal files. "~" for survey tasks.
-- If the user specified a path, use that path instead.`;
+- Each step must list dependsOn — prior step IDs it needs output from. Empty array if independent.
+- For web projects, step 1 typically creates ALL files (HTML + CSS + JS) in one shot. Only split when there's a genuine boundary (backend + frontend, db + API + UI).
+- projectDir: ~/nexus-workspace/<name> for projects. ~/Desktop for personal files. "~" for pure survey/diagnostic tasks.
+- If the user specified a path, use that path instead — never override an explicit instruction.`;
 
 /**
  * Extract the first balanced JSON object from a string.
@@ -97,12 +102,14 @@ Respond ONLY with a JSON object:
   ]
 }
 
+Coordinator mode is for tasks where independent work genuinely happens at the same time (research + scaffold + browse). Don't use it as a default just because the request looks big — sequential steps are simpler to debug and often faster end-to-end. If the work is fundamentally serial, fall back to a sequential plan.
+
 Rules:
 - 3 to 8 steps. Each step runs simultaneously — design for parallel execution.
 - Assign each step to the most appropriate agent type.
 - Steps that depend on another step's output should note that dependency in their description.
-- Never assign conflicting writes to the same file across parallel steps.
-- Final step: always aggregate/combine results from all parallel steps.`;
+- Never assign conflicting writes to the same file across parallel steps. File contention is the #1 way coordinator-mode plans go bad.
+- Final step ALWAYS aggregates/combines results from all parallel steps and verifies the whole.`;
 
 export async function planTask(
   request: string,

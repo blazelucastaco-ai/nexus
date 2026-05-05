@@ -19,7 +19,7 @@ import { getDatabase } from '../memory/database.js';
 import { storeEmbedding } from '../memory/embeddings.js';
 import { generateId, nowISO } from '../utils/helpers.js';
 import type { AIManager } from '../ai/index.js';
-import { GoalTracker } from './goal-tracker.js';
+import { GoalTracker, formatStaledGoalNudge } from './goal-tracker.js';
 import { events } from '../core/events.js';
 
 const log = createLogger('DreamCycle');
@@ -135,7 +135,19 @@ export class DreamingEngine {
     const decayed = this.decayStaleMemories();
     const garbageCollected = this.garbageCollect();
     const contradictions = this.detectAndResolveContradictions();
-    const staleGoalsPruned = this.goalTracker.pruneStaleGoals();
+    // Cap stalled-goal pings at 2 per dream cycle so a long-stale backlog
+    // never floods Telegram. Beyond the cap, the goals still get marked
+    // stale — they just don't ping. Non-pinged ones won't ping later
+    // because the active→stale tag swap is one-way (no re-staling).
+    const STALED_GOAL_PING_CAP = 2;
+    let stalePingsSent = 0;
+    const staleGoalsPruned = this.goalTracker.pruneStaleGoals((goal) => {
+      if (!this.sendFn || stalePingsSent >= STALED_GOAL_PING_CAP) return;
+      stalePingsSent++;
+      void this.sendFn(formatStaledGoalNudge(goal.content)).catch((err) => {
+        log.debug({ err, goalId: goal.id }, 'Stalled-goal nudge send failed (non-fatal)');
+      });
+    });
 
     // Reflection + ideation — only if we have an AI manager
     const reflections: string[] = [];
@@ -1015,10 +1027,13 @@ export class DreamingEngine {
     });
 
     const prompt =
-      `Summarize each of the following ${batch.length} memories into a single concise sentence ` +
-      `capturing the key fact or insight. Reply with EXACTLY ${batch.length} lines, ` +
-      `one sentence per line, numbered [1] through [${batch.length}]. ` +
-      `No preamble, no extra lines.\n\n` +
+      `You are NEXUS distilling your own recent experiences into durable atomic facts that will live in your long-term memory. Each numbered episode below has been revisited at least 3 times — it's earned its way to consolidation. Turn each one into the SINGLE atomic fact worth carrying forward.\n\n` +
+      `Quality bar:\n` +
+      `- Atomic. One concrete fact per line, no compound statements.\n` +
+      `- Durable. Things still true in a month — preferences, decisions, working patterns. NOT ephemeral status ("user is debugging today").\n` +
+      `- Specific. "Lucas prefers TypeScript over JavaScript for backend work" beats "Lucas works in TypeScript".\n` +
+      `- Conservative. If an episode is genuinely ambiguous, output exactly "(uncertain)" on that line. A hallucinated fact pollutes memory permanently — silence beats invention.\n\n` +
+      `Reply with EXACTLY ${batch.length} lines, numbered [1] through [${batch.length}]. One sentence per line. No preamble, no extra lines.\n\n` +
       numbered.join('\n');
 
     try {
@@ -1032,7 +1047,10 @@ export class DreamingEngine {
         .trim()
         .split('\n')
         .map((l) => l.replace(/^\[\d+\]\s*/, '').replace(/^["']|["']$/g, '').trim())
-        .filter((l) => l.length >= 5);
+        // Skip the conservative-out sentinel: when the LLM is uncertain it
+        // should write "(uncertain)" rather than fabricate. Falls through
+        // to the extractive fallback below.
+        .filter((l) => l.length >= 5 && !/^\(?\s*uncertain\s*\)?$/i.test(l));
 
       // Pad or trim to batch length
       const results: Array<string | null> = [];

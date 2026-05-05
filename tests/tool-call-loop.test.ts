@@ -114,14 +114,16 @@ describe('ToolCallLoop.run', () => {
     expect(toolMsg?.tool_call_id).toBe('t1');
   });
 
-  it('detects a tool+args repetition loop after 3 identical calls', async () => {
+  it('detects a tool+args repetition loop after 3 identical calls and recovers via a no-tool completion', async () => {
     const deps = makeDeps();
-    const call = makeToolCall('t1', 'read_file', { path: '/tmp/a' });
     (deps.ai.complete as any)
+      // 3 iterations of the same tool+args triggers loop detection.
       .mockResolvedValueOnce(response('', [makeToolCall('tA', 'read_file', { path: '/tmp/a' })]))
       .mockResolvedValueOnce(response('', [makeToolCall('tB', 'read_file', { path: '/tmp/a' })]))
       .mockResolvedValueOnce(response('', [makeToolCall('tC', 'read_file', { path: '/tmp/a' })]))
-      .mockResolvedValue(response('not reached'));
+      // 4th call is the RECOVERY completion (tool_choice: 'none') —
+      // returns a real human-readable answer pulled from history.
+      .mockResolvedValueOnce(response('the fix patched the completion check on line 42'));
     (deps.toolExecutor.execute as any).mockResolvedValue('contents');
 
     const loop = new ToolCallLoop(deps);
@@ -132,10 +134,64 @@ describe('ToolCallLoop.run', () => {
       isTaskMessage: false,
     });
 
-    // Loop detection kicks in on the 3rd identical call.
-    expect(out.finalContent.toLowerCase()).toMatch(/loop|repeat/);
+    // Recovery answer surfaces, not the canned bail message.
+    expect(out.finalContent).toBe('the fix patched the completion check on line 42');
+    expect(out.finalContent).not.toMatch(/repeated action/i);
+
+    // Recovery call must forbid tools so the LLM can't loop again.
+    expect(deps.ai.complete).toHaveBeenCalledTimes(4);
+    const recoveryCall = (deps.ai.complete as any).mock.calls[3][0];
+    expect(recoveryCall.tool_choice).toBe('none');
+    expect(recoveryCall.tools).toEqual([]);
+    expect(recoveryCall.systemPrompt).toContain('RECOVERY MODE');
+
     expect(deps.toolExecutor.execute).toHaveBeenCalledTimes(2); // executed on iterations 0 and 1; blocked on 2
-    void call;
+  });
+
+  it('falls back to the canned message when even the recovery completion returns empty', async () => {
+    const deps = makeDeps();
+    (deps.ai.complete as any)
+      .mockResolvedValueOnce(response('', [makeToolCall('tA', 'read_file', { path: '/tmp/a' })]))
+      .mockResolvedValueOnce(response('', [makeToolCall('tB', 'read_file', { path: '/tmp/a' })]))
+      .mockResolvedValueOnce(response('', [makeToolCall('tC', 'read_file', { path: '/tmp/a' })]))
+      // Recovery call returns nothing — second-line of defense kicks in.
+      .mockResolvedValueOnce(response(''));
+    (deps.toolExecutor.execute as any).mockResolvedValue('contents');
+
+    const loop = new ToolCallLoop(deps);
+    const out = await loop.run({
+      chatId: 'c1',
+      systemPrompt: 'sys',
+      startingHistory: [],
+      isTaskMessage: false,
+    });
+
+    expect(out.finalContent.toLowerCase()).toMatch(/repeated action/);
+  });
+
+  it('uses the looping turn\'s own content when the LLM produced text alongside repeated tool calls', async () => {
+    const deps = makeDeps();
+    (deps.ai.complete as any)
+      .mockResolvedValueOnce(response('', [makeToolCall('tA', 'read_file', { path: '/tmp/a' })]))
+      .mockResolvedValueOnce(response('', [makeToolCall('tB', 'read_file', { path: '/tmp/a' })]))
+      // Third call has BOTH tool calls AND content — content should win, no recovery call needed.
+      .mockResolvedValueOnce(
+        response('I was about to summarise — that file holds the answer.', [
+          makeToolCall('tC', 'read_file', { path: '/tmp/a' }),
+        ]),
+      );
+    (deps.toolExecutor.execute as any).mockResolvedValue('contents');
+
+    const loop = new ToolCallLoop(deps);
+    const out = await loop.run({
+      chatId: 'c1',
+      systemPrompt: 'sys',
+      startingHistory: [],
+      isTaskMessage: false,
+    });
+
+    expect(out.finalContent).toBe('I was about to summarise — that file holds the answer.');
+    expect(deps.ai.complete).toHaveBeenCalledTimes(3); // no recovery call
   });
 
   it('hands malformed-JSON tool args back to the LLM as a tool error', async () => {

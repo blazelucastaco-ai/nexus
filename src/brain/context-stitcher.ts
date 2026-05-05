@@ -26,6 +26,23 @@ const MAX_CONTENT_LEN = 280;   // Per-match truncation
 
 // ─── Main entry ─────────────────────────────────────────────────────────────
 
+export interface ThreadContextOptions {
+  /**
+   * Number of messages already in the in-memory conversation history at the
+   * time this is called. Used to detect mid-thread follow-ups: stitching is
+   * meant for session-start cross-session recall ("we've talked about this
+   * before"), not for short follow-ups inside an active exchange. When the
+   * user is mid-thread we skip injection — otherwise the model can read the
+   * "Background" block as user-pasted content and respond with things like
+   * "looks like you pasted some old messages in there."
+   *
+   * Conventionally callers pass `conversationHistory.length` measured BEFORE
+   * the new user message is pushed; >= 2 means at least one full
+   * user→assistant pair has already happened this session.
+   */
+  recentTurns?: number;
+}
+
 /**
  * Build a "related prior conversations" context block for the current user
  * message, or return null if nothing relevant was found.
@@ -36,8 +53,19 @@ const MAX_CONTENT_LEN = 280;   // Per-match truncation
  *   - 3d ago: <snippet>
  *   - 1w ago: <snippet>
  */
-export function buildThreadContext(query: string): string | null {
+export function buildThreadContext(
+  query: string,
+  options: ThreadContextOptions = {},
+): string | null {
   if (!query || query.trim().length < MIN_QUERY_LENGTH) return null;
+
+  // Mid-thread follow-up: skip cross-session recall. Stitching is for
+  // session-start "we've talked about this before" awareness, not for
+  // injecting old snippets while the user is actively continuing a thread.
+  // Without this guard, a short follow-up like "can you move it into my
+  // chrome extension?" surfaces unrelated 30-day-old chrome-extension
+  // snippets, and the model can mistake them for pasted-in content.
+  if ((options.recentTurns ?? 0) >= 2) return null;
 
   try {
     const matches = findRelatedConversations({

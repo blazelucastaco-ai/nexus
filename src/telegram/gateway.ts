@@ -37,6 +37,9 @@ import {
   handleProject,
   handleDreams,
   handleResume,
+  handleResolveGoal,
+  handleSkillPromote,
+  handleTimeline,
   handleThinking,
   handleStop,
   handleHelp,
@@ -455,6 +458,24 @@ export class TelegramGateway {
       if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
       const arg = ctx.match?.toString().trim();
       return handleResume(ctx, this.orchestrator, arg);
+    });
+
+    this.bot.command('promote', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      const arg = ctx.match?.toString().trim();
+      return handleSkillPromote(ctx, this.orchestrator, arg);
+    });
+
+    this.bot.command('timeline', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      const arg = ctx.match?.toString().trim();
+      return handleTimeline(ctx, this.orchestrator, arg);
+    });
+
+    this.bot.command('resolve', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      const arg = ctx.match?.toString().trim();
+      return handleResolveGoal(ctx, this.orchestrator, arg);
     });
 
     this.bot.command('stop', (ctx) => handleStop(ctx));
