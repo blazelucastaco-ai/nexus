@@ -207,6 +207,37 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('dream cycle');
   });
 
+  // ── Browser-extension runtime state ──────────────────────────────────
+  // The orchestrator passes `browserConnected` per turn so the LLM knows
+  // up-front whether browser_* tools will work, avoiding wasted "Chrome
+  // extension not connected" failure turns when the extension is offline.
+
+  it('omits the runtime-state line when browserConnected is unspecified (back-compat)', () => {
+    const prompt = buildSystemPrompt(context, '', 'No agents');
+    expect(prompt).toContain('## Chrome Browser Control');
+    expect(prompt).not.toMatch(/Runtime state:/);
+  });
+
+  it('surfaces a positive runtime-state line when browserConnected is true', () => {
+    const prompt = buildSystemPrompt(context, '', 'No agents', { browserConnected: true });
+    expect(prompt).toMatch(/Runtime state: Chrome extension is connected/);
+    // No disconnect warning when connected.
+    expect(prompt).not.toMatch(/DISCONNECTED/);
+  });
+
+  it('surfaces a strong DISCONNECTED warning + web_fetch fallback hint when browserConnected is false', () => {
+    const prompt = buildSystemPrompt(context, '', 'No agents', { browserConnected: false });
+    expect(prompt).toMatch(/Runtime state: Chrome extension is currently DISCONNECTED/);
+    expect(prompt).toMatch(/prefer web_fetch instead/);
+    // Warning sits inside the Chrome block, adjacent to the rules — not at end of prompt.
+    const browserBlockStart = prompt.indexOf('## Chrome Browser Control');
+    const warningPos = prompt.indexOf('DISCONNECTED');
+    expect(warningPos).toBeGreaterThan(browserBlockStart);
+    // And the workspace section (which comes AFTER the browser block in
+    // buildSystemPrompt) lands AFTER the warning.
+    expect(warningPos).toBeLessThan(prompt.length);
+  });
+
   it('should include the intellectual-rigor / no-validation directive', () => {
     // Lucas asked for this directly: "challenge my assumptions, stress test
     // everything — i need bulletproof thinking, not validation." Foundation-

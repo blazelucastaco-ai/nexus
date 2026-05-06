@@ -9,6 +9,7 @@ import { createLogger } from '../utils/logger.js';
 import { generateId, nowISO, truncate, safeJsonParse } from '../utils/helpers.js';
 import { loadConfig } from '../config.js';
 import { assembleContext, buildSystemPrompt } from './context.js';
+import { browserBridge } from '../browser/bridge.js';
 import { EventLoop } from './event-loop.js';
 import { ToolCallLoop } from './tool-call-loop.js';
 import { runWriteGuard } from './write-guard.js';
@@ -1235,6 +1236,10 @@ export class Orchestrator {
       context,
       personalityPrompt,
       agentDescriptions,
+      // Per-turn runtime signal so the LLM knows whether to attempt browser_*
+      // tools or fall back to web_fetch. Avoids wasted "Chrome extension not
+      // connected" failures on turns where the extension is offline.
+      { browserConnected: browserBridge.isConnected },
     );
 
     const extensions: string[] = [];

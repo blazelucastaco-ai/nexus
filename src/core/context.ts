@@ -30,10 +30,22 @@ export function assembleContext(params: {
 /**
  * Build the system prompt from context for the LLM.
  */
+export interface BuildSystemPromptOptions {
+  /**
+   * Whether the Chrome extension's WebSocket bridge is currently connected.
+   * When provided, the "## Chrome Browser Control" block carries a
+   * runtime-state line so the LLM doesn't optimistically pick a browser_*
+   * tool when the extension is offline (which would force a wasted turn).
+   * Undefined = state unknown → no line surfaced (back-compat).
+   */
+  browserConnected?: boolean;
+}
+
 export function buildSystemPrompt(
   context: NexusContext,
   personalityPrompt: string,
   agentDescriptions: string,
+  options: BuildSystemPromptOptions = {},
 ): string {
   const parts: string[] = [];
 
@@ -184,6 +196,18 @@ You have a real dream cycle — it runs automatically on a schedule and consolid
   parts.push(`\n## Available Agents\n${agentDescriptions}`);
 
   // ── Browser ────────────────────────────────────────────────────────────────
+  // Runtime state line (only emitted when caller supplied browserConnected).
+  // When the extension is offline, this tells the LLM up-front so it doesn't
+  // burn a turn picking browser_navigate just to get "extension not connected"
+  // back. When online, the affirmative state nudges the LLM to USE browser
+  // tools rather than fall back to web_fetch unnecessarily.
+  let browserState = '';
+  if (options.browserConnected === true) {
+    browserState = '\n\n_Runtime state: Chrome extension is connected — browser_* tools will work._';
+  } else if (options.browserConnected === false) {
+    browserState = '\n\n⚠️ Runtime state: Chrome extension is currently DISCONNECTED. Any browser_* call will fail with "Chrome extension not connected". If the request needs browser interaction, tell the user to open Chrome with the NEXUS extension. If the request only needs to fetch a URL\'s content, prefer web_fetch instead — do not call browser_* tools.';
+  }
+
   parts.push(`\n## Chrome Browser Control
 
 You have Chrome browser automation via the NEXUS Bridge extension.
@@ -196,7 +220,7 @@ Key rules:
 - Never use browser_evaluate on Gmail/Google (Trusted Types block it) — use browser_extract with selectors.
 - Only take screenshots when the user asks. Use browser_extract to verify, not screenshots.
 - Safe to click without asking: nav links, pagination, tabs, filters. Confirm: send, publish, delete, buy.
-- If extension is disconnected, tell the user — don't say the task is impossible.`);
+- If extension is disconnected, tell the user — don't say the task is impossible.${browserState}`);
 
   // ── Active tasks ───────────────────────────────────────────────────────────
   if (context.activeTasks.length > 0) {
