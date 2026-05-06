@@ -94,7 +94,7 @@ Both land at the same `~/.nexus/` state.
 ## Known limits (honest)
 
 - Private alpha, not recommended for open release yet. Bugs like temperature-deprecated Opus calls and classifier false-positives have surfaced in early use.
-- Unsigned app — first launch on macOS Sequoia (15+) requires opening System Settings → Privacy & Security → "Open Anyway", or running `xattr -cr /Applications/NEXUS-Installer.app` in Terminal. The old "right-click → Open" Gatekeeper bypass no longer works.
+- Unsigned app — current v0.1.0 DMG ships an electron-builder ad-hoc signature whose resource manifest is broken, so macOS shows "NEXUS is damaged" instead of the normal "Apple cannot verify" warning. Workaround: `sudo codesign --remove-signature /Applications/NEXUS.app && xattr -cr /Applications/NEXUS.app` in Terminal, then launch and use System Settings → Privacy & Security → "Open Anyway". Future builds use an `afterSign` hook to strip the broken sig before DMG packaging, so this won't be needed.
 - arm64 only by default; Intel requires a separate build.
 - Requires Anthropic API key (paid).
 - macOS only.

@@ -1466,13 +1466,12 @@ footer {
           <li>Open <strong>System Settings</strong> → <strong>Privacy &amp; Security</strong>, scroll to the bottom, find the message about NEXUS being blocked, and click <strong>Open Anyway</strong>. Re-launch NEXUS; click <strong>Open</strong> when prompted.</li>
         </ol>
         <details style="margin-top:.75rem; padding:.75rem 1rem; background:#1a1a1a; border-left:3px solid #e94560; border-radius:4px;">
-          <summary style="cursor:pointer; font-weight:600;">Got "NEXUS-Installer is damaged and can't be opened" instead?</summary>
-          <p style="margin-top:.5rem;">macOS sometimes shows that misleading message in place of the normal "Apple could not verify" one. The app isn't actually damaged — it's the same unsigned-app block, just worded scarily. Two ways to fix it:</p>
-          <ul class="guide-ul">
-            <li><strong>Recommended:</strong> Open <strong>System Settings → Privacy &amp; Security</strong> and look for the "Open Anyway" button near the bottom of the page. Click it, then re-launch the app.</li>
-            <li><strong>If "Open Anyway" doesn't appear:</strong> Open Terminal (Applications → Utilities → Terminal) and run <code>xattr -cr /Applications/NEXUS-Installer.app</code> — that clears the macOS quarantine flag. Then double-click the app normally.</li>
-          </ul>
-          <p style="margin-top:.5rem; opacity:.8; font-size:.9em;">"Right-click → Open" used to work as a Gatekeeper bypass, but Apple removed that path on macOS Sequoia (15+). The two options above are what works today.</p>
+          <summary style="cursor:pointer; font-weight:600;">Got "NEXUS is damaged and can't be opened" instead?</summary>
+          <p style="margin-top:.5rem;">The app isn't actually damaged — it's a known issue with how electron-builder ad-hoc-signs unsigned macOS apps (the signature manifest references resources that get repackaged into the DMG, so macOS sees the mismatch as tampering). The fix is to strip the broken signature and clear the quarantine flag in one step.</p>
+          <p style="margin-top:.5rem;"><strong>Open Terminal</strong> (Applications → Utilities → Terminal) and paste this:</p>
+          <pre style="background:#0a0a0a; padding:.6rem .75rem; border-radius:4px; overflow-x:auto; font-size:.85em;"><code>sudo codesign --remove-signature /Applications/NEXUS.app &amp;&amp; xattr -cr /Applications/NEXUS.app</code></pre>
+          <p style="margin-top:.5rem;">Enter your Mac password when prompted (the prompt is for <code>sudo</code>, not for NEXUS itself). Then double-click NEXUS in Applications — macOS will show the standard "Apple cannot verify" warning instead. Click <strong>Open Anyway</strong> in System Settings → Privacy &amp; Security, then launch again.</p>
+          <p style="margin-top:.5rem; opacity:.8; font-size:.9em;">If you previously dragged the app under a different name, replace <code>/Applications/NEXUS.app</code> with the actual path. "Right-click → Open" used to work as a Gatekeeper bypass, but Apple removed that path on macOS Sequoia (15+).</p>
         </details>
       </div>
     </div>
