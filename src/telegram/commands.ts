@@ -72,6 +72,7 @@ export const commands: BotCommand[] = [
   { command: 'promote', description: 'Promote a draft skill — /promote <slug>' },
   { command: 'timeline', description: 'Cross-project timeline — /timeline [days]' },
   { command: 'resolve', description: 'Mark a stalled goal as resolved — /resolve <substring>' },
+  { command: 'bigbrain', description: '🧠 Toggle the easter-egg "BigBrain" mode (no skills, no memory)' },
   { command: 'stop', description: 'Graceful shutdown' },
   { command: 'help', description: 'Show all available commands' },
 ];
@@ -1286,6 +1287,56 @@ async function requireSubsystem(ctx: Context, value: unknown, name: string): Pro
   if (value) return true;
   await ctx.reply(`${name} not connected.`, { parse_mode: 'HTML' });
   return false;
+}
+
+// ─── /bigbrain ───────────────────────────────────────────────────────────
+//
+// Toggles the BigBrain easter egg for this chat. When ON, the orchestrator
+// short-circuits its pipeline at the top of handleMessage and routes
+// directly to BigBrainEngine.respond — no memory writes, no skill access,
+// no tool calls. Session history is in-process only and wiped on exit.
+//
+// The reply carries an inline "Exit BigBrain" button so the user can leave
+// without typing a command. Re-typing /bigbrain (or /exit) also works.
+
+export async function handleBigBrain(ctx: Context, orchestrator: Orchestrator): Promise<void> {
+  try {
+    const chatId = String(ctx.chat?.id ?? '');
+    if (!chatId) {
+      await ctx.reply('Chat ID missing — cannot toggle BigBrain.');
+      return;
+    }
+
+    if (orchestrator.bigbrain.isActive(chatId)) {
+      orchestrator.bigbrain.exit(chatId);
+      await ctx.reply('🧠 BigBrain mode off. Session wiped. Back to normal.', { parse_mode: 'HTML' });
+      log.info({ chatId }, '/bigbrain — toggled off');
+      return;
+    }
+
+    orchestrator.bigbrain.enter(chatId);
+    await ctx.reply(
+      [
+        '🧠 <b>BigBrain mode ON.</b>',
+        '',
+        'I now have <i>literally zero brain cells.</i>',
+        '',
+        'No memory, no tools, no skills, no real facts. Just confident wrong answers. Ask me anything — the dumber the better.',
+        '',
+        'Tap <b>Exit BigBrain</b> below (or send <code>/exit</code>) to come back.',
+      ].join('\n'),
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [[{ text: '🧠 Exit BigBrain', callback_data: 'bigbrain:exit' }]],
+        },
+      },
+    );
+    log.info({ chatId }, '/bigbrain — toggled on');
+  } catch (err) {
+    log.error({ err }, 'Error in /bigbrain');
+    await ctx.reply('Failed to toggle BigBrain — see logs.');
+  }
 }
 
 // ─── /timeline [days] ────────────────────────────────────────────────────

@@ -40,6 +40,7 @@ import {
   handleResolveGoal,
   handleSkillPromote,
   handleTimeline,
+  handleBigBrain,
   handleThinking,
   handleStop,
   handleHelp,
@@ -478,6 +479,11 @@ export class TelegramGateway {
       return handleResolveGoal(ctx, this.orchestrator, arg);
     });
 
+    this.bot.command('bigbrain', (ctx) => {
+      if (!this.orchestrator) return ctx.reply('Orchestrator not connected.');
+      return handleBigBrain(ctx, this.orchestrator);
+    });
+
     this.bot.command('stop', (ctx) => handleStop(ctx));
 
     this.bot.command('help', (ctx) => handleHelp(ctx));
@@ -554,6 +560,17 @@ export class TelegramGateway {
           } else {
             await ctx.answerCallbackQuery({ text: '❌ Plan not found — may have already been processed.' });
           }
+        } else if (data === 'bigbrain:exit') {
+          if (this.orchestrator) this.orchestrator.bigbrain.exit(chatId);
+          await ctx.answerCallbackQuery({ text: '🧠 Back to normal.' });
+          // Remove the Exit button from the message that was clicked.
+          try {
+            await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
+          } catch { /* ignore — message may already be edited */ }
+          await this.bot.api.sendMessage(
+            chatId,
+            '🧠 BigBrain mode off. Session wiped. Back to normal.',
+          );
         } else {
           await ctx.answerCallbackQuery();
         }
@@ -643,6 +660,17 @@ export class TelegramGateway {
           };
 
           const response = await this.orchestrator.handleMessage(chatId, text, onToken, onStatus);
+
+          // Orchestrator returns empty when it has already sent the reply
+          // directly (e.g., BigBrain mode sends with an inline Exit button).
+          // Clean up any status indicator and stop.
+          if (!response) {
+            if (statusMsgId) {
+              await this.editMessage(chatId, statusMsgId, '✅').catch(() => { /* non-fatal */ });
+            }
+            return;
+          }
+
           const formatted = markdownToHtml(sanitizePaths(response));
 
           if (responseMsgId) {
@@ -688,7 +716,9 @@ export class TelegramGateway {
             chatId,
             `[PHOTO] ${result.filePath}${caption ? `\n${caption}` : ''}`,
           );
-          await this.sendMessage(chatId, markdownToHtml(sanitizePaths(response)));
+          if (response) {
+            await this.sendMessage(chatId, markdownToHtml(sanitizePaths(response)));
+          }
         } else {
           await ctx.reply(
             `<b>Photo received</b>\nSaved to: <code>${escapeHtml(result.filePath)}</code>`,
@@ -722,7 +752,9 @@ export class TelegramGateway {
             chatId,
             `[Document received: ${result.filePath}] ${caption}`,
           );
-          await this.sendMessage(chatId, markdownToHtml(sanitizePaths(response)));
+          if (response) {
+            await this.sendMessage(chatId, markdownToHtml(sanitizePaths(response)));
+          }
         }
       } catch (err) {
         log.error({ err }, 'Failed to process document');
@@ -745,7 +777,9 @@ export class TelegramGateway {
             chatId,
             `[Voice message received: ${result.filePath}, duration: ${result.duration}s]`,
           );
-          await this.sendMessage(chatId, markdownToHtml(sanitizePaths(response)));
+          if (response) {
+            await this.sendMessage(chatId, markdownToHtml(sanitizePaths(response)));
+          }
         }
       } catch (err) {
         log.error({ err }, 'Failed to process voice message');

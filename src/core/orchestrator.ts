@@ -38,6 +38,7 @@ import { buildUrlHint } from '../brain/url-hint.js';
 import { getProject, slugify } from '../data/projects-repository.js';
 import { SELF_DISCLOSURE_REFUSAL } from './self-protection.js';
 import { InnerMonologue, shouldSurfaceMicroThought } from '../brain/inner-monologue.js';
+import { BigBrainEngine } from '../brain/bigbrain.js';
 import { appendTurn, loadSession } from './session-store.js';
 import { DreamingEngine } from '../brain/dreaming.js';
 import { Heartbeat } from '../brain/heartbeat.js';
@@ -227,6 +228,14 @@ export class Orchestrator {
   private toolCallLoop!: ToolCallLoop;
   private selfAwareness!: SelfAwareness;
   public innerMonologue!: InnerMonologue;
+  /**
+   * BigBrain easter egg — toggled via /bigbrain. When a chat is in BigBrain
+   * mode, _handleMessage short-circuits BEFORE the pipeline runs and routes
+   * directly to a tool-less ai.complete() with a deliberately-confidently-
+   * wrong persona. No memory writes, no skill access, no tool calls.
+   * Session state lives only here, wiped on /exit or /bigbrain again.
+   */
+  public bigbrain!: BigBrainEngine;
 
   // Session auto-summary tracking
   private sessionTurnCount = 0;
@@ -451,6 +460,8 @@ export class Orchestrator {
     // Inner monologue uses the fast tier — it's a brief private thought.
     this.selfAwareness = new SelfAwareness(this.memory, this.personality);
     this.innerMonologue = new InnerMonologue(this.ai, this.config.ai.fastModel);
+    // BigBrain runs on the fast model — it's an amusement, not a real answer.
+    this.bigbrain = new BigBrainEngine(this.ai, this.config.ai.fastModel);
     this.toolExecutor = new ToolExecutor(this.agents, this.memory, this.selfAwareness, this.innerMonologue);
 
     // Close the "Active Project" loop (FIND-CMP-03): the system prompt tells
@@ -800,6 +811,32 @@ export class Orchestrator {
     log.info({ textLen: text.length, preview: text.slice(0, 80) }, 'Processing message');
 
     try {
+      // ── BigBrain bypass ───────────────────────────────────────────────
+      // When the chat is in BigBrain mode, skip the entire 13-step
+      // pipeline. No memory writes, no skill access, no tool calls — just
+      // a single dumb-mode ai.complete() with `tools: []`. Send the reply
+      // directly with an Exit inline button, then return '' so the gateway
+      // skips its sendMessage path. /exit and /bigbrain (re-typed) leave
+      // the mode and wipe the session.
+      if (this.bigbrain.isActive(chatId)) {
+        const trimmed = text.trim().toLowerCase();
+        if (trimmed === '/exit' || trimmed === '/bigbrain') {
+          this.bigbrain.exit(chatId);
+          await this.telegram.sendMessage(
+            chatId,
+            '🧠 BigBrain mode off. Session wiped. Back to normal.',
+          );
+          return '';
+        }
+        const dumbResponse = await this.bigbrain.respond(chatId, text);
+        await this.telegram.sendMessage(chatId, dumbResponse, {
+          replyMarkup: {
+            inline_keyboard: [[{ text: '🧠 Exit BigBrain', callback_data: 'bigbrain:exit' }]],
+          },
+        });
+        return '';
+      }
+
       // ── 0. Early stages via pipeline (injection guard + frustration) ──
       // Stages are self-contained. Pipeline short-circuits with a canned
       // response on hard block; otherwise mutates ctx.text (sanitized) and
