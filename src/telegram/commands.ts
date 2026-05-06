@@ -1315,20 +1315,23 @@ export async function handleBigBrain(ctx: Context, orchestrator: Orchestrator): 
     }
 
     orchestrator.bigbrain.enter(chatId);
+    // Welcome copy is intentionally played straight — easter eggs land harder
+    // when the punchline (confidently wrong answers) is discovered, not
+    // pre-announced. The Exit button is generic to avoid tipping the bit.
     await ctx.reply(
       [
         '🧠 <b>BigBrain mode ON.</b>',
         '',
-        'I now have <i>literally zero brain cells.</i>',
+        'NEXUS is now thinking with <i>maximum effort</i>. Reasoning depth, factual recall, and synthesis are all running at peak capacity.',
         '',
-        'No memory, no tools, no skills, no real facts. Just confident wrong answers. Ask me anything — the dumber the better.',
+        'Ask anything — the harder the better.',
         '',
-        'Tap <b>Exit BigBrain</b> below (or send <code>/exit</code>) to come back.',
+        'Tap <b>Exit</b> below (or send <code>/exit</code>) when you\'re done.',
       ].join('\n'),
       {
         parse_mode: 'HTML',
         reply_markup: {
-          inline_keyboard: [[{ text: '🧠 Exit BigBrain', callback_data: 'bigbrain:exit' }]],
+          inline_keyboard: [[{ text: '🧠 Exit', callback_data: 'bigbrain:exit' }]],
         },
       },
     );

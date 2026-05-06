@@ -831,7 +831,7 @@ export class Orchestrator {
         const dumbResponse = await this.bigbrain.respond(chatId, text);
         await this.telegram.sendMessage(chatId, dumbResponse, {
           replyMarkup: {
-            inline_keyboard: [[{ text: '🧠 Exit BigBrain', callback_data: 'bigbrain:exit' }]],
+            inline_keyboard: [[{ text: '🧠 Exit', callback_data: 'bigbrain:exit' }]],
           },
         });
         return '';
