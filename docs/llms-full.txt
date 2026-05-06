@@ -94,7 +94,7 @@ Both land at the same `~/.nexus/` state.
 ## Known limits (honest)
 
 - Private alpha, not recommended for open release yet. Bugs like temperature-deprecated Opus calls and classifier false-positives have surfaced in early use.
-- Unsigned app — Gatekeeper requires right-click → Open on first launch.
+- Unsigned app — first launch on macOS Sequoia (15+) requires opening System Settings → Privacy & Security → "Open Anyway", or running `xattr -cr /Applications/NEXUS-Installer.app` in Terminal. The old "right-click → Open" Gatekeeper bypass no longer works.
 - arm64 only by default; Intel requires a separate build.
 - Requires Anthropic API key (paid).
 - macOS only.

@@ -1462,9 +1462,18 @@ footer {
         <ol class="guide-ol">
           <li>Double-click <code>NEXUS-Installer.dmg</code> to mount it.</li>
           <li>Drag the <strong>NEXUS</strong> app into the <strong>Applications</strong> folder.</li>
-          <li>Open Applications → <strong>right-click NEXUS</strong> → <strong>Open</strong> (do not just double-click — the first launch needs the right-click trick to bypass Gatekeeper).</li>
-          <li>When macOS warns "Apple could not verify NEXUS", click <strong>Open</strong>.</li>
+          <li>Try double-clicking it. macOS will block the launch — that's expected on first run for an unsigned app.</li>
+          <li>Open <strong>System Settings</strong> → <strong>Privacy &amp; Security</strong>, scroll to the bottom, find the message about NEXUS being blocked, and click <strong>Open Anyway</strong>. Re-launch NEXUS; click <strong>Open</strong> when prompted.</li>
         </ol>
+        <details style="margin-top:.75rem; padding:.75rem 1rem; background:#1a1a1a; border-left:3px solid #e94560; border-radius:4px;">
+          <summary style="cursor:pointer; font-weight:600;">Got "NEXUS-Installer is damaged and can't be opened" instead?</summary>
+          <p style="margin-top:.5rem;">macOS sometimes shows that misleading message in place of the normal "Apple could not verify" one. The app isn't actually damaged — it's the same unsigned-app block, just worded scarily. Two ways to fix it:</p>
+          <ul class="guide-ul">
+            <li><strong>Recommended:</strong> Open <strong>System Settings → Privacy &amp; Security</strong> and look for the "Open Anyway" button near the bottom of the page. Click it, then re-launch the app.</li>
+            <li><strong>If "Open Anyway" doesn't appear:</strong> Open Terminal (Applications → Utilities → Terminal) and run <code>xattr -cr /Applications/NEXUS-Installer.app</code> — that clears the macOS quarantine flag. Then double-click the app normally.</li>
+          </ul>
+          <p style="margin-top:.5rem; opacity:.8; font-size:.9em;">"Right-click → Open" used to work as a Gatekeeper bypass, but Apple removed that path on macOS Sequoia (15+). The two options above are what works today.</p>
+        </details>
       </div>
     </div>
 

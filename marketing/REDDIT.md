@@ -77,7 +77,7 @@ Just shipped v0.1.0 of NEXUS — a personal AI agent that lives as a service on 
 
 **Design:** Cream + terracotta palette, Libre Baskerville + Plus Jakarta Sans + JetBrains Mono. Clean.
 
-Download: [DMG from GitHub releases](https://github.com/blazelucastaco-ai/nexus/releases/latest) (unsigned — right-click → Open on first launch). Requires Anthropic API key + Telegram bot.
+Download: [DMG from GitHub releases](https://github.com/blazelucastaco-ai/nexus/releases/latest) (unsigned — on first launch use System Settings → Privacy & Security → "Open Anyway", or `xattr -cr /Applications/NEXUS-Installer.app` in Terminal). Requires Anthropic API key + Telegram bot.
 
 Honest about limits: v0.1.0, unsigned, private alpha, Apple Silicon primary.
 
