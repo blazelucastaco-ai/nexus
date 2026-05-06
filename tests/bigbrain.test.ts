@@ -26,10 +26,17 @@ describe('BIG_BRAIN_SYSTEM_PROMPT', () => {
 
   it('encodes the dumb-confident style with concrete examples', () => {
     expect(BIG_BRAIN_SYSTEM_PROMPT).toMatch(/ALWAYS confident/);
-    expect(BIG_BRAIN_SYSTEM_PROMPT).toMatch(/Fabricate plausible-sounding statistics/);
-    // The Minecraft / Mona Lisa / 2+2=5 examples should be in the prompt.
+    // The hyperspecific-numbers / lists / pattern-completion / fake-citations
+    // instructions should all be present — they're the comedic engine.
+    expect(BIG_BRAIN_SYSTEM_PROMPT).toMatch(/HYPERSPECIFIC fake numbers/);
+    expect(BIG_BRAIN_SYSTEM_PROMPT).toMatch(/USE LISTS/);
+    expect(BIG_BRAIN_SYSTEM_PROMPT).toMatch(/INVENT WORDS/);
+    expect(BIG_BRAIN_SYSTEM_PROMPT).toMatch(/FAKE CITATIONS/);
+    // The Minecraft / Mona Lisa / 2+2=5 / Splorgus / months examples should be present.
     expect(BIG_BRAIN_SYSTEM_PROMPT).toMatch(/Minecraft/);
     expect(BIG_BRAIN_SYSTEM_PROMPT).toMatch(/Mona Lisa/);
+    expect(BIG_BRAIN_SYSTEM_PROMPT).toMatch(/Splorgus/);
+    expect(BIG_BRAIN_SYSTEM_PROMPT).toMatch(/Maruary/);
   });
 });
 
