@@ -305,6 +305,16 @@ export class ProactiveEngine {
 
     try {
       const context = await this.getMemoryContext();
+      // Skip the LLM call entirely when there's no actual context to think
+      // about. Without this guard the model would respond with its
+      // "I don't have any context — drop in some details" template, which
+      // we'd then broadcast verbatim. Cooldown is already advanced above,
+      // so we'll quietly try again on the next idle tick.
+      if (!context) {
+        log.debug('Idle idea skipped — no memory context to think on');
+        return;
+      }
+
       const response = await this.aiManager.complete({
         messages: [
           {
@@ -315,7 +325,9 @@ export class ProactiveEngine {
               `Based on the context below, come up with ONE specific, useful idea or observation ` +
               `to share with your owner. It could be something to build, something to improve, ` +
               `a pattern you've noticed, or something worth thinking about. Keep it to 2-3 sentences. ` +
-              `Be direct and specific, not generic.\n\n` +
+              `Be direct and specific, not generic. If the context is genuinely too thin to produce ` +
+              `a specific idea, output exactly the literal token "(skip)" instead — never ask the user ` +
+              `to provide more context.\n\n` +
               `Context:\n${context}`,
           },
         ],
@@ -324,32 +336,80 @@ export class ProactiveEngine {
       });
 
       const idea = response.content.trim();
-      if (idea && idea.length > 10) {
-        await this.sendFn(`💡 <b>NEXUS had a thought…</b>\n\n${idea}`);
-        log.info('Idle idea sent');
+      // Defense in depth: even with non-empty context the model can still
+      // emit the "give me more details" template. Detect and skip rather
+      // than broadcast garbage. The (skip) sentinel above is the
+      // model-cooperative path; the regex catches the model-uncooperative
+      // case where it produces the boilerplate anyway.
+      if (!idea || idea.length <= 10) return;
+      if (isMetaEmptyResponse(idea)) {
+        log.info({ ideaPreview: idea.slice(0, 120) }, 'Idle idea skipped — model emitted meta-empty response');
+        return;
       }
+
+      await this.sendFn(`💡 <b>NEXUS had a thought…</b>\n\n${idea}`);
+      log.info('Idle idea sent');
     } catch (err) {
       log.warn({ err }, 'Idle idea generation failed');
     }
   }
 
-  private async getMemoryContext(): Promise<string> {
-    if (!this.memoryManager) return 'No memory context available.';
+  /**
+   * Build a context string from recent memories. Returns null when there's
+   * genuinely nothing to think about (no memory manager, no matching
+   * memories, all retrieved entries empty) so the caller can skip the LLM
+   * call entirely instead of generating a "give me context" boilerplate.
+   *
+   * Importance threshold lowered from 0.4 → 0.2 so idle-thinking has a
+   * wider pool to draw from than the per-turn synthesis path.
+   */
+  private async getMemoryContext(): Promise<string | null> {
+    if (!this.memoryManager) return null;
 
     try {
       const recent = await this.memoryManager.recall('recent activity', {
         layers: ['episodic', 'semantic'],
         limit: 8,
-        minImportance: 0.4,
+        minImportance: 0.2,
       });
 
-      return recent
-        .map((m) => m.content.slice(0, 200))
-        .join('\n');
+      if (recent.length === 0) return null;
+
+      const lines = recent
+        .map((m) => m.content.slice(0, 200).trim())
+        .filter((line) => line.length > 0);
+
+      if (lines.length === 0) return null;
+
+      return lines.join('\n');
     } catch {
-      return 'No memory context available.';
+      return null;
     }
   }
+}
+
+// ─── Meta-empty response detection (pure helper, exported for tests) ────────
+//
+// When the model is asked to think about empty/sparse context, it tends to
+// respond with templates like:
+//   "I don't have any context to work with — drop in some details..."
+//   "The context section was empty. Give me recent projects, files..."
+// We refuse to broadcast those (they look like NEXUS pestering the user
+// for input rather than offering a thought). The (skip) sentinel in the
+// prompt is the cooperative path; this is the defensive backstop.
+
+const META_EMPTY_PATTERNS: RegExp[] = [
+  /\(\s*skip\s*\)/i,
+  /\bdon'?t have (?:any |enough )?context\b/i,
+  /\bcontext (?:section )?(?:is|was|seems|appears) (?:empty|blank|missing|sparse)\b/i,
+  /\bdrop in some details\b/i,
+  /\bgive me (?:something|some|more) (?:to )?(?:work with|context|details)\b/i,
+  /\bnothing (?:specific )?(?:to|worth) (?:think|share)\b/i,
+];
+
+export function isMetaEmptyResponse(text: string): boolean {
+  if (!text) return true;
+  return META_EMPTY_PATTERNS.some((re) => re.test(text));
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
