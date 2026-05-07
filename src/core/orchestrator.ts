@@ -2066,7 +2066,10 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
           const msg = [
             `📋 <b>Session summary</b> <i>(${triggerLabel}, ${this.sessionTurnCount} turns)</i>`,
             '',
-            summary,
+            // The summary is LLM-generated — route through markdownToHtml so
+            // any Markdown the model emits renders properly. The wrapper
+            // line above stays as hardcoded HTML.
+            markdownToHtml(summary),
           ].join('\n');
           await this.telegram.sendMessage(chatId, msg);
         } catch (err) {

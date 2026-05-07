@@ -15,6 +15,7 @@ import { createLogger } from '../utils/logger.js';
 import type { AIManager } from '../ai/index.js';
 import type { MemoryManager } from '../memory/index.js';
 import { countRecentTaskFailures } from '../data/episodic-queries.js';
+import { markdownToHtml } from '../telegram/messages.js';
 
 const log = createLogger('ProactiveEngine');
 
@@ -347,7 +348,10 @@ export class ProactiveEngine {
         return;
       }
 
-      await this.sendFn(`💡 <b>NEXUS had a thought…</b>\n\n${idea}`);
+      // Idea is LLM output — route through markdownToHtml so any Markdown
+      // (bold, lists, links to docs) renders properly in Telegram instead
+      // of leaking literal `**` / `[text](url)`.
+      await this.sendFn(`💡 <b>NEXUS had a thought…</b>\n\n${markdownToHtml(idea)}`);
       log.info('Idle idea sent');
     } catch (err) {
       log.warn({ err }, 'Idle idea generation failed');
