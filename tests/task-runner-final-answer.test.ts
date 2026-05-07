@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { pickFinalAnswer } from '../src/core/task-runner.js';
+import {
+  cleanMarkdownForTelegram,
+  pickFinalAnswer,
+  summarizeTaskForHistory,
+} from '../src/core/task-runner.js';
+import type { TaskRunResult } from '../src/core/task-runner.js';
 
 // Bug Lucas reported on 2026-05-06: NEXUS replied to a task with just
 // "task finished" + a step checklist, never including the actual answer.
@@ -52,5 +57,148 @@ describe('pickFinalAnswer', () => {
 
   it('trims leading/trailing whitespace before deciding', () => {
     expect(pickFinalAnswer('   \n  v22.14.0  \n  ', '')).toBe('v22.14.0');
+  });
+
+  it('strips Markdown from rawOutput so Telegram does not show literal `##` / `---` / pipes', () => {
+    // Lucas's screenshot bug from 2026-05-06: model produced a Markdown
+    // report that Telegram rendered as raw text.
+    const md = [
+      '## ✅ Step 2 Complete — Verified',
+      '---',
+      '### 📁 Files',
+      '| Path | Status |',
+      '|------|--------|',
+      '| `~/foo.json` | ✅ Valid |',
+    ].join('\n');
+    const out = pickFinalAnswer(md, '');
+    expect(out).not.toContain('##');
+    expect(out).not.toContain('---');
+    expect(out).not.toMatch(/\|[-:]+\|/);
+    expect(out).not.toContain('`~/foo.json`');
+    expect(out).toContain('Step 2 Complete');
+    expect(out).toContain('~/foo.json');
+  });
+});
+
+describe('cleanMarkdownForTelegram', () => {
+  it('returns empty string for empty input', () => {
+    expect(cleanMarkdownForTelegram('')).toBe('');
+  });
+
+  it('passes plain text through unchanged', () => {
+    expect(cleanMarkdownForTelegram('Just a sentence.')).toBe('Just a sentence.');
+  });
+
+  it('strips heading markers but keeps the heading text', () => {
+    expect(cleanMarkdownForTelegram('## Hello\n### World')).toBe('Hello\nWorld');
+  });
+
+  it('drops horizontal rules', () => {
+    expect(cleanMarkdownForTelegram('above\n---\nbelow')).toBe('above\n\nbelow');
+    expect(cleanMarkdownForTelegram('above\n***\nbelow')).toBe('above\n\nbelow');
+  });
+
+  it('flattens pipe tables into space-separated rows', () => {
+    const out = cleanMarkdownForTelegram('| Path | Status |\n|------|--------|\n| a.txt | ok |');
+    expect(out).toContain('Path');
+    expect(out).toContain('Status');
+    expect(out).toContain('a.txt');
+    expect(out).toContain('ok');
+    expect(out).not.toMatch(/\|/);
+  });
+
+  it('strips fenced code blocks but keeps content', () => {
+    const out = cleanMarkdownForTelegram('```js\nconst x = 1;\n```');
+    expect(out).toBe('const x = 1;');
+  });
+
+  it('strips bold/italic markers', () => {
+    expect(cleanMarkdownForTelegram('**bold** and *italic* and __also__ and _it_')).toBe(
+      'bold and italic and also and it',
+    );
+  });
+
+  it('strips inline-code backticks', () => {
+    expect(cleanMarkdownForTelegram('the `foo.json` file')).toBe('the foo.json file');
+  });
+
+  it('converts dash bullets to • bullets', () => {
+    const out = cleanMarkdownForTelegram('- one\n- two\n- three');
+    expect(out).toBe('• one\n• two\n• three');
+  });
+
+  it('collapses 3+ blank lines to a single paragraph break', () => {
+    expect(cleanMarkdownForTelegram('a\n\n\n\nb')).toBe('a\n\nb');
+  });
+});
+
+describe('summarizeTaskForHistory', () => {
+  // Bug Lucas reported on 2026-05-06: NEXUS shipped a Chrome extension at
+  // 8:48 PM, then refused at 8:58 PM as if it had never built it, then
+  // denied building it at 9:00 PM ("no record of building it"). Root
+  // cause: task-runner sent the completion message via Telegram but
+  // bypassed conversationHistory, so the LLM's next-turn view had a gap.
+  // summarizeTaskForHistory generates the plain-text assistant turn the
+  // orchestrator now writes back into history so the next chat turn
+  // sees what NEXUS just did.
+  const baseResult = (overrides: Partial<TaskRunResult> = {}): TaskRunResult => ({
+    success: true,
+    completedSteps: 2,
+    totalSteps: 2,
+    projectDir: '~/nexus-workspace/foo',
+    filesProduced: [],
+    summary: '',
+    durationMs: 1000,
+    ...overrides,
+  });
+
+  it('summarizes a successful task with file list', () => {
+    const out = summarizeTaskForHistory(
+      { title: 'Form Tab Unlocker' },
+      baseResult({
+        filesProduced: [
+          '~/nexus-workspace/form-tab-unlocker/manifest.json',
+          '~/nexus-workspace/form-tab-unlocker/content.js',
+        ],
+      }),
+    );
+    expect(out).toBe(
+      'I completed the task "Form Tab Unlocker" — all steps succeeded.' +
+      ' Files created: ~/nexus-workspace/form-tab-unlocker/manifest.json,' +
+      ' ~/nexus-workspace/form-tab-unlocker/content.js.',
+    );
+  });
+
+  it('omits the Files line when no files were produced', () => {
+    const out = summarizeTaskForHistory({ title: 'Battery check' }, baseResult());
+    expect(out).toBe('I completed the task "Battery check" — all steps succeeded.');
+    expect(out).not.toContain('Files');
+  });
+
+  it('reports partial completion with the n/m count', () => {
+    const out = summarizeTaskForHistory(
+      { title: 'Big build' },
+      baseResult({ success: false, completedSteps: 3, totalSteps: 5 }),
+    );
+    expect(out).toContain('partial');
+    expect(out).toContain('3/5');
+  });
+
+  it('reports timeout distinctly from generic partial', () => {
+    const out = summarizeTaskForHistory(
+      { title: 'Slow task' },
+      baseResult({ success: false, completedSteps: 1, totalSteps: 3, timedOut: true }),
+    );
+    expect(out).toContain('timed out');
+    expect(out).toContain('1/3');
+    expect(out).not.toContain('partial');
+  });
+
+  it('reads as a normal assistant turn (not a system tag)', () => {
+    // The string is fed straight into the LLM as an assistant message —
+    // brackets like "[Completed: ...]" would have read like metadata.
+    const out = summarizeTaskForHistory({ title: 'Anything' }, baseResult());
+    expect(out.startsWith('I completed the task')).toBe(true);
+    expect(out.startsWith('[')).toBe(false);
   });
 });

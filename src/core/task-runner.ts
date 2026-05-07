@@ -143,7 +143,7 @@ ${fileSnapshotSection}${coworkSection}
 
 5. ONE STEP ONLY. Complete this step and stop. Do not do future steps.
 
-6. BRIEF REPORT. After all tool calls, write 1-2 sentences saying what was done. Do not include code.
+6. BRIEF REPORT. After all tool calls, write 1-2 plain-text sentences saying what was done. The reply is shown in Telegram, which does NOT render Markdown — no headings (## / ###), no horizontal rules (---), no pipe tables, no code fences. Just a sentence or two of plain prose.
 
 ━━━ CODE QUALITY — MANDATORY ━━━
 
@@ -335,6 +335,85 @@ function formatFinalSummary(
 }
 
 /**
+ * Build a plain-text assistant turn that summarizes a completed task so
+ * the orchestrator can write it back into conversationHistory.
+ *
+ * Without this, task-completion messages are delivered through Telegram
+ * directly and never enter NEXUS's own memory of what it just said. On
+ * a follow-up turn the LLM sees a user-only gap and re-reasons from
+ * scratch — which is how NEXUS ended up refusing a Chrome-extension
+ * follow-up at 8:58 PM after having shipped the extension at 8:48 PM,
+ * and then denying the work entirely on the next turn (Lucas's
+ * 2026-05-06 screenshot bug).
+ *
+ * The output is plain prose so the LLM reads it as a normal assistant
+ * turn — `[Completed: ...]` brackets would have read like a system tag.
+ */
+export function summarizeTaskForHistory(
+  plan: { title: string },
+  result: TaskRunResult,
+): string {
+  const status = result.success
+    ? 'all steps succeeded'
+    : result.timedOut
+      ? `timed out after ${result.completedSteps}/${result.totalSteps} steps`
+      : `partial — ${result.completedSteps}/${result.totalSteps} steps completed`;
+  const filesLine = result.filesProduced.length > 0
+    ? ` Files created: ${result.filesProduced.join(', ')}.`
+    : '';
+  return `I completed the task "${plan.title}" — ${status}.${filesLine}`;
+}
+
+/**
+ * Strip Markdown that Telegram's HTML parse mode can't render, leaving
+ * the plain text behind. Without this, model output containing `## headings`,
+ * `---` rules, and `| pipe | tables |` shows up as literal noise in the
+ * Result block (Lucas's bug screenshot from 2026-05-06).
+ *
+ * The output of this helper still goes through escapeHtml downstream, so we
+ * deliberately produce plain text rather than HTML — emitting `<b>...</b>`
+ * here would just get re-escaped.
+ */
+export function cleanMarkdownForTelegram(text: string): string {
+  if (!text) return '';
+  let out = text;
+
+  // Remove fenced code blocks but preserve the inner content
+  out = out.replace(/```[a-zA-Z0-9_+-]*\n?/g, '');
+  out = out.replace(/```/g, '');
+
+  // Drop horizontal-rule lines (---, ***, ___ on their own line)
+  out = out.replace(/^\s*[-*_]{3,}\s*$/gm, '');
+
+  // Drop pipe-table divider rows (|---|---|)
+  out = out.replace(/^\s*\|[\s\-:|]+\|\s*$/gm, '');
+  // Convert pipe-table data rows to plain space-separated text
+  out = out.replace(/^\s*\|(.+)\|\s*$/gm, (_match, cells: string) =>
+    cells.split('|').map((c) => c.trim()).filter(Boolean).join('  '),
+  );
+
+  // Strip Markdown heading markers (# … ######) but keep the heading text
+  out = out.replace(/^#{1,6}\s+/gm, '');
+
+  // Strip emphasis markers, keeping the inner text
+  out = out.replace(/\*\*([^*\n]+)\*\*/g, '$1');
+  out = out.replace(/__([^_\n]+)__/g, '$1');
+  out = out.replace(/(?<!\*)\*(?!\*)([^*\n]+?)\*(?!\*)/g, '$1');
+  out = out.replace(/(?<!_)_(?!_)([^_\n]+?)_(?!_)/g, '$1');
+
+  // Strip inline-code backticks (lose monospace, keep the text)
+  out = out.replace(/`([^`\n]+)`/g, '$1');
+
+  // Normalize Markdown bullets so the bullet still reads like a list
+  out = out.replace(/^(\s*)[-*+]\s+/gm, '$1• ');
+
+  // Collapse 3+ blank lines to a single paragraph break
+  out = out.replace(/\n{3,}/g, '\n\n');
+
+  return out.trim();
+}
+
+/**
  * Pick the user-facing answer text from a step's rawOutput / summary.
  * Returns "" when the content is just boilerplate (empty, "Step N completed",
  * "Task timed out") so the formatter can omit the Result block instead of
@@ -348,13 +427,17 @@ export function pickFinalAnswer(rawOutput: string, summary: string): string {
   if (/^step \d+ completed\.?$/i.test(candidate)) return '';
   if (/^task timed out before this step could run\.?$/i.test(candidate)) return '';
   if (/^step failed after \d+ /i.test(candidate)) return '';
+  // Strip Markdown so Telegram doesn't show literal `##` / `---` / `|...|`.
+  // Fall back to the raw candidate if cleaning erases everything (e.g. the
+  // whole answer was a horizontal rule).
+  const cleaned = cleanMarkdownForTelegram(candidate) || candidate;
   // Cap for Telegram (4096 char message limit, the rest of the summary uses
   // a few hundred chars of overhead).
   const MAX = 1500;
-  if (candidate.length > MAX) {
-    return candidate.slice(0, MAX).trimEnd() + '…';
+  if (cleaned.length > MAX) {
+    return cleaned.slice(0, MAX).trimEnd() + '…';
   }
-  return candidate;
+  return cleaned;
 }
 
 // ─── Core Step Executor ───────────────────────────────────────────────────────

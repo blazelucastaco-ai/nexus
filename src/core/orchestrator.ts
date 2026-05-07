@@ -16,7 +16,7 @@ import { runWriteGuard } from './write-guard.js';
 import { ToolExecutor } from '../tools/executor.js';
 import { classifyMessage, classifyTaskMode, isUndercoverProbe, detectMissingRequirements } from './task-classifier.js';
 import { planTask, type TaskPlan } from './task-planner.js';
-import { runTask } from './task-runner.js';
+import { runTask, summarizeTaskForHistory } from './task-runner.js';
 import {
   sanitizeInput,
   detectInjection,
@@ -403,9 +403,13 @@ export class Orchestrator {
               { importance: 0.9, tags: ['ultra', 'task', result.success ? 'success' : 'failure'], source: chatId },
             );
           } catch { /* non-fatal */ }
-        }).catch((err) => {
+          // Record completion as assistant turn so follow-up chat has it.
+          await this.appendAssistantTurn(chatId, summarizeTaskForHistory(plan, result));
+        }).catch(async (err) => {
           log.error({ err, chatId }, 'Ultra task runner failed');
-          this.telegram.sendMessage(chatId, 'Ultra task failed unexpectedly.').catch((e) => log.debug({ e }, 'Failed to send ultra task error'));
+          const failMsg = 'Ultra task failed unexpectedly.';
+          this.telegram.sendMessage(chatId, failMsg).catch((e) => log.debug({ e }, 'Failed to send ultra task error'));
+          await this.appendAssistantTurn(chatId, failMsg);
         }).finally(resolve);
       });
     });
@@ -1728,16 +1732,24 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
                   } catch { /* non-fatal */ }
                   this.personality.processEvent(result.success ? 'task_success' : 'task_failure');
                   if (result.success) this.resolveMatchingGoals(enrichedRequest);
-                }).catch((err) => {
+                  // Record the completion as an assistant turn so the next
+                  // chat message sees what NEXUS just built (Lucas's
+                  // 2026-05-06 screenshot bug).
+                  await this.appendAssistantTurn(chatId, summarizeTaskForHistory(plan, result));
+                }).catch(async (err) => {
                   log.error({ err, chatId }, 'Task runner failed');
-                  this.telegram.sendMessage(chatId, 'Task failed unexpectedly.').catch((e) => {
+                  const failMsg = 'Task failed unexpectedly.';
+                  this.telegram.sendMessage(chatId, failMsg).catch((e) => {
                     log.warn({ e, chatId }, 'Failed to notify user of task failure — user has no indication task crashed');
                   });
+                  await this.appendAssistantTurn(chatId, failMsg);
                 }).finally(resolve);
               });
             });
             this.pendingTaskPromises.push(taskPromise);
-            return `Got it — on it now. Planning your task...`;
+            const kickoff = `Got it — on it now. Planning your task...`;
+            await this.appendAssistantTurn(chatId, kickoff);
+            return kickoff;
           }
           return `I have enough info — let me start on that.`;
         }
@@ -1798,23 +1810,60 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
                   log.debug({ err }, 'Self-improvement reflection failed'),
                 );
               }
-            }).catch((err) => {
+              // Record the completion as an assistant turn so the next
+              // chat message sees what NEXUS just built (Lucas's
+              // 2026-05-06 screenshot bug).
+              await this.appendAssistantTurn(chatId, summarizeTaskForHistory(plan, result));
+            }).catch(async (err) => {
               log.error({ err, chatId }, 'Task runner failed');
               this.personality.processEvent('task_failure');
-              this.telegram.sendMessage(chatId, 'Task failed unexpectedly. Check the logs.').catch((e) => {
+              const failMsg = 'Task failed unexpectedly. Check the logs.';
+              this.telegram.sendMessage(chatId, failMsg).catch((e) => {
                 log.warn({ e, chatId }, 'Failed to notify user of task failure — user has no indication task crashed');
               });
+              await this.appendAssistantTurn(chatId, failMsg);
             }).finally(resolve);
           });
         });
         this.pendingTaskPromises.push(taskPromise);
-        return 'On it. Planning your task now...';
+        const kickoff = 'On it. Planning your task now...';
+        await this.appendAssistantTurn(chatId, kickoff);
+        return kickoff;
       }
 
       log.warn({ chatId }, 'Task planning failed — falling back to chat mode');
     }
 
     return null; // fall through to chat mode
+  }
+
+  /**
+   * Append a synthetic assistant turn into conversationHistory + the JSONL
+   * session store. Used when a message lands in Telegram via direct
+   * gateway.sendMessage from outside the standard chat pipeline (notably
+   * task-runner kickoff acks and completion summaries) — those would
+   * otherwise bypass conversationHistory entirely, leaving the LLM with
+   * a user-only gap on the next turn and causing it to re-reason from
+   * scratch (e.g. denying a task it just completed; Lucas's 2026-05-06
+   * screenshot bug).
+   *
+   * Mirrors the conversationHistory + buffer + appendTurn writes from
+   * finalizeTurn but without the episodic-memory / self-eval / personality
+   * pipeline — those are already handled in the task-runner callsites.
+   */
+  private async appendAssistantTurn(chatId: string, content: string): Promise<void> {
+    if (!content || !content.trim()) return;
+    this.conversationHistory.push({ role: 'assistant', content });
+    const HISTORY_CAP = 200;
+    if (this.conversationHistory.length > HISTORY_CAP) {
+      this.conversationHistory.splice(0, this.conversationHistory.length - HISTORY_CAP);
+    }
+    this.memory.addToBuffer('assistant', content);
+    try {
+      await appendTurn(chatId, [{ role: 'assistant', content }]);
+    } catch (err) {
+      log.warn({ err, chatId }, 'Session append failed for synthetic assistant turn');
+    }
   }
 
   private async finalizeTurn(params: {
@@ -2382,11 +2431,19 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
             ai: this.ai, toolExecutor: this.toolExecutor,
             telegram: this.telegram,
             model: this.config.ai.model, maxTokens: this.config.ai.maxTokens,
+          }).then(async (result) => {
+            // Record completion as assistant turn so follow-up chat has it.
+            await this.appendAssistantTurn(chatId, summarizeTaskForHistory(plan, result));
+          }).catch(async (e) => {
+            log.error({ err: e, chatId }, 'Ultra fallback task runner failed');
+            await this.appendAssistantTurn(chatId, 'Task failed unexpectedly.');
           }).finally(resolve);
         });
       });
       this.pendingTaskPromises.push(taskPromise);
-      return 'On it. Planning your task now...';
+      const kickoff = 'On it. Planning your task now...';
+      await this.appendAssistantTurn(chatId, kickoff);
+      return kickoff;
     }
   }
 
