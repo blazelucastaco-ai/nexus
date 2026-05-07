@@ -91,6 +91,50 @@ describe('classifyMessage', () => {
       expect(classifyMessage('thank you')).toBe('chat');
     });
   });
+
+  // Single-action override: short "run X" / "install Y" requests should not
+  // get the multi-step task plan + "Planning your task now…" kickoff. Lucas's
+  // observed pain on 2026-05-07: simple shell asks were over-planned.
+  describe('single-action overrides', () => {
+    it('classifies "run git status" as chat (not task)', () => {
+      expect(classifyMessage('run git status')).toBe('chat');
+    });
+
+    it('classifies "run npm test" as chat', () => {
+      expect(classifyMessage('run npm test')).toBe('chat');
+    });
+
+    it('classifies "install ripgrep" as chat', () => {
+      expect(classifyMessage('install ripgrep')).toBe('chat');
+    });
+
+    it('classifies "install brew package fzf" as chat', () => {
+      expect(classifyMessage('install brew package fzf')).toBe('chat');
+    });
+
+    it('classifies "uninstall the old globals" as chat', () => {
+      expect(classifyMessage('uninstall the old globals')).toBe('chat');
+    });
+
+    it('keeps multi-step "install X and run Y" as task (conjunction signals plan)', () => {
+      // The existing "install dependencies and run the server" test below
+      // depends on this — reproducing here as a smoke check too.
+      expect(classifyMessage('install dependencies and run the server on port 3000')).toBe('task');
+    });
+
+    it('keeps long "run …" requests as task (length cap filters)', () => {
+      const long =
+        'run a comprehensive set of integration tests across the entire codebase to verify nothing has regressed';
+      expect(classifyMessage(long)).toBe('task');
+    });
+
+    it('does not override "build" / "create" / "fix" — only the tight verb list', () => {
+      // Build/create/fix are almost always multi-step intent — left as task.
+      expect(classifyMessage('build me a small CLI')).toBe('task');
+      expect(classifyMessage('create a deployment script')).toBe('task');
+      expect(classifyMessage('fix the typo in foo.ts')).toBe('task');
+    });
+  });
 });
 
 describe('classifyTaskMode', () => {
