@@ -60,24 +60,6 @@ const SYSTEM_PREFIXES = ['[PHOTO]', '[DOCUMENT]', '[VOICE]', '[AUDIO]'];
 
 const MIN_TASK_LENGTH = 15; // messages shorter than this are always chat
 
-// ── Single-action override ────────────────────────────────────────────────────
-// Short, unambiguous one-shell-call requests that don't need a multi-step
-// plan. Without this carve-out, "run git status" / "install ripgrep" got
-// classified as task and triggered the planner ("On it. Planning your task
-// now…" + 3-step plan + per-step verifier) when a single tool call from
-// the chat-mode loop is all that's actually warranted.
-//
-// Three-part gate so we don't over-route:
-//   1. Length under SINGLE_ACTION_LENGTH_LIMIT  (filters out "run a 10-step
-//      migration to ...")
-//   2. Starts with a verb that almost always implies one shell command
-//      (run / install / uninstall — deliberately tight; deploy/start/kill
-//      stay in task mode so Ultra's plan-review gate can fire on prod ops)
-//   3. No conjunctions ("and"/"then"/"or") — multi-action implies plan
-const SINGLE_ACTION_PREFIX_RE = /^(?:run|install|uninstall)\s+/i;
-const SINGLE_ACTION_LENGTH_LIMIT = 80;
-const SINGLE_ACTION_CONJUNCTION_RE = /\b(?:and|then|or)\b/i;
-
 // ── Ultra mode triggers — high-stakes, irreversible, or complex multi-domain tasks ──
 const ULTRA_TRIGGERS: RegExp[] = [
   // Destructive / irreversible actions
@@ -297,15 +279,6 @@ export function classifyMessage(text: string): MessageType {
 
   // Strong chat overrides always win — even when a work verb is present
   if (STRONG_CHAT_OVERRIDES.some((p) => p.test(trimmed))) return 'chat';
-
-  // Single-action override: short "run X" / "install Y" requests with no
-  // conjunctions go to chat for a one-tool-call answer instead of being
-  // over-planned by the task engine.
-  if (
-    trimmed.length < SINGLE_ACTION_LENGTH_LIMIT &&
-    SINGLE_ACTION_PREFIX_RE.test(trimmed) &&
-    !SINGLE_ACTION_CONJUNCTION_RE.test(trimmed)
-  ) return 'chat';
 
   const hasWorkVerb = WORK_VERB_RE_LATE.test(trimmed);
 
