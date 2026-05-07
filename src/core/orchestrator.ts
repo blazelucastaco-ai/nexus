@@ -471,12 +471,21 @@ export class Orchestrator {
     // keyword triggers).
     this.toolExecutor.setTaskLauncher(async ({ request, chatId, ultra, coordinator }) => {
       try {
-        const plan = await planTask(request, this.ai, this.config.ai.opusModel, coordinator);
+        // Safety floor: even if the model picked plain start_task, escalate
+        // to Ultra (plan-review approval gate) when the request matches
+        // destructive / production-impacting patterns. This is the only
+        // place keyword detection survives in the routing path — it's a
+        // safety check, not a routing decision (per the 2026-05-07 rule:
+        // pattern matching is acceptable for security-grade gates).
+        const finalUltra = ultra || classifyTaskMode(request) === 'ultra';
+        const finalCoordinator = coordinator || classifyTaskMode(request) === 'coordinator';
+
+        const plan = await planTask(request, this.ai, this.config.ai.opusModel, finalCoordinator);
         if (!plan) {
           return 'I couldn\'t generate a plan for that request — try rephrasing with more detail about what you want.';
         }
 
-        if (ultra) {
+        if (finalUltra) {
           // handleUltraMode sends the plan + Approve/Reject inline buttons
           // to Telegram and returns '' to suppress further reply text.
           // We swap that for a model-readable confirmation since the
@@ -490,7 +499,7 @@ export class Orchestrator {
           plan,
           originalRequest: request,
           chatId,
-          coordinatorMode: coordinator,
+          coordinatorMode: finalCoordinator,
           skillsContext: taskSkillsContext || undefined,
           failureMessage: 'Task failed unexpectedly. Check the logs.',
           onComplete: async (result) => {
@@ -1017,9 +1026,15 @@ export class Orchestrator {
         (layer, type, content, opts) => this.memory.store(layer as 'episodic', type as 'task', content, opts),
       );
 
-      // ── 2c. Pre-classify to decide if we need full synthesis ──
-      const messageType = classifyMessage(text);
-      const isTaskMessage = messageType === 'task';
+      // ── 2c. (was: pre-classify) ─────────────────────────────────────
+      // Slice 2 of the model-driven routing migration (2026-05-07):
+      // dropped the regex classifyMessage call. Every message now goes
+      // through the chat-mode tool loop; the model decides via
+      // start_task / start_ultra_task tools whether to escalate to a
+      // multi-step plan. isTaskMessage stays as a const for downstream
+      // params (self-eval skip, etc.) — false because nothing has been
+      // classified as a task yet at this point in the pipeline.
+      const isTaskMessage = false;
 
       // ── 2d. Memory synthesis + 4b. Reasoning trace (parallel) ──
       // R1 (2026-05-06): these used to be sequential awaits — ~1s back-to-
@@ -1029,18 +1044,17 @@ export class Orchestrator {
       // shaves ~1s per turn; the trace loses that snippet, but the
       // synthesis itself still flows into the system prompt below so the
       // main model still sees it. Net: same visible quality, faster reply.
-      // Skipped for task messages (they short-circuit to TaskRunner) and
-      // when either subsystem isn't initialized.
-      const recentHistoryText = !isTaskMessage
-        ? this.conversationHistory
-            .slice(-4)
-            .map((m) => `${m.role}: ${truncate(String(m.content ?? ''), 100)}`)
-            .join('\n')
-        : '';
-      const synthPromise = (!isTaskMessage && this.memorySynthesizer)
+      // Slice 2 (2026-05-07) removed the isTaskMessage gate — every
+      // message now gets full synth+trace context since the chat-mode
+      // model handles routing.
+      const recentHistoryText = this.conversationHistory
+        .slice(-4)
+        .map((m) => `${m.role}: ${truncate(String(m.content ?? ''), 100)}`)
+        .join('\n');
+      const synthPromise = this.memorySynthesizer
         ? this.memorySynthesizer.synthesize(text, recentMemories, relevantFacts, activeGoals)
         : Promise.resolve({ synthesis: '', usedMemoryIds: [] as string[] });
-      const tracePromise = (!isTaskMessage && this.reasoningTrace)
+      const tracePromise = this.reasoningTrace
         ? this.reasoningTrace.think({
             query: text,
             synthesizedMemory: '',
@@ -1104,14 +1118,14 @@ export class Orchestrator {
       // ── 7. Explicit "remember" intent detection ───────────────
       await this.detectAndStoreRememberIntent(text);
 
-      // ── 7b. Task engine routing (extracted) ───────────────────
-      // Handles two flows: (a) user answering pending requirements
-      // questions, (b) fresh task message routed to planner + runner.
-      // Returns a string when the caller should stop processing and
-      // surface that string to the user; returns null to fall through
-      // to standard chat mode.
-      const routed = await this.routeTaskOrRequirements({ chatId, text, messageType });
-      if (routed !== null) return routed;
+      // ── 7b. (was: task engine routing) ────────────────────────
+      // Slice 2 of the model-driven routing migration (2026-05-07):
+      // removed routeTaskOrRequirements + classifyMessage. Every
+      // message now flows to the chat-mode tool loop below. The
+      // chat-mode model decides whether to call start_task /
+      // start_ultra_task or to handle the request directly with a
+      // single tool call. The pendingProjects + detectMissingRequirements
+      // state machines are dead code; cleanup follows in a later slice.
 
       // ── 7c. Inner monologue (think mode + micro prefix) ───────
       // Two paths sharing the same module:
