@@ -423,6 +423,18 @@ export function cleanMarkdownForTelegram(text: string): string {
   // Strip Markdown heading markers (# … ######) but keep the heading text
   out = out.replace(/^#{1,6}\s+/gm, '');
 
+  // Markdown images become alt text. Order matters: images BEFORE links,
+  // because `![alt](url)` would otherwise match the link regex with a
+  // leftover `!`.
+  out = out.replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/g, '$1');
+
+  // Markdown links become "text (url)" — preserves the URL for the user
+  // (a click-target in Telegram) without rendering Markdown bracket syntax.
+  out = out.replace(/\[([^\]\n]+)\]\(([^)\n]+)\)/g, '$1 ($2)');
+
+  // Blockquote markers — keep the quoted text, drop the `>` prefix.
+  out = out.replace(/^>\s?/gm, '');
+
   // Strip emphasis markers, keeping the inner text
   out = out.replace(/\*\*([^*\n]+)\*\*/g, '$1');
   out = out.replace(/__([^_\n]+)__/g, '$1');

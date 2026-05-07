@@ -131,6 +131,29 @@ describe('cleanMarkdownForTelegram', () => {
   it('collapses 3+ blank lines to a single paragraph break', () => {
     expect(cleanMarkdownForTelegram('a\n\n\n\nb')).toBe('a\n\nb');
   });
+
+  it('converts Markdown links to "text (url)" so the URL stays clickable', () => {
+    expect(cleanMarkdownForTelegram('see [the docs](https://example.com/foo)')).toBe(
+      'see the docs (https://example.com/foo)',
+    );
+  });
+
+  it('strips Markdown images down to alt text', () => {
+    expect(cleanMarkdownForTelegram('![chart](https://i.imgur.com/x.png)')).toBe('chart');
+    // Image with empty alt drops to nothing
+    expect(cleanMarkdownForTelegram('before ![](u) after')).toBe('before  after');
+  });
+
+  it('handles image-then-link in the same line without leaking `!`', () => {
+    const out = cleanMarkdownForTelegram('![logo](a.png) [Link](https://b.com)');
+    expect(out).toBe('logo Link (https://b.com)');
+    expect(out).not.toContain('!');
+    expect(out).not.toContain('[');
+  });
+
+  it('strips blockquote `>` markers but keeps the quoted text', () => {
+    expect(cleanMarkdownForTelegram('> a quote\n> continued')).toBe('a quote\ncontinued');
+  });
 });
 
 describe('summarizeTaskForHistory', () => {
