@@ -65,7 +65,7 @@ import {
   setTaskRunner,
 } from '../brain/scheduler.js';
 import { loadPlugins } from '../plugins/loader.js';
-import { escapeHtml } from '../telegram/messages.js';
+import { escapeHtml, markdownToHtml } from '../telegram/messages.js';
 import type {
   AgentName,
   AgentResult,
@@ -819,7 +819,10 @@ export class Orchestrator {
           return '';
         }
         const dumbResponse = await this.bigbrain.respond(chatId, text);
-        await this.telegram.sendMessage(chatId, dumbResponse, {
+        // Route through markdownToHtml so any Markdown the absurdity engine
+        // emits (bold, lists, fake citations as `[link](url)`) renders as
+        // formatted Telegram HTML instead of leaking literal `**` / `[`.
+        await this.telegram.sendMessage(chatId, markdownToHtml(dumbResponse), {
           replyMarkup: {
             inline_keyboard: [[{ text: '🧠 Exit', callback_data: 'bigbrain:exit' }]],
           },
