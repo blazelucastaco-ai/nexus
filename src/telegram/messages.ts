@@ -26,8 +26,19 @@ export function escapeHtml(text: string): string {
 
 /**
  * Convert LLM markdown output to Telegram HTML.
- * Handles code blocks first (escaped but not markdown-processed),
- * then converts **bold**, *italic*, `inline code` in the rest.
+ * Handles fenced code blocks first (escaped + wrapped in <pre>), then on
+ * the surrounding text: inline code, bold, italic, headings (→ <b>),
+ * horizontal rules (dropped), pipe tables (flattened to space-separated),
+ * Markdown images (→ alt text), Markdown links (→ <a href>), and
+ * blockquote markers (dropped).
+ *
+ * Without the structural conversions, "## headings" / "---" / "| pipe |
+ * tables |" / "[link text](url)" leak through as literal text in the
+ * Telegram client (HTML parse mode doesn't render Markdown). This mirrors
+ * the cleanMarkdownForTelegram pass on the task-runner side, but uses
+ * proper HTML output where the Telegram client supports it (e.g. real
+ * `<a href>` for links instead of plain "text (url)").
+ *
  * Safe to call instead of plain escapeHtml() on LLM responses.
  */
 export function markdownToHtml(text: string): string {
@@ -69,6 +80,31 @@ export function markdownToHtml(text: string): string {
     // Italic  *text* or _text_  (must come after bold)
     s = s.replace(/\*([^*\n]+)\*/g, '<i>$1</i>');
     s = s.replace(/_([^_\n]+)_/g, '<i>$1</i>');
+
+    // Headings (# … ######) → <b> (Telegram HTML has no <h1>)
+    s = s.replace(/^#{1,6}\s+(.+)$/gm, '<b>$1</b>');
+
+    // Horizontal rules → drop entirely
+    s = s.replace(/^\s*[-*_]{3,}\s*$/gm, '');
+
+    // Pipe-table divider rows (|---|---|) → drop
+    s = s.replace(/^\s*\|[\s\-:|]+\|\s*$/gm, '');
+
+    // Pipe-table data rows → space-separated text
+    s = s.replace(/^\s*\|(.+)\|\s*$/gm, (_match, cells: string) =>
+      cells.split('|').map((c) => c.trim()).filter(Boolean).join('  '),
+    );
+
+    // Markdown images → alt text only (before links to avoid stray `!`)
+    s = s.replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/g, '$1');
+
+    // Markdown links → <a href> (Telegram renders these as click-targets)
+    s = s.replace(/\[([^\]\n]+)\]\(([^)\n]+)\)/g, (_match, label: string, url: string) =>
+      `<a href="${url}">${label}</a>`,
+    );
+
+    // Blockquote markers — escapeHtml turned `>` into `&gt;` already.
+    s = s.replace(/^&gt;\s?/gm, '');
 
     return s;
   }).join('');
