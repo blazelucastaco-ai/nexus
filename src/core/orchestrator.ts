@@ -17,6 +17,7 @@ import { ToolExecutor } from '../tools/executor.js';
 import { classifyMessage, classifyTaskMode, isUndercoverProbe, detectMissingRequirements } from './task-classifier.js';
 import { planTask, type TaskPlan } from './task-planner.js';
 import { runTask, summarizeTaskForHistory } from './task-runner.js';
+import type { TaskRunResult } from './task-runner.js';
 import {
   sanitizeInput,
   detectInjection,
@@ -385,35 +386,20 @@ export class Orchestrator {
     this.pendingUltraPlans.delete(planId);
 
     const { plan, request: originalRequest, chatId } = pending;
-    const taskPromise = new Promise<void>((resolve) => {
-      setImmediate(() => {
-        runTask({
-          plan,
-          originalRequest,
-          chatId,
-          ai: this.ai,
-          toolExecutor: this.toolExecutor,
-          telegram: this.telegram,
-          model: this.config.ai.model,
-          maxTokens: this.config.ai.maxTokens,
-        }).then(async (result) => {
-          try {
-            await this.memory.store('episodic', 'task',
-              `Ultra task: ${plan.title}\nRequest: ${originalRequest}\nResult: ${result.success ? 'success' : 'partial'}`,
-              { importance: 0.9, tags: ['ultra', 'task', result.success ? 'success' : 'failure'], source: chatId },
-            );
-          } catch { /* non-fatal */ }
-          // Record completion as assistant turn so follow-up chat has it.
-          await this.appendAssistantTurn(chatId, summarizeTaskForHistory(plan, result));
-        }).catch(async (err) => {
-          log.error({ err, chatId }, 'Ultra task runner failed');
-          const failMsg = 'Ultra task failed unexpectedly.';
-          this.telegram.sendMessage(chatId, failMsg).catch((e) => log.debug({ e }, 'Failed to send ultra task error'));
-          await this.appendAssistantTurn(chatId, failMsg);
-        }).finally(resolve);
-      });
+    this.launchTask({
+      plan,
+      originalRequest,
+      chatId,
+      failureMessage: 'Ultra task failed unexpectedly.',
+      onComplete: async (result) => {
+        try {
+          await this.memory.store('episodic', 'task',
+            `Ultra task: ${plan.title}\nRequest: ${originalRequest}\nResult: ${result.success ? 'success' : 'partial'}`,
+            { importance: 0.9, tags: ['ultra', 'task', result.success ? 'success' : 'failure'], source: chatId },
+          );
+        } catch { /* non-fatal */ }
+      },
     });
-    this.pendingTaskPromises.push(taskPromise);
     return true;
   }
 
@@ -1724,37 +1710,23 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
             if (useUltra) return await this.handleUltraMode(plan, enrichedRequest, chatId);
 
             const taskSkillsContext = buildSkillsPrompt(this.loadedSkills, enrichedRequest);
-            const taskPromise = new Promise<void>((resolve) => {
-              setImmediate(() => {
-                runTask({
-                  plan, originalRequest: enrichedRequest, chatId,
-                  ai: this.ai, toolExecutor: this.toolExecutor, telegram: this.telegram,
-                  model: this.config.ai.model, maxTokens: this.config.ai.maxTokens,
-                  coordinatorMode: useCoordinator, skillsContext: taskSkillsContext || undefined,
-                }).then(async (result) => {
-                  try {
-                    await this.memory.store('episodic', 'task',
-                      `Task: ${plan.title}\nRequest: ${enrichedRequest}\nResult: ${result.success ? 'success' : 'partial'}`,
-                      { importance: 0.8, tags: ['task', result.success ? 'success' : 'failure'], source: chatId },
-                    );
-                  } catch { /* non-fatal */ }
-                  this.personality.processEvent(result.success ? 'task_success' : 'task_failure');
-                  if (result.success) this.resolveMatchingGoals(enrichedRequest);
-                  // Record the completion as an assistant turn so the next
-                  // chat message sees what NEXUS just built (Lucas's
-                  // 2026-05-06 screenshot bug).
-                  await this.appendAssistantTurn(chatId, summarizeTaskForHistory(plan, result));
-                }).catch(async (err) => {
-                  log.error({ err, chatId }, 'Task runner failed');
-                  const failMsg = 'Task failed unexpectedly.';
-                  this.telegram.sendMessage(chatId, failMsg).catch((e) => {
-                    log.warn({ e, chatId }, 'Failed to notify user of task failure — user has no indication task crashed');
-                  });
-                  await this.appendAssistantTurn(chatId, failMsg);
-                }).finally(resolve);
-              });
+            this.launchTask({
+              plan,
+              originalRequest: enrichedRequest,
+              chatId,
+              coordinatorMode: useCoordinator,
+              skillsContext: taskSkillsContext || undefined,
+              onComplete: async (result) => {
+                try {
+                  await this.memory.store('episodic', 'task',
+                    `Task: ${plan.title}\nRequest: ${enrichedRequest}\nResult: ${result.success ? 'success' : 'partial'}`,
+                    { importance: 0.8, tags: ['task', result.success ? 'success' : 'failure'], source: chatId },
+                  );
+                } catch { /* non-fatal */ }
+                this.personality.processEvent(result.success ? 'task_success' : 'task_failure');
+                if (result.success) this.resolveMatchingGoals(enrichedRequest);
+              },
             });
-            this.pendingTaskPromises.push(taskPromise);
             const kickoff = `Got it — on it now. Planning your task...`;
             await this.appendAssistantTurn(chatId, kickoff);
             return kickoff;
@@ -1793,47 +1765,36 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
         }
 
         const taskSkillsContext = buildSkillsPrompt(this.loadedSkills, text);
-        const taskPromise = new Promise<void>((resolve) => {
-          setImmediate(() => {
-            runTask({
-              plan, originalRequest: text, chatId,
-              ai: this.ai, toolExecutor: this.toolExecutor, telegram: this.telegram,
-              model: this.config.ai.model, maxTokens: this.config.ai.maxTokens,
-              coordinatorMode: useCoordinator, skillsContext: taskSkillsContext || undefined,
-            }).then(async (result) => {
-              log.info({ chatId, success: result.success, steps: result.completedSteps }, 'Task completed');
-              try {
-                await this.memory.store('episodic', 'task',
-                  `Task: ${plan.title}\nRequest: ${text}\nResult: ${result.success ? 'success' : 'partial'}\nFiles: ${result.filesProduced.join(', ')}`,
-                  { importance: 0.8, tags: ['task', result.success ? 'success' : 'failure'], source: chatId },
-                );
-              } catch { /* non-fatal */ }
-              this.personality.processEvent(result.success ? 'task_success' : 'task_failure');
-              if (!result.success) this.lastFailedRequests.set(chatId, text);
-              else this.lastFailedRequests.delete(chatId);
-              if (result.success) this.resolveMatchingGoals(text);
-              const hadFailures = result.completedSteps < result.totalSteps;
-              if (hadFailures && this.ai) {
-                this.runSelfImprovement(plan.title, text, result).catch((err) =>
-                  log.debug({ err }, 'Self-improvement reflection failed'),
-                );
-              }
-              // Record the completion as an assistant turn so the next
-              // chat message sees what NEXUS just built (Lucas's
-              // 2026-05-06 screenshot bug).
-              await this.appendAssistantTurn(chatId, summarizeTaskForHistory(plan, result));
-            }).catch(async (err) => {
-              log.error({ err, chatId }, 'Task runner failed');
-              this.personality.processEvent('task_failure');
-              const failMsg = 'Task failed unexpectedly. Check the logs.';
-              this.telegram.sendMessage(chatId, failMsg).catch((e) => {
-                log.warn({ e, chatId }, 'Failed to notify user of task failure — user has no indication task crashed');
-              });
-              await this.appendAssistantTurn(chatId, failMsg);
-            }).finally(resolve);
-          });
+        this.launchTask({
+          plan,
+          originalRequest: text,
+          chatId,
+          coordinatorMode: useCoordinator,
+          skillsContext: taskSkillsContext || undefined,
+          failureMessage: 'Task failed unexpectedly. Check the logs.',
+          onComplete: async (result) => {
+            log.info({ chatId, success: result.success, steps: result.completedSteps }, 'Task completed');
+            try {
+              await this.memory.store('episodic', 'task',
+                `Task: ${plan.title}\nRequest: ${text}\nResult: ${result.success ? 'success' : 'partial'}\nFiles: ${result.filesProduced.join(', ')}`,
+                { importance: 0.8, tags: ['task', result.success ? 'success' : 'failure'], source: chatId },
+              );
+            } catch { /* non-fatal */ }
+            this.personality.processEvent(result.success ? 'task_success' : 'task_failure');
+            if (!result.success) this.lastFailedRequests.set(chatId, text);
+            else this.lastFailedRequests.delete(chatId);
+            if (result.success) this.resolveMatchingGoals(text);
+            const hadFailures = result.completedSteps < result.totalSteps;
+            if (hadFailures && this.ai) {
+              this.runSelfImprovement(plan.title, text, result).catch((err) =>
+                log.debug({ err }, 'Self-improvement reflection failed'),
+              );
+            }
+          },
+          onError: async () => {
+            this.personality.processEvent('task_failure');
+          },
         });
-        this.pendingTaskPromises.push(taskPromise);
         const kickoff = 'On it. Planning your task now...';
         await this.appendAssistantTurn(chatId, kickoff);
         return kickoff;
@@ -1872,6 +1833,76 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
     } catch (err) {
       log.warn({ err, chatId }, 'Session append failed for synthetic assistant turn');
     }
+  }
+
+  /**
+   * Run a TaskPlan via task-runner and centralize the post-task pipeline:
+   * setImmediate kickoff, runTask call with standard deps, success path
+   * (caller's onComplete + history append), failure path (Telegram error
+   * message + caller's onError + history append), and pendingTaskPromises
+   * registration.
+   *
+   * Before this helper, the boilerplate was copy-pasted across four call
+   * sites (pendingProjects route, fresh-task route, Ultra fallback,
+   * approveUltraPlan). After the 2026-05-06 conversation-continuity fix
+   * added appendAssistantTurn to all four, the duplication had four
+   * places to forget. Centralizing fixes that risk and shaves ~70 LOC.
+   *
+   * Caller-specific behavior (memory tags, importance, personality
+   * events, lastFailedRequests, etc.) goes in onComplete/onError. Both
+   * are wrapped in try/catch so a callback exception still lets the
+   * history append run.
+   */
+  private launchTask(opts: {
+    plan: TaskPlan;
+    originalRequest: string;
+    chatId: string;
+    coordinatorMode?: boolean;
+    skillsContext?: string;
+    failureMessage?: string;
+    onComplete?: (result: TaskRunResult) => Promise<void> | void;
+    onError?: (err: unknown) => Promise<void> | void;
+  }): void {
+    const {
+      plan, originalRequest, chatId,
+      coordinatorMode, skillsContext,
+      failureMessage = 'Task failed unexpectedly.',
+      onComplete, onError,
+    } = opts;
+
+    const taskPromise = new Promise<void>((resolve) => {
+      setImmediate(() => {
+        runTask({
+          plan,
+          originalRequest,
+          chatId,
+          ai: this.ai,
+          toolExecutor: this.toolExecutor,
+          telegram: this.telegram,
+          model: this.config.ai.model,
+          maxTokens: this.config.ai.maxTokens,
+          ...(coordinatorMode !== undefined ? { coordinatorMode } : {}),
+          ...(skillsContext !== undefined ? { skillsContext } : {}),
+        }).then(async (result) => {
+          if (onComplete) {
+            try { await onComplete(result); }
+            catch (e) { log.warn({ e, chatId }, 'launchTask onComplete callback threw — continuing'); }
+          }
+          await this.appendAssistantTurn(chatId, summarizeTaskForHistory(plan, result));
+        }).catch(async (err) => {
+          log.error({ err, chatId }, 'Task runner failed');
+          this.telegram.sendMessage(chatId, failureMessage).catch((e) => {
+            log.warn({ e, chatId }, 'Failed to notify user of task failure — user has no indication task crashed');
+          });
+          if (onError) {
+            try { await onError(err); }
+            catch (e) { log.warn({ e, chatId }, 'launchTask onError callback threw — continuing'); }
+          }
+          await this.appendAssistantTurn(chatId, failureMessage);
+        }).finally(resolve);
+      });
+    });
+    this.pendingTaskPromises.push(taskPromise);
   }
 
   private async finalizeTurn(params: {
@@ -2431,24 +2462,8 @@ If any of those are unclear, say NEED_MORE with the most important missing quest
       return '';
     } catch (err) {
       log.error({ err }, 'Ultra mode review failed — running standard task');
-      // Fall back to standard task run
-      const taskPromise = new Promise<void>((resolve) => {
-        setImmediate(() => {
-          runTask({
-            plan, originalRequest: request, chatId,
-            ai: this.ai, toolExecutor: this.toolExecutor,
-            telegram: this.telegram,
-            model: this.config.ai.model, maxTokens: this.config.ai.maxTokens,
-          }).then(async (result) => {
-            // Record completion as assistant turn so follow-up chat has it.
-            await this.appendAssistantTurn(chatId, summarizeTaskForHistory(plan, result));
-          }).catch(async (e) => {
-            log.error({ err: e, chatId }, 'Ultra fallback task runner failed');
-            await this.appendAssistantTurn(chatId, 'Task failed unexpectedly.');
-          }).finally(resolve);
-        });
-      });
-      this.pendingTaskPromises.push(taskPromise);
+      // Fall back to standard task run — same shape as a normal task.
+      this.launchTask({ plan, originalRequest: request, chatId });
       const kickoff = 'On it. Planning your task now...';
       await this.appendAssistantTurn(chatId, kickoff);
       return kickoff;
