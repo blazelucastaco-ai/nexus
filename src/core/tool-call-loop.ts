@@ -344,7 +344,7 @@ export class ToolCallLoop {
           const parallelResults = await Promise.all(
             parallelJobs.map(async (job) => {
               log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (parallel)');
-              let result = await withTimeout(toolExecutor.execute(job.toolName, job.toolArgs), TOOL_TIMEOUT_MS, job.toolName);
+              let result = await withTimeout(toolExecutor.execute(job.toolName, job.toolArgs, { chatId }), TOOL_TIMEOUT_MS, job.toolName);
               result = repairToolResult(result);
               if (isToolError(result)) {
                 result += '\n\n[TOOL RETURNED AN ERROR — do not claim success. Report the error to the user.]';
@@ -367,7 +367,7 @@ export class ToolCallLoop {
           }
           onStatus?.(getToolStatus(job.toolName, job.toolArgs));
           log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (sequential)');
-          let result = await withTimeout(toolExecutor.execute(job.toolName, job.toolArgs), TOOL_TIMEOUT_MS, job.toolName);
+          let result = await withTimeout(toolExecutor.execute(job.toolName, job.toolArgs, { chatId }), TOOL_TIMEOUT_MS, job.toolName);
           result = repairToolResult(result);
           if (isToolError(result)) {
             result += '\n\n[TOOL RETURNED AN ERROR — do not claim success. Report the error to the user.]';

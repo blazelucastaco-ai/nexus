@@ -883,6 +883,53 @@ export const toolDefinitions: ToolDefinition[] = [
       required: [],
     },
   },
+  // ── Task orchestration tools ──────────────────────────────────────────
+  // Let the model decide when to escalate from a one-shot tool call to a
+  // full multi-step plan. Replaces the regex-driven classifier — the model
+  // judges based on the request, conversation context, and what's already
+  // been tried.
+  {
+    name: 'start_task',
+    description:
+      'Kick off a multi-step task plan when the request requires multiple coordinated steps (research → analyze → write, scaffold → install → configure, build → test → deploy, etc.) or generates files that need verification. ' +
+      'Use ONLY for genuinely multi-step work — for a single shell command (run git status, install ripgrep), just call run_terminal_command directly. ' +
+      'For destructive or production-impacting work (deploys, sending emails, dropping a database), use start_ultra_task instead so a plan-review gate fires first. ' +
+      'Returns immediately; the task runs asynchronously and streams progress to Telegram.',
+    parameters: {
+      type: 'object',
+      properties: {
+        request: {
+          type: 'string',
+          description:
+            'The task request, paraphrased to capture all the user\'s intent and any context from the conversation. The planner will use this verbatim — make it specific and complete.',
+        },
+        coordinator: {
+          type: 'boolean',
+          description:
+            'Set true when the request has clearly parallel, independent subtasks (e.g. "research X and build Y at the same time"). Defaults to false.',
+        },
+      },
+      required: ['request'],
+    },
+  },
+  {
+    name: 'start_ultra_task',
+    description:
+      'Like start_task, but for high-stakes work: production deploys, releases, sending emails/notifications, destructive operations on data or infrastructure, multi-domain architecture changes, anything irreversible. ' +
+      'Triggers a plan-review approval gate — the user will see the plan with Approve/Reject buttons in Telegram before any work runs. ' +
+      'When unsure between start_task and start_ultra_task, prefer start_ultra_task for the safety gate.',
+    parameters: {
+      type: 'object',
+      properties: {
+        request: {
+          type: 'string',
+          description:
+            'The task request, paraphrased with full context. Will be reviewed with the user before execution starts.',
+        },
+      },
+      required: ['request'],
+    },
+  },
 ];
 
 /**

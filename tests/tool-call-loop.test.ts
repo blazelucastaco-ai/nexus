@@ -108,7 +108,9 @@ describe('ToolCallLoop.run', () => {
 
     expect(out.finalContent).toBe('done reading');
     expect(out.toolCallCount).toBe(1);
-    expect(deps.toolExecutor.execute).toHaveBeenCalledWith('read_file', { path: '/tmp/x' });
+    // 3rd arg is the per-call ToolContext that the loop passes through
+    // so chat-aware tools (start_task, etc.) can act on the right chatId.
+    expect(deps.toolExecutor.execute).toHaveBeenCalledWith('read_file', { path: '/tmp/x' }, { chatId: 'c1' });
     // The tool result should land in the loop history for the next LLM call.
     const toolMsg = out.loopMessages.find((m) => m.role === 'tool');
     expect(toolMsg?.tool_call_id).toBe('t1');

@@ -464,6 +464,65 @@ export class Orchestrator {
       return proj?.path ?? null;
     });
 
+    // Wire the chat-mode-callable task launcher. Lets the model decide via
+    // start_task / start_ultra_task tool calls whether to escalate from
+    // a one-shot tool call to a multi-step plan — replacing the regex
+    // classifier (Lucas's 2026-05-07 directive: model intelligence over
+    // keyword triggers).
+    this.toolExecutor.setTaskLauncher(async ({ request, chatId, ultra, coordinator }) => {
+      try {
+        const plan = await planTask(request, this.ai, this.config.ai.opusModel, coordinator);
+        if (!plan) {
+          return 'I couldn\'t generate a plan for that request — try rephrasing with more detail about what you want.';
+        }
+
+        if (ultra) {
+          // handleUltraMode sends the plan + Approve/Reject inline buttons
+          // to Telegram and returns '' to suppress further reply text.
+          // We swap that for a model-readable confirmation since the
+          // chat-mode model is the caller, not the message router.
+          await this.handleUltraMode(plan, request, chatId);
+          return `Ultra plan generated for "${plan.title}" (${plan.steps.length} steps). Sent the user the Approve/Reject buttons.`;
+        }
+
+        const taskSkillsContext = buildSkillsPrompt(this.loadedSkills, request);
+        this.launchTask({
+          plan,
+          originalRequest: request,
+          chatId,
+          coordinatorMode: coordinator,
+          skillsContext: taskSkillsContext || undefined,
+          failureMessage: 'Task failed unexpectedly. Check the logs.',
+          onComplete: async (result) => {
+            log.info({ chatId, success: result.success, steps: result.completedSteps }, 'Task completed (via tool)');
+            try {
+              await this.memory.store('episodic', 'task',
+                `Task: ${plan.title}\nRequest: ${request}\nResult: ${result.success ? 'success' : 'partial'}\nFiles: ${result.filesProduced.join(', ')}`,
+                { importance: 0.8, tags: ['task', result.success ? 'success' : 'failure'], source: chatId },
+              );
+            } catch { /* non-fatal */ }
+            this.personality.processEvent(result.success ? 'task_success' : 'task_failure');
+            if (!result.success) this.lastFailedRequests.set(chatId, request);
+            else this.lastFailedRequests.delete(chatId);
+            if (result.success) this.resolveMatchingGoals(request);
+            const hadFailures = result.completedSteps < result.totalSteps;
+            if (hadFailures && this.ai) {
+              this.runSelfImprovement(plan.title, request, result).catch((err) =>
+                log.debug({ err }, 'Self-improvement reflection failed'),
+              );
+            }
+          },
+          onError: async () => {
+            this.personality.processEvent('task_failure');
+          },
+        });
+        return `Task "${plan.title}" started — ${plan.steps.length} step${plan.steps.length === 1 ? '' : 's'}. Progress will stream to the user via Telegram. You can wrap up your reply now.`;
+      } catch (err) {
+        log.error({ err, chatId }, 'Task launcher tool failed');
+        return `Failed to start the task: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    });
+
     // Extract the LLM tool-calling loop into its own unit so it can be
     // tested in isolation. Dependencies injected explicitly — no back-ref
     // to `this` survives inside the loop itself.

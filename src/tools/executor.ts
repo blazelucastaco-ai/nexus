@@ -354,6 +354,27 @@ const INLINE_EXEC_FLAGS: Record<string, string[]> = {
 // FIX 3: Hook type for tool middleware
 type ToolHook = (toolName: string, params: Record<string, unknown>, result?: string) => void;
 
+/**
+ * Per-call context carrying request-scoped state (chatId, etc.) so tools
+ * that need it can act on behalf of the right chat without the executor
+ * holding mutable request state.
+ */
+export interface ToolContext {
+  chatId?: string;
+}
+
+/**
+ * Hand off a task request to the orchestrator's planner+runner pipeline.
+ * Wired via setTaskLauncher; consumed by start_task / start_ultra_task.
+ * Returns a short user-facing string the model can include in its reply.
+ */
+export type TaskLauncher = (params: {
+  request: string;
+  chatId: string;
+  ultra: boolean;
+  coordinator: boolean;
+}) => Promise<string>;
+
 // FIX 5: Transient error signals that warrant a single retry
 const TRANSIENT_ERROR_SIGNALS = ['EAGAIN', 'EBUSY', 'ETIMEDOUT', 'rate limit', 'quota exceeded', 'too many requests'];
 // Tools that are not safe to retry (side-effectful writes)
@@ -373,6 +394,15 @@ export class ToolExecutor {
    */
   private activeProjectPath?: () => string | null;
 
+  /**
+   * Wired by the orchestrator so the start_task / start_ultra_task tools
+   * can hand the request back to planTask + launchTask. Lets the chat-mode
+   * model decide when a multi-step plan is warranted instead of relying on
+   * regex classification (Lucas's 2026-05-07 directive: model intelligence
+   * over keyword triggers).
+   */
+  private taskLauncher?: TaskLauncher;
+
   constructor(
     private agents: AgentManager,
     private memory: MemoryManager,
@@ -383,6 +413,11 @@ export class ToolExecutor {
   /** Inject an accessor for the orchestrator's current active project. */
   setActiveProjectPath(resolver: () => string | null): void {
     this.activeProjectPath = resolver;
+  }
+
+  /** Wire the orchestrator's task launcher so start_task / start_ultra_task work. */
+  setTaskLauncher(launcher: TaskLauncher): void {
+    this.taskLauncher = launcher;
   }
 
   /** Register loaded plugins so their tools can be dispatched */
@@ -401,6 +436,7 @@ export class ToolExecutor {
   async execute(
     toolName: string,
     args: Record<string, unknown>,
+    context?: ToolContext,
   ): Promise<string> {
     const riskLevel = TOOL_RISK[toolName] ?? 'AUTO';
     if (riskLevel === 'LOGGED') {
@@ -419,14 +455,14 @@ export class ToolExecutor {
 
     let result: string;
     try {
-      result = await this.runTool(toolName, args);
+      result = await this.runTool(toolName, args, context);
 
       // FIX 5: Retry once on transient failures (skip non-idempotent tools)
       const isTransient = TRANSIENT_ERROR_SIGNALS.some((s) => result.toLowerCase().includes(s.toLowerCase()));
       if (isTransient && !NO_RETRY_TOOLS.has(toolName)) {
         log.warn({ toolName, result: truncate(result, 120) }, 'Transient error — retrying in 2s');
         await new Promise((r) => setTimeout(r, 2000));
-        result = await this.runTool(toolName, args);
+        result = await this.runTool(toolName, args, context);
         log.info({ toolName }, 'Retry complete');
       }
     } catch (err) {
@@ -460,7 +496,7 @@ export class ToolExecutor {
     return result;
   }
 
-  private async runTool(toolName: string, args: Record<string, unknown>): Promise<string> {
+  private async runTool(toolName: string, args: Record<string, unknown>, context?: ToolContext): Promise<string> {
     switch (toolName) {
       case 'run_terminal_command': return this.runTerminalCommand(args);
       case 'run_background_command': return this.runBackgroundCommand(args);
@@ -480,6 +516,8 @@ export class ToolExecutor {
       case 'schedule_task':       return scheduleTaskTool(args);
       case 'list_tasks':          return listTasksTool();
       case 'cancel_task':         return cancelTaskTool(args);
+      case 'start_task':          return this.startTask(args, false, context);
+      case 'start_ultra_task':    return this.startTask(args, true, context);
       case 'generate_image':      return this.generateImage(args);
       case 'speak':               return this.speak(args);
       case 'list_sessions':       return this.listSessions();
@@ -1506,6 +1544,36 @@ export class ToolExecutor {
     } catch (err) {
       return `Error reading session ${id}: ${err instanceof Error ? err.message : String(err)}`;
     }
+  }
+
+  // ── start_task / start_ultra_task ──────────────────────────────────
+  //
+  // Hand the user's request back to the orchestrator's planner+runner. Lets
+  // the chat-mode model decide when a multi-step plan is warranted (instead
+  // of upfront regex routing). The orchestrator wires the actual launcher
+  // via setTaskLauncher; this method just validates inputs and dispatches.
+  private async startTask(
+    args: Record<string, unknown>,
+    ultra: boolean,
+    context?: ToolContext,
+  ): Promise<string> {
+    if (!this.taskLauncher) {
+      return 'Error: task launcher is not configured. The orchestrator must call toolExecutor.setTaskLauncher() before this tool can run.';
+    }
+    if (!context?.chatId) {
+      return 'Error: start_task requires a chat context but none was provided. This tool can only run inside a chat-mode tool loop.';
+    }
+    const request = typeof args.request === 'string' ? args.request.trim() : '';
+    if (!request) {
+      return 'Error: start_task requires a non-empty "request" parameter describing what to do.';
+    }
+    const coordinator = Boolean(args.coordinator);
+    return await this.taskLauncher({
+      request,
+      chatId: context.chatId,
+      ultra,
+      coordinator,
+    });
   }
 
   // ── understand_image ───────────────────────────────────────────────
