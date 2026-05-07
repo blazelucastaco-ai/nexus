@@ -249,6 +249,24 @@ async function verifyStep(
 
 // ─── Progress Message Helpers ─────────────────────────────────────────────────
 
+/**
+ * Human-format a duration: under 1s shows one decimal ("0.8s"), 1–59s
+ * shows whole seconds ("45s"), and 60s+ shows "X min" or "X min Ys".
+ *
+ * R2 (2026-05-06): the prior format ("Completed in 140.0s") read like
+ * a CI status footer. "Took 2 min 20s" reads like a person answering.
+ */
+export function formatDuration(ms: number): string {
+  const sec = ms / 1000;
+  if (sec < 1) return `${sec.toFixed(1)}s`;
+  if (sec < 60) return `${Math.round(sec)}s`;
+  const totalSec = Math.round(sec);
+  const min = Math.floor(totalSec / 60);
+  const remSec = totalSec % 60;
+  if (remSec === 0) return `${min} min`;
+  return `${min} min ${remSec}s`;
+}
+
 function formatFinalSummary(
   plan: TaskPlan,
   allFiles: string[],
@@ -259,37 +277,47 @@ function formatFinalSummary(
   const overallSuccess = stepResults.every((r) => r.success);
   const titleIcon = overallSuccess ? '✅' : '⚠️';
   const lines: string[] = [
-    `${titleIcon} <b>${escapeHtml(plan.title)} — ${overallSuccess ? 'Done' : 'Partial'}</b>`,
-    '',
+    `${titleIcon} <b>${escapeHtml(plan.title)}${overallSuccess ? '' : ' — partial'}</b>`,
   ];
 
-  for (const r of stepResults) {
-    const icon = r.success ? '✅' : '⚠️';
-    lines.push(`${icon} ${r.step.id}. ${escapeHtml(r.step.title)}`);
+  // ── Per-step checklist (R2: skip when noise) ─────────────────────────────
+  // Skipping the checklist for a single-step task that succeeded — it just
+  // restates the title. Always shown when there's >1 step or when anything
+  // failed (debug context for the user).
+  const showChecklist = stepResults.length > 1 || !overallSuccess;
+  if (showChecklist) {
+    lines.push('');
+    for (const r of stepResults) {
+      const icon = r.success ? '✅' : '⚠️';
+      lines.push(`${icon} ${r.step.id}. ${escapeHtml(r.step.title)}`);
+    }
   }
 
-  // ── Answer section ────────────────────────────────────────────────────────
+  // ── Answer section (R2: drop the "Result:" label) ────────────────────────
   // Surface the FINAL successful step's actual output as the visible answer.
   // Without this, NEXUS replies with just a checklist of completed steps and
-  // the user has to ask "but what was the answer?" — which is exactly the
-  // failure mode Lucas reported on 2026-05-06. For diagnostic/survey tasks
-  // (where no files are produced), this IS the response. For build tasks,
-  // it's a recap that complements the file list below.
+  // the user has to ask "but what was the answer?" (Lucas's 2026-05-06 bug).
+  // The label was redundant — the answer reads like prose without it.
   const lastSuccessful = [...stepResults].reverse().find((r) => r.success);
   if (lastSuccessful) {
     const answer = pickFinalAnswer(lastSuccessful.rawOutput, lastSuccessful.summary);
     if (answer) {
       lines.push('');
-      lines.push('<b>Result:</b>');
       lines.push(escapeHtml(answer));
     }
   }
 
+  // ── Files (R2: inline when ≤3, block when ≥4) ────────────────────────────
   if (allFiles.length > 0) {
     lines.push('');
-    lines.push('<b>Files created:</b>');
-    for (const f of allFiles) {
-      lines.push(`  <code>${escapeHtml(f)}</code>`);
+    if (allFiles.length <= 3) {
+      const inline = allFiles.map((f) => `<code>${escapeHtml(f)}</code>`).join(', ');
+      lines.push(`<b>Files:</b> ${inline}`);
+    } else {
+      lines.push('<b>Files:</b>');
+      for (const f of allFiles) {
+        lines.push(`  <code>${escapeHtml(f)}</code>`);
+      }
     }
   }
 
@@ -329,7 +357,7 @@ function formatFinalSummary(
   }
 
   lines.push('');
-  lines.push(`<i>Completed in ${(durationMs / 1000).toFixed(1)}s</i>`);
+  lines.push(`<i>Took ${formatDuration(durationMs)}.</i>`);
 
   return lines.join('\n');
 }

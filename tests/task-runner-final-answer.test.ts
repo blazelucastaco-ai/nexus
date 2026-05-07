@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   cleanMarkdownForTelegram,
+  formatDuration,
   pickFinalAnswer,
   summarizeTaskForHistory,
 } from '../src/core/task-runner.js';
@@ -200,5 +201,34 @@ describe('summarizeTaskForHistory', () => {
     const out = summarizeTaskForHistory({ title: 'Anything' }, baseResult());
     expect(out.startsWith('I completed the task')).toBe(true);
     expect(out.startsWith('[')).toBe(false);
+  });
+});
+
+describe('formatDuration', () => {
+  // R2 (2026-05-06): turn the CI-status-footer "Completed in 140.0s"
+  // into something that reads like a person answering — "Took 2 min 20s."
+  it('shows 1 decimal for sub-second durations', () => {
+    expect(formatDuration(800)).toBe('0.8s');
+    expect(formatDuration(200)).toBe('0.2s');
+  });
+
+  it('rounds to whole seconds in the 1–59s range', () => {
+    expect(formatDuration(1500)).toBe('2s');
+    expect(formatDuration(45_000)).toBe('45s');
+    expect(formatDuration(59_400)).toBe('59s');
+  });
+
+  it('formats whole minutes as "X min"', () => {
+    expect(formatDuration(60_000)).toBe('1 min');
+    expect(formatDuration(180_000)).toBe('3 min');
+  });
+
+  it('formats minutes-with-seconds as "X min Ys"', () => {
+    expect(formatDuration(140_000)).toBe('2 min 20s');
+    expect(formatDuration(305_000)).toBe('5 min 5s');
+  });
+
+  it('handles zero duration without crashing', () => {
+    expect(formatDuration(0)).toBe('0.0s');
   });
 });
