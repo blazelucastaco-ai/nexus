@@ -14,7 +14,7 @@ import { EventLoop } from './event-loop.js';
 import { ToolCallLoop } from './tool-call-loop.js';
 import { runWriteGuard } from './write-guard.js';
 import { ToolExecutor } from '../tools/executor.js';
-import { classifyMessage, classifyTaskMode, isUndercoverProbe, detectMissingRequirements } from './task-classifier.js';
+import { classifyTaskMode, isUndercoverProbe } from './task-classifier.js';
 import { planTask, type TaskPlan } from './task-planner.js';
 import { runTask, summarizeTaskForHistory } from './task-runner.js';
 import type { TaskRunResult } from './task-runner.js';
@@ -298,15 +298,6 @@ export class Orchestrator {
   // FIX 5: Runtime skill injection
   private cachedSkillsPrompt = '';
   private loadedSkills: Skill[] = [];
-
-  // Interactive requirements gathering — tracks in-progress project conversations per chat
-  private pendingProjects = new Map<string, {
-    originalRequest: string;
-    answers: string[];      // accumulated user answers
-    questionRound: number;  // how many rounds of questions asked
-    createdAt: number;      // ms timestamp — entry expires after PENDING_PROJECT_TTL_MS
-  }>();
-  private static PENDING_PROJECT_TTL_MS = 10 * 60 * 1000;  // 10 minutes
 
   // FIX 6: Per-chatId command queue for serialization
   private commandQueues = new Map<string, Promise<void>>();
@@ -1026,14 +1017,13 @@ export class Orchestrator {
         (layer, type, content, opts) => this.memory.store(layer as 'episodic', type as 'task', content, opts),
       );
 
-      // ── 2c. (was: pre-classify) ─────────────────────────────────────
-      // Slice 2 of the model-driven routing migration (2026-05-07):
-      // dropped the regex classifyMessage call. Every message now goes
-      // through the chat-mode tool loop; the model decides via
-      // start_task / start_ultra_task tools whether to escalate to a
-      // multi-step plan. isTaskMessage stays as a const for downstream
-      // params (self-eval skip, etc.) — false because nothing has been
-      // classified as a task yet at this point in the pipeline.
+      // ── 2c. Routing flag for downstream self-eval / inner-monologue ──
+      // Nothing has been classified as a task at this point in the
+      // pipeline — every message flows through the chat-mode tool loop,
+      // and the model decides via start_task / start_ultra_task whether
+      // to escalate. The isTaskMessage const exists purely to keep
+      // downstream params (selfEvaluator, inner-monologue gating) at
+      // their existing shapes; it never flips to true.
       const isTaskMessage = false;
 
       // ── 2d. Memory synthesis + 4b. Reasoning trace (parallel) ──
@@ -1118,14 +1108,11 @@ export class Orchestrator {
       // ── 7. Explicit "remember" intent detection ───────────────
       await this.detectAndStoreRememberIntent(text);
 
-      // ── 7b. (was: task engine routing) ────────────────────────
-      // Slice 2 of the model-driven routing migration (2026-05-07):
-      // removed routeTaskOrRequirements + classifyMessage. Every
-      // message now flows to the chat-mode tool loop below. The
+      // ── 7b. (no upfront routing) ──────────────────────────────
+      // Every message flows to the chat-mode tool loop below. The
       // chat-mode model decides whether to call start_task /
       // start_ultra_task or to handle the request directly with a
-      // single tool call. The pendingProjects + detectMissingRequirements
-      // state machines are dead code; cleanup follows in a later slice.
+      // single tool call.
 
       // ── 7c. Inner monologue (think mode + micro prefix) ───────
       // Two paths sharing the same module:
@@ -1712,174 +1699,6 @@ ${extras.memorySynthesis}`);
       return 'creative';
     }
     return 'casual';
-  }
-
-  /**
-   * Finalize a turn after the tool-call loop + write-guard have produced
-   * the final response. Handles: history append, JSONL session persistence,
-   * episodic-memory store, session-turn tracking + auto-summary trigger,
-   * self-evaluation (fire-and-forget), and emotional-state mood update.
-   * Kept as a private orchestrator method rather than a standalone class
-   * because the state dependencies (conversationHistory, personality,
-   * selfEvaluator, learning.mistakes, sessionTurnCount, inactivity timer)
-   * are too tangled to inject cleanly — the value of the extract is
-   * readability of `_handleMessage`, not independent testability.
-   */
-
-  /**
-   * Task-engine routing. Two branches:
-   *   1. User is mid-requirements-conversation (answering follow-up questions).
-   *      Build cumulative context, ask the LLM "READY / NEED_MORE", and either
-   *      plan the task or return the next question.
-   *   2. Fresh message classified as a task. Gate on missing requirements,
-   *      classify mode (coordinator / ultra / standard), plan, and dispatch
-   *      the TaskRunner async so progress streams via Telegram.
-   *
-   * Returns a string when the caller should STOP and use that string as the
-   * user-facing reply. Returns null to fall through to standard chat mode.
-   */
-  private async routeTaskOrRequirements(params: {
-    chatId: string;
-    text: string;
-    messageType: string;
-  }): Promise<string | null> {
-    const { chatId, text, messageType } = params;
-
-    // Branch (a): user is answering a pending requirements question
-    if (this.pendingProjects.has(chatId)) {
-      const pending = this.pendingProjects.get(chatId)!;
-      if (Date.now() - pending.createdAt > Orchestrator.PENDING_PROJECT_TTL_MS) {
-        log.info({ chatId, ageMs: Date.now() - pending.createdAt }, 'Pending project expired — treating as new message');
-        this.pendingProjects.delete(chatId);
-      } else {
-        pending.answers.push(text);
-
-        const fullContext = `${pending.originalRequest}\n\nUser provided these details:\n${pending.answers.map((a, i) => `Round ${i + 1}: ${a}`).join('\n')}`;
-
-        const readinessCheck = await this.ai.complete({
-          model: this.config.ai.fastModel,
-          maxTokens: 512,
-          temperature: 0.1,
-          systemPrompt: `You are deciding whether there is enough information to start a coding/web project.
-Respond with EXACTLY one of:
-  READY — [one sentence summary of what to build]
-  NEED_MORE — [one specific follow-up question, max 2 sentences]
-
-Only say READY if you know: what the project is, who it's for, and what it should contain/do.
-If any of those are unclear, say NEED_MORE with the most important missing question.`,
-          messages: [{ role: 'user', content: fullContext }],
-        });
-
-        const readiness = readinessCheck.content ?? '';
-
-        if (readiness.startsWith('READY') || pending.questionRound >= 2) {
-          this.pendingProjects.delete(chatId);
-          const enrichedRequest = fullContext;
-          log.info({ chatId }, 'Requirements gathered — proceeding to task planning');
-
-          const taskMode = classifyTaskMode(enrichedRequest);
-          const useCoordinator = taskMode === 'coordinator';
-          const useUltra = taskMode === 'ultra';
-          const plan = await planTask(enrichedRequest, this.ai, this.config.ai.opusModel, useCoordinator);
-
-          if (plan) {
-            if (useUltra) return await this.handleUltraMode(plan, enrichedRequest, chatId);
-
-            const taskSkillsContext = buildSkillsPrompt(this.loadedSkills, enrichedRequest);
-            this.launchTask({
-              plan,
-              originalRequest: enrichedRequest,
-              chatId,
-              coordinatorMode: useCoordinator,
-              skillsContext: taskSkillsContext || undefined,
-              onComplete: async (result) => {
-                try {
-                  await this.memory.store('episodic', 'task',
-                    `Task: ${plan.title}\nRequest: ${enrichedRequest}\nResult: ${result.success ? 'success' : 'partial'}`,
-                    { importance: 0.8, tags: ['task', result.success ? 'success' : 'failure'], source: chatId },
-                  );
-                } catch { /* non-fatal */ }
-                this.personality.processEvent(result.success ? 'task_success' : 'task_failure');
-                if (result.success) this.resolveMatchingGoals(enrichedRequest);
-              },
-            });
-            const kickoff = `Got it — on it now. Planning your task...`;
-            await this.appendAssistantTurn(chatId, kickoff);
-            return kickoff;
-          }
-          return `I have enough info — let me start on that.`;
-        }
-
-        // NEED_MORE — ask the follow-up question
-        pending.questionRound++;
-        const question = readiness.replace(/^NEED_MORE\s*[—-]?\s*/i, '').trim();
-        return question || `Can you tell me a bit more about what you need?`;
-      }
-    }
-
-    // Branch (b): fresh task message
-    if (messageType === 'task') {
-      const taskMode = classifyTaskMode(text);
-      const useCoordinator = taskMode === 'coordinator';
-      const useUltra = taskMode === 'ultra';
-      log.info({ chatId, taskMode }, 'Message classified as task — routing to TaskEngine');
-
-      // Requirements gate — if the request is too vague, ask a question
-      const missingInfo = detectMissingRequirements(text);
-      if (missingInfo) {
-        log.info({ chatId }, 'Task lacks required details — starting requirements conversation');
-        this.pendingProjects.set(chatId, { originalRequest: text, answers: [], questionRound: 1, createdAt: Date.now() });
-        return missingInfo;
-      }
-
-      const plan = await planTask(text, this.ai, this.config.ai.opusModel, useCoordinator);
-
-      if (plan) {
-        if (useUltra) {
-          log.info({ chatId, title: plan.title }, 'Ultra mode auto-triggered');
-          return await this.handleUltraMode(plan, text, chatId);
-        }
-
-        const taskSkillsContext = buildSkillsPrompt(this.loadedSkills, text);
-        this.launchTask({
-          plan,
-          originalRequest: text,
-          chatId,
-          coordinatorMode: useCoordinator,
-          skillsContext: taskSkillsContext || undefined,
-          failureMessage: 'Task failed unexpectedly. Check the logs.',
-          onComplete: async (result) => {
-            log.info({ chatId, success: result.success, steps: result.completedSteps }, 'Task completed');
-            try {
-              await this.memory.store('episodic', 'task',
-                `Task: ${plan.title}\nRequest: ${text}\nResult: ${result.success ? 'success' : 'partial'}\nFiles: ${result.filesProduced.join(', ')}`,
-                { importance: 0.8, tags: ['task', result.success ? 'success' : 'failure'], source: chatId },
-              );
-            } catch { /* non-fatal */ }
-            this.personality.processEvent(result.success ? 'task_success' : 'task_failure');
-            if (!result.success) this.lastFailedRequests.set(chatId, text);
-            else this.lastFailedRequests.delete(chatId);
-            if (result.success) this.resolveMatchingGoals(text);
-            const hadFailures = result.completedSteps < result.totalSteps;
-            if (hadFailures && this.ai) {
-              this.runSelfImprovement(plan.title, text, result).catch((err) =>
-                log.debug({ err }, 'Self-improvement reflection failed'),
-              );
-            }
-          },
-          onError: async () => {
-            this.personality.processEvent('task_failure');
-          },
-        });
-        const kickoff = 'On it. Planning your task now...';
-        await this.appendAssistantTurn(chatId, kickoff);
-        return kickoff;
-      }
-
-      log.warn({ chatId }, 'Task planning failed — falling back to chat mode');
-    }
-
-    return null; // fall through to chat mode
   }
 
   /**
