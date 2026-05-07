@@ -253,7 +253,7 @@ function formatFinalSummary(
   plan: TaskPlan,
   allFiles: string[],
   durationMs: number,
-  stepResults: Array<{ step: TaskStep; success: boolean; summary: string }>,
+  stepResults: Array<{ step: TaskStep; success: boolean; summary: string; rawOutput: string }>,
   allCoworkEvents: CoWorkEvent[],
 ): string {
   const overallSuccess = stepResults.every((r) => r.success);
@@ -266,6 +266,23 @@ function formatFinalSummary(
   for (const r of stepResults) {
     const icon = r.success ? '✅' : '⚠️';
     lines.push(`${icon} ${r.step.id}. ${escapeHtml(r.step.title)}`);
+  }
+
+  // ── Answer section ────────────────────────────────────────────────────────
+  // Surface the FINAL successful step's actual output as the visible answer.
+  // Without this, NEXUS replies with just a checklist of completed steps and
+  // the user has to ask "but what was the answer?" — which is exactly the
+  // failure mode Lucas reported on 2026-05-06. For diagnostic/survey tasks
+  // (where no files are produced), this IS the response. For build tasks,
+  // it's a recap that complements the file list below.
+  const lastSuccessful = [...stepResults].reverse().find((r) => r.success);
+  if (lastSuccessful) {
+    const answer = pickFinalAnswer(lastSuccessful.rawOutput, lastSuccessful.summary);
+    if (answer) {
+      lines.push('');
+      lines.push('<b>Result:</b>');
+      lines.push(escapeHtml(answer));
+    }
   }
 
   if (allFiles.length > 0) {
@@ -315,6 +332,29 @@ function formatFinalSummary(
   lines.push(`<i>Completed in ${(durationMs / 1000).toFixed(1)}s</i>`);
 
   return lines.join('\n');
+}
+
+/**
+ * Pick the user-facing answer text from a step's rawOutput / summary.
+ * Returns "" when the content is just boilerplate (empty, "Step N completed",
+ * "Task timed out") so the formatter can omit the Result block instead of
+ * showing noise. Caps the result at 1500 chars so a runaway final step
+ * doesn't blow Telegram's 4096-char message limit.
+ */
+export function pickFinalAnswer(rawOutput: string, summary: string): string {
+  const candidate = (rawOutput || summary || '').trim();
+  if (!candidate) return '';
+  // Skip pure boilerplate that doesn't carry information.
+  if (/^step \d+ completed\.?$/i.test(candidate)) return '';
+  if (/^task timed out before this step could run\.?$/i.test(candidate)) return '';
+  if (/^step failed after \d+ /i.test(candidate)) return '';
+  // Cap for Telegram (4096 char message limit, the rest of the summary uses
+  // a few hundred chars of overhead).
+  const MAX = 1500;
+  if (candidate.length > MAX) {
+    return candidate.slice(0, MAX).trimEnd() + '…';
+  }
+  return candidate;
 }
 
 // ─── Core Step Executor ───────────────────────────────────────────────────────
@@ -646,7 +686,7 @@ export async function runTask(opts: {
   const completedIds = new Set<number>();
   const stepTimings = new Map<number, number>();
   const allFilesProduced: string[] = [];
-  const stepResults: Array<{ step: TaskStep; success: boolean; summary: string }> = [];
+  const stepResults: Array<{ step: TaskStep; success: boolean; summary: string; rawOutput: string }> = [];
   const previousContext: StepContext[] = [];
   const allCoworkEvents: CoWorkEvent[] = [];
   let coworkTotalUsed = 0; // Global Co Work budget — capped at MAX_COWORK_TOTAL for the whole task
@@ -718,10 +758,10 @@ export async function runTask(opts: {
         allFilesProduced.push(...res.value.context.filesWritten);
         completedIds.add(step.id);
         stepTimings.set(step.id, stepDuration);
-        stepResults.push({ step, success: res.value.success, summary: res.value.context.summary });
+        stepResults.push({ step, success: res.value.success, summary: res.value.context.summary, rawOutput: res.value.rawOutput });
       } else {
         completedIds.add(step.id);
-        stepResults.push({ step, success: false, summary: String(res.reason) });
+        stepResults.push({ step, success: false, summary: String(res.reason), rawOutput: '' });
       }
     }
 
@@ -737,9 +777,9 @@ export async function runTask(opts: {
       allFilesProduced.push(...aggResult.context.filesWritten);
       completedIds.add(aggregateStep.id);
       stepTimings.set(aggregateStep.id, 0);
-      stepResults.push({ step: aggregateStep, success: aggResult.success, summary: aggResult.context.summary });
+      stepResults.push({ step: aggregateStep, success: aggResult.success, summary: aggResult.context.summary, rawOutput: aggResult.rawOutput });
     } catch (err) {
-      stepResults.push({ step: aggregateStep, success: false, summary: String(err) });
+      stepResults.push({ step: aggregateStep, success: false, summary: String(err), rawOutput: '' });
     }
 
     await updateProgress(undefined, null);
@@ -763,6 +803,10 @@ export async function runTask(opts: {
 
       let stepSuccess = false;
       let stepSummary = '';
+      // Full LLM response for this step. Surfaces in the final summary as
+      // the visible "Result" — without this, NEXUS replies only with the
+      // step checklist and the user has to ask "but what was the answer?"
+      let stepRawOutput = '';
       let stepAttempts = 0;
       let stepLastError = '';
 
@@ -774,7 +818,7 @@ export async function runTask(opts: {
         stepSuccess = false;
         completedIds.add(step.id);
         stepTimings.set(step.id, 0);
-        stepResults.push({ step, success: false, summary: stepSummary });
+        stepResults.push({ step, success: false, summary: stepSummary, rawOutput: '' });
         break;
       }
 
@@ -820,6 +864,7 @@ export async function runTask(opts: {
           previousContext.push(result.context);
           allFilesProduced.push(...result.context.filesWritten);
           stepSummary = result.context.summary;
+          stepRawOutput = result.rawOutput;
           stepSuccess = result.success;
           lastFilesWritten = result.context.filesWritten;
           lastCommandsRun = result.context.commandsRun;
@@ -992,7 +1037,7 @@ export async function runTask(opts: {
       const stepDuration = Date.now() - stepStart;
       completedIds.add(step.id);
       stepTimings.set(step.id, stepDuration);
-      stepResults.push({ step, success: stepSuccess, summary: stepSummary });
+      stepResults.push({ step, success: stepSuccess, summary: stepSummary, rawOutput: stepRawOutput });
 
       // Emit completion event. (task.step.failed may have already fired for
       // individual retry attempts above — this event signals the STEP-level
