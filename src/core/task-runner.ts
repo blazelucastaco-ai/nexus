@@ -749,12 +749,20 @@ async function executeStep(
     }
   }
 
-  // Build step context for future steps
+  // Build step context for future steps. R3 (2026-05-06): bumped the cap
+  // from 250 → 1500. Earlier 250-char window was clipping mid-sentence on
+  // any step that produced a substantive answer, so step N+1 saw a
+  // truncated brief instead of what step N actually found. 1500 is enough
+  // to carry a typical step's reasoning + key findings without bloating
+  // the next step's prompt — a 10-step plan still keeps prevSummary under
+  // ~15K chars, well within token budget. Newlines are still collapsed so
+  // each step renders on a single "Step N: ..." line in prevSummary.
+  const STEP_SUMMARY_CAP = 1500;
   const context: StepContext = {
     filesWritten,
     fileContents,
     commandsRun,
-    summary: (finalContent.slice(0, 250).replace(/\n+/g, ' ') || `${step.title} completed`) +
+    summary: (finalContent.slice(0, STEP_SUMMARY_CAP).replace(/\n+/g, ' ') || `${step.title} completed`) +
       (verifyNote ? ` [verify: ${verifyNote.slice(0, 80)}]` : ''),
   };
 
