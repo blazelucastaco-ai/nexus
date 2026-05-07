@@ -973,10 +973,34 @@ export class Orchestrator {
       const messageType = classifyMessage(text);
       const isTaskMessage = messageType === 'task';
 
-      // ── 2d. Memory synthesis (skip for task messages — they go to TaskRunner) ──
-      const synthesis = (!isTaskMessage && this.memorySynthesizer)
-        ? await this.memorySynthesizer.synthesize(text, recentMemories, relevantFacts, activeGoals)
-        : { synthesis: '', usedMemoryIds: [] };
+      // ── 2d. Memory synthesis + 4b. Reasoning trace (parallel) ──
+      // R1 (2026-05-06): these used to be sequential awaits — ~1s back-to-
+      // back on every chat turn. They share inputs (text, history, goals)
+      // and the trace's only consumption of synthesis was an optional
+      // 250-char "Relevant memory:" snippet. Running them in parallel
+      // shaves ~1s per turn; the trace loses that snippet, but the
+      // synthesis itself still flows into the system prompt below so the
+      // main model still sees it. Net: same visible quality, faster reply.
+      // Skipped for task messages (they short-circuit to TaskRunner) and
+      // when either subsystem isn't initialized.
+      const recentHistoryText = !isTaskMessage
+        ? this.conversationHistory
+            .slice(-4)
+            .map((m) => `${m.role}: ${truncate(String(m.content ?? ''), 100)}`)
+            .join('\n')
+        : '';
+      const synthPromise = (!isTaskMessage && this.memorySynthesizer)
+        ? this.memorySynthesizer.synthesize(text, recentMemories, relevantFacts, activeGoals)
+        : Promise.resolve({ synthesis: '', usedMemoryIds: [] as string[] });
+      const tracePromise = (!isTaskMessage && this.reasoningTrace)
+        ? this.reasoningTrace.think({
+            query: text,
+            synthesizedMemory: '',
+            recentHistory: recentHistoryText,
+            activeGoals,
+          })
+        : Promise.resolve({ approach: '', keyContext: '', caveats: '', traced: false });
+      const [synthesis, trace] = await Promise.all([synthPromise, tracePromise]);
 
       // Bump importance for memories that were used (feedback loop)
       if (synthesis.usedMemoryIds.length > 0) {
@@ -992,22 +1016,6 @@ export class Orchestrator {
 
       // ── 4. Assemble context ───────────────────────────────────
       const context = this.assembleNexusContext(recentMemories, relevantFacts);
-
-      // ── 4b. Pre-response reasoning trace (skip for task messages) ──
-      let trace = { approach: '', keyContext: '', caveats: '', traced: false };
-      if (!isTaskMessage && this.reasoningTrace) {
-        const recentHistoryText = this.conversationHistory
-          .slice(-4)
-          .map((m) => `${m.role}: ${truncate(String(m.content ?? ''), 100)}`)
-          .join('\n');
-
-        trace = await this.reasoningTrace.think({
-          query: text,
-          synthesizedMemory: synthesis.synthesis,
-          recentHistory: recentHistoryText,
-          activeGoals,
-        });
-      }
 
       // ── 5. Build system prompt (with caching) ────────────────
       // Thread context: related prior conversations on the same topic. Pure read,
