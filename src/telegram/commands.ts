@@ -21,6 +21,7 @@ import {
   formatStatus,
   formatTaskList,
   formatWelcome,
+  markdownToHtml,
   truncateMessage,
 } from './messages.js';
 
@@ -305,7 +306,10 @@ export async function handleThink(ctx: Context, orchestrator: Orchestrator): Pro
     const lines = [
       `💭 <b>Inner Monologue: ${escapeHtml(topic)}</b>`,
       '',
-      escapeHtml(response.content),
+      // Route the LLM response through markdownToHtml so any Markdown the
+      // model emits (headings, bold, links, etc.) renders properly in
+      // Telegram. escapeHtml alone leaked literal `**` / `##` / `[text](url)`.
+      markdownToHtml(response.content),
     ];
 
     await ctx.reply(truncateMessage(lines.join('\n')), { parse_mode: 'HTML' });
