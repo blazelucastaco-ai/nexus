@@ -1465,13 +1465,12 @@ footer {
           <li>Try double-clicking it. macOS will block the launch — that's expected on first run for an unsigned app.</li>
           <li>Open <strong>System Settings</strong> → <strong>Privacy &amp; Security</strong>, scroll to the bottom, find the message about NEXUS being blocked, and click <strong>Open Anyway</strong>. Re-launch NEXUS; click <strong>Open</strong> when prompted.</li>
         </ol>
-        <details style="margin-top:.75rem; padding:.75rem 1rem; background:#1a1a1a; border-left:3px solid #e94560; border-radius:4px;">
-          <summary style="cursor:pointer; font-weight:600;">Got "NEXUS is damaged and can't be opened" instead?</summary>
-          <p style="margin-top:.5rem;">The app isn't actually damaged — it's a known issue with how electron-builder ad-hoc-signs unsigned macOS apps (the signature manifest references resources that get repackaged into the DMG, so macOS sees the mismatch as tampering). The fix is to strip the broken signature and clear the quarantine flag in one step.</p>
-          <p style="margin-top:.5rem;"><strong>Open Terminal</strong> (Applications → Utilities → Terminal) and paste this:</p>
-          <pre style="background:#0a0a0a; padding:.6rem .75rem; border-radius:4px; overflow-x:auto; font-size:.85em;"><code>sudo codesign --remove-signature /Applications/NEXUS.app &amp;&amp; xattr -cr /Applications/NEXUS.app</code></pre>
-          <p style="margin-top:.5rem;">Enter your Mac password when prompted (the prompt is for <code>sudo</code>, not for NEXUS itself). Then double-click NEXUS in Applications — macOS will show the standard "Apple cannot verify" warning instead. Click <strong>Open Anyway</strong> in System Settings → Privacy &amp; Security, then launch again.</p>
-          <p style="margin-top:.5rem; opacity:.8; font-size:.9em;">If you previously dragged the app under a different name, replace <code>/Applications/NEXUS.app</code> with the actual path. "Right-click → Open" used to work as a Gatekeeper bypass, but Apple removed that path on macOS Sequoia (15+).</p>
+        <details style="margin-top:.75rem; padding:.75rem 1rem; background:#1a1a1a; border-left:3px solid #777; border-radius:4px;">
+          <summary style="cursor:pointer; font-weight:600;">Got "NEXUS is damaged and can't be opened" instead? (downloads before May 6, 2026)</summary>
+          <p style="margin-top:.5rem;">The DMG built before May 6, 2026 had a broken ad-hoc signature that triggered this misleading "damaged" message. Re-download the latest DMG from the <a href="https://github.com/blazelucastaco-ai/nexus/releases/latest">releases page</a> — the rebuilt artifact (sha256 starting <code>397b84d2…</code>) shows the standard "Apple cannot verify" warning instead, with a working Open Anyway button.</p>
+          <p style="margin-top:.5rem;">If you can't re-download for some reason, you can also fix an existing copy from Terminal:</p>
+          <pre style="background:#0a0a0a; padding:.6rem .75rem; border-radius:4px; overflow-x:auto; font-size:.85em;"><code>sudo codesign --force --deep --sign - /Applications/NEXUS.app &amp;&amp; xattr -cr /Applications/NEXUS.app</code></pre>
+          <p style="margin-top:.5rem; opacity:.8; font-size:.9em;">"Right-click → Open" used to work as a Gatekeeper bypass, but Apple removed that path on macOS Sequoia (15+). The two options above are what works today.</p>
         </details>
       </div>
     </div>
