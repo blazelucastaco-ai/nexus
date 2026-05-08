@@ -930,6 +930,35 @@ export const toolDefinitions: ToolDefinition[] = [
       required: ['request'],
     },
   },
+  // ── Mid-task interactivity ────────────────────────────────────────────
+  // Lets a step pause execution and ask the user a clarifying question
+  // when it hits a decision the user should make (which file? which
+  // option? confirm before destructive action?). Without this, the model
+  // has to guess on ambiguity, which is exactly the failure mode "smart"
+  // is supposed to avoid.
+  //
+  // Only meaningful inside step execution within start_task /
+  // start_ultra_task — chat-mode replies should ask their question
+  // inline as plain text instead of using this tool.
+  {
+    name: 'ask_user',
+    description:
+      'Pause the current task step and ask the user a short, specific question. Use ONLY when you genuinely need user input to proceed — ambiguous choices, missing details, confirmation before a destructive action. ' +
+      'Returns the user\'s reply as a string. Do NOT use ask_user for things you can decide yourself, look up via another tool, or default sensibly. ' +
+      'One question at a time. Keep it under 2 sentences. The user sees this as a Telegram message and replies normally; their reply becomes the tool result. ' +
+      'If they don\'t reply within 10 minutes the tool returns a timeout note and you should proceed with your best judgment. ' +
+      'Inside chat-mode replies (not task steps), do not call this tool — ask the question in your reply text instead.',
+    parameters: {
+      type: 'object',
+      properties: {
+        question: {
+          type: 'string',
+          description: 'The exact question to send to the user. Specific, short, one decision at a time.',
+        },
+      },
+      required: ['question'],
+    },
+  },
 ];
 
 /**

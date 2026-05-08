@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ToolExecutor, type TaskLauncher } from '../src/tools/executor.js';
+import { ToolExecutor, type TaskLauncher, type AskUserCallback } from '../src/tools/executor.js';
 import type { AgentManager } from '../src/agents/index.js';
 import type { MemoryManager } from '../src/memory/index.js';
 
@@ -110,6 +110,66 @@ describe('start_task tool', () => {
 
     expect(launcher).toHaveBeenCalledWith(
       expect.objectContaining({ request: 'build me a CLI' }),
+    );
+  });
+});
+
+// ask_user — mid-task interactivity (2026-05-07). Lets a step pause and
+// receive a user reply via Telegram instead of guessing under ambiguity.
+describe('ask_user tool', () => {
+  it('returns an error when no callback is configured', async () => {
+    const exec = makeExecutor();
+    const result = await exec.execute('ask_user', { question: 'Which file?' }, { chatId: 'c1' });
+    expect(result).toMatch(/ask_user is not configured/i);
+  });
+
+  it('returns an error when chatId is missing from context', async () => {
+    const exec = makeExecutor();
+    exec.setAskUserCallback(vi.fn() as unknown as AskUserCallback);
+    const result = await exec.execute('ask_user', { question: 'Which file?' });
+    expect(result).toMatch(/requires a chat context/i);
+  });
+
+  it('returns an error when question is missing or empty', async () => {
+    const exec = makeExecutor();
+    exec.setAskUserCallback(vi.fn() as unknown as AskUserCallback);
+    expect(await exec.execute('ask_user', {}, { chatId: 'c1' })).toMatch(/non-empty.*question/i);
+    expect(await exec.execute('ask_user', { question: '' }, { chatId: 'c1' })).toMatch(/non-empty.*question/i);
+    expect(await exec.execute('ask_user', { question: '   ' }, { chatId: 'c1' })).toMatch(/non-empty.*question/i);
+  });
+
+  it('forwards question + chatId to the callback and returns its reply verbatim', async () => {
+    const exec = makeExecutor();
+    const cb = vi.fn(async () => 'use foo.config') as unknown as AskUserCallback;
+    exec.setAskUserCallback(cb);
+
+    const result = await exec.execute(
+      'ask_user',
+      { question: 'Which config — foo.config or bar.config?' },
+      { chatId: 'chat-7' },
+    );
+
+    expect(result).toBe('use foo.config');
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb).toHaveBeenCalledWith({
+      question: 'Which config — foo.config or bar.config?',
+      chatId: 'chat-7',
+    });
+  });
+
+  it('trims surrounding whitespace from the question', async () => {
+    const exec = makeExecutor();
+    const cb = vi.fn(async () => 'ok') as unknown as AskUserCallback;
+    exec.setAskUserCallback(cb);
+
+    await exec.execute(
+      'ask_user',
+      { question: '   Should I overwrite?   ' },
+      { chatId: 'c' },
+    );
+
+    expect(cb).toHaveBeenCalledWith(
+      expect.objectContaining({ question: 'Should I overwrite?' }),
     );
   });
 });

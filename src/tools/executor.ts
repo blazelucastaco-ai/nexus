@@ -375,6 +375,18 @@ export type TaskLauncher = (params: {
   coordinator: boolean;
 }) => Promise<string>;
 
+/**
+ * Pause the current step and ask the user a question via Telegram. The
+ * orchestrator wires this with a per-chat pending-answer queue: the
+ * callback sends the question, awaits the user's next message in that
+ * chat, and resolves with the reply text. Times out after 10 minutes
+ * with a string the model can act on.
+ */
+export type AskUserCallback = (params: {
+  question: string;
+  chatId: string;
+}) => Promise<string>;
+
 // FIX 5: Transient error signals that warrant a single retry
 const TRANSIENT_ERROR_SIGNALS = ['EAGAIN', 'EBUSY', 'ETIMEDOUT', 'rate limit', 'quota exceeded', 'too many requests'];
 // Tools that are not safe to retry (side-effectful writes)
@@ -403,6 +415,13 @@ export class ToolExecutor {
    */
   private taskLauncher?: TaskLauncher;
 
+  /**
+   * Wired by the orchestrator so the ask_user tool can pause a step
+   * and await the user's Telegram reply. Resolves with the reply text
+   * (or a timeout note after 10 minutes).
+   */
+  private askUserCallback?: AskUserCallback;
+
   constructor(
     private agents: AgentManager,
     private memory: MemoryManager,
@@ -418,6 +437,11 @@ export class ToolExecutor {
   /** Wire the orchestrator's task launcher so start_task / start_ultra_task work. */
   setTaskLauncher(launcher: TaskLauncher): void {
     this.taskLauncher = launcher;
+  }
+
+  /** Wire the orchestrator's ask_user callback so the tool can pause for input. */
+  setAskUserCallback(cb: AskUserCallback): void {
+    this.askUserCallback = cb;
   }
 
   /** Register loaded plugins so their tools can be dispatched */
@@ -518,6 +542,7 @@ export class ToolExecutor {
       case 'cancel_task':         return cancelTaskTool(args);
       case 'start_task':          return this.startTask(args, false, context);
       case 'start_ultra_task':    return this.startTask(args, true, context);
+      case 'ask_user':            return this.askUser(args, context);
       case 'generate_image':      return this.generateImage(args);
       case 'speak':               return this.speak(args);
       case 'list_sessions':       return this.listSessions();
@@ -1574,6 +1599,29 @@ export class ToolExecutor {
       ultra,
       coordinator,
     });
+  }
+
+  // ── ask_user ───────────────────────────────────────────────────────
+  //
+  // Mid-task interactivity. Pauses the step by awaiting the user's
+  // Telegram reply via the orchestrator-wired callback, then returns
+  // the reply as the tool result so the model can continue with real
+  // information instead of guessing.
+  private async askUser(
+    args: Record<string, unknown>,
+    context?: ToolContext,
+  ): Promise<string> {
+    if (!this.askUserCallback) {
+      return 'Error: ask_user is not configured. The orchestrator must call toolExecutor.setAskUserCallback() before this tool can run.';
+    }
+    if (!context?.chatId) {
+      return 'Error: ask_user requires a chat context but none was provided. This tool can only run inside a step execution loop.';
+    }
+    const question = typeof args.question === 'string' ? args.question.trim() : '';
+    if (!question) {
+      return 'Error: ask_user requires a non-empty "question" parameter.';
+    }
+    return await this.askUserCallback({ question, chatId: context.chatId });
   }
 
   // ── understand_image ───────────────────────────────────────────────

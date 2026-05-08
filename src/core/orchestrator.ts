@@ -313,6 +313,18 @@ export class Orchestrator {
   // Task engine: track in-flight background tasks so callers can await them
   private pendingTaskPromises: Promise<unknown>[] = [];
 
+  // Mid-task interactivity (2026-05-07): when a step calls the ask_user
+  // tool, the orchestrator parks the resolver here keyed by chatId. The
+  // user's next message gets short-circuited at the top of _handleMessage
+  // and routed into this resolver instead of starting a new chat turn.
+  // Bounded to one pending question per chat — a step that asks again
+  // before the previous answer arrived will overwrite (the model
+  // shouldn't do that, but if it does we don't want a leak).
+  private pendingToolAnswers = new Map<string, {
+    resolve: (answer: string) => void;
+    timeoutId: NodeJS.Timeout;
+  }>();
+
   // (modes are auto-detected per-request — no persistent flags needed)
 
   // ── Ultra mode: pending approval gates ───────────────────────────────
@@ -521,6 +533,41 @@ export class Orchestrator {
         log.error({ err, chatId }, 'Task launcher tool failed');
         return `Failed to start the task: ${err instanceof Error ? err.message : String(err)}`;
       }
+    });
+
+    // Wire the ask_user tool's pause-and-await mechanism. The callback
+    // sends the question to Telegram, parks a resolver in
+    // pendingToolAnswers, and waits up to 10 minutes for the user's next
+    // message to land via _handleMessage's pending-answer short-circuit.
+    this.toolExecutor.setAskUserCallback(async ({ question, chatId }) => {
+      // Send the question, log it as an assistant turn so it lands in
+      // conversation history (prevents the same gaslighting class of bug
+      // we fixed for task completions on 2026-05-06).
+      const formattedQuestion = `❓ ${escapeHtml(question)}`;
+      try {
+        await this.telegram.sendMessage(chatId, formattedQuestion);
+      } catch (err) {
+        log.error({ err, chatId }, 'ask_user: failed to send question to Telegram');
+        return 'Error: could not deliver the question to the user. Proceed with your best judgment.';
+      }
+      await this.appendAssistantTurn(chatId, `❓ ${question}`);
+
+      // If a previous question was pending (e.g. step asked twice without
+      // waiting), cancel it so we don't leak resolvers. The new question
+      // wins.
+      const previous = this.pendingToolAnswers.get(chatId);
+      if (previous) {
+        clearTimeout(previous.timeoutId);
+        previous.resolve('A new question replaced this one before the user could answer. Proceed with your best judgment.');
+      }
+
+      return await new Promise<string>((resolve) => {
+        const timeoutId = setTimeout(() => {
+          this.pendingToolAnswers.delete(chatId);
+          resolve('User did not answer within 10 minutes. Proceed with your best judgment based on what you have.');
+        }, 10 * 60 * 1000);
+        this.pendingToolAnswers.set(chatId, { resolve, timeoutId });
+      });
     });
 
     // Extract the LLM tool-calling loop into its own unit so it can be
@@ -858,6 +905,35 @@ export class Orchestrator {
     // Logger auto-includes the current traceId + chatId from AsyncLocalStorage
     // — no manual threading needed. See trace.ts.
     log.info({ textLen: text.length, preview: text.slice(0, 80) }, 'Processing message');
+
+    // ── Pending-answer short-circuit ────────────────────────────────────
+    // If a step is paused waiting for the user's reply (ask_user tool),
+    // route this message into the parked resolver instead of starting a
+    // new chat turn. The user's text + the question that prompted it
+    // already landed in conversationHistory via the askUserCallback, so
+    // the resumed step gets the answer and the running task picks back
+    // up. Returns '' to suppress any further reply from this path —
+    // the task itself owns what gets sent next.
+    const pending = this.pendingToolAnswers.get(chatId);
+    if (pending) {
+      log.info({ chatId, replyLen: text.length }, 'Resuming paused task with user answer');
+      this.pendingToolAnswers.delete(chatId);
+      clearTimeout(pending.timeoutId);
+      // Persist the user's reply as a normal turn so history reflects it.
+      this.conversationHistory.push({ role: 'user', content: text });
+      const HISTORY_CAP = 200;
+      if (this.conversationHistory.length > HISTORY_CAP) {
+        this.conversationHistory.splice(0, this.conversationHistory.length - HISTORY_CAP);
+      }
+      this.memory.addToBuffer('user', text);
+      try {
+        await appendTurn(chatId, [{ role: 'user', content: text }]);
+      } catch (err) {
+        log.warn({ err, chatId }, 'Session append failed for paused-task answer');
+      }
+      pending.resolve(text);
+      return '';
+    }
 
     try {
       // ── BigBrain bypass ───────────────────────────────────────────────

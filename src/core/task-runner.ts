@@ -491,6 +491,7 @@ async function executeStep(
   toolExecutor: ToolExecutor,
   model: string,
   maxTokens: number,
+  chatId: string,
   onDetail?: (detail: string) => void,
   coworkHint?: CoWorkResponse | null,
   coworkAttemptNumber?: number,
@@ -643,9 +644,13 @@ async function executeStep(
 
       let result: string;
       try {
+        // ask_user blocks waiting for the user to reply via Telegram —
+        // the standard 120s tool timeout would always kill it. Give that
+        // tool a 10-minute window instead. Other tools keep the standard.
+        const toolTimeoutMs = toolName === 'ask_user' ? 10 * 60 * 1000 : TOOL_TIMEOUT_MS;
         result = await withTimeout(
-          toolExecutor.execute(toolName, toolArgs),
-          TOOL_TIMEOUT_MS,
+          toolExecutor.execute(toolName, toolArgs, { chatId }),
+          toolTimeoutMs,
           toolName,
         );
         result = repairToolResult(result);
@@ -875,7 +880,7 @@ export async function runTask(opts: {
 
     const parallelResults = await Promise.allSettled(
       parallelSteps.map((step) =>
-        executeStep(step, plan, originalRequest, [], ai, toolExecutor, model, maxTokens),
+        executeStep(step, plan, originalRequest, [], ai, toolExecutor, model, maxTokens, chatId),
       ),
     );
 
@@ -902,7 +907,7 @@ export async function runTask(opts: {
     try {
       const aggResult = await executeStep(
         aggregateStep, plan, originalRequest, previousContext,
-        ai, toolExecutor, model, maxTokens,
+        ai, toolExecutor, model, maxTokens, chatId,
       );
       previousContext.push(aggResult.context);
       allFilesProduced.push(...aggResult.context.filesWritten);
@@ -988,7 +993,7 @@ export async function runTask(opts: {
         stepAttempts = attempt + 1;
         try {
           const result = await withTimeout(
-            executeStep(step, plan, originalRequest, previousContext, ai, toolExecutor, model, maxTokens, onDetail, undefined, undefined, skillsContext),
+            executeStep(step, plan, originalRequest, previousContext, ai, toolExecutor, model, maxTokens, chatId, onDetail, undefined, undefined, skillsContext),
             STEP_TIMEOUT_MS, `step ${step.id}: ${step.title}`,
           );
 
@@ -1093,7 +1098,7 @@ export async function runTask(opts: {
           // Try the step again with Co Work hint injected
           try {
             const result = await withTimeout(
-              executeStep(step, plan, originalRequest, previousContext, ai, toolExecutor, model, maxTokens, onDetail, hint, cwAttempt, skillsContext),
+              executeStep(step, plan, originalRequest, previousContext, ai, toolExecutor, model, maxTokens, chatId, onDetail, hint, cwAttempt, skillsContext),
               STEP_TIMEOUT_MS, `step ${step.id} cowork-${cwAttempt}`,
             );
 
