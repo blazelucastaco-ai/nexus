@@ -3,6 +3,7 @@ import {
   cleanMarkdownForTelegram,
   formatDuration,
   pickFinalAnswer,
+  resolveStepModel,
   summarizeTaskForHistory,
 } from '../src/core/task-runner.js';
 import type { TaskRunResult } from '../src/core/task-runner.js';
@@ -253,5 +254,44 @@ describe('formatDuration', () => {
 
   it('handles zero duration without crashing', () => {
     expect(formatDuration(0)).toBe('0.0s');
+  });
+});
+
+// resolveStepModel — 2026-05-08 per-step model tier selection. The planner
+// can tag each step with "haiku" | "sonnet" | "opus"; the resolver maps
+// to actual config-supplied model strings, with graceful fallback when
+// a tier model isn't configured.
+describe('resolveStepModel', () => {
+  const def = 'claude-sonnet';
+  const fast = 'claude-haiku';
+  const opus = 'claude-opus';
+
+  it('returns fastModel for tier "haiku"', () => {
+    expect(resolveStepModel('haiku', def, fast, opus)).toBe('claude-haiku');
+  });
+
+  it('returns opusModel for tier "opus"', () => {
+    expect(resolveStepModel('opus', def, fast, opus)).toBe('claude-opus');
+  });
+
+  it('returns defaultModel for tier "sonnet" (the standard tier)', () => {
+    expect(resolveStepModel('sonnet', def, fast, opus)).toBe('claude-sonnet');
+  });
+
+  it('returns defaultModel when tier is undefined (planner omitted it)', () => {
+    expect(resolveStepModel(undefined, def, fast, opus)).toBe('claude-sonnet');
+  });
+
+  it('falls back to defaultModel when haiku tier requested but fastModel missing', () => {
+    expect(resolveStepModel('haiku', def, undefined, opus)).toBe('claude-sonnet');
+  });
+
+  it('falls back to defaultModel when opus tier requested but opusModel missing', () => {
+    expect(resolveStepModel('opus', def, fast, undefined)).toBe('claude-sonnet');
+  });
+
+  it('keeps tasks running even if both tier models are unconfigured', () => {
+    expect(resolveStepModel('haiku', def, undefined, undefined)).toBe('claude-sonnet');
+    expect(resolveStepModel('opus', def, undefined, undefined)).toBe('claude-sonnet');
   });
 });

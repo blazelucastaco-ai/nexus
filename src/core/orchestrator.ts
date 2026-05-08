@@ -1851,6 +1851,8 @@ ${extras.memorySynthesis}`);
           toolExecutor: this.toolExecutor,
           telegram: this.telegram,
           model: this.config.ai.model,
+          fastModel: this.config.ai.fastModel,
+          opusModel: this.config.ai.opusModel,
           maxTokens: this.config.ai.maxTokens,
           ...(coordinatorMode !== undefined ? { coordinatorMode } : {}),
           ...(skillsContext !== undefined ? { skillsContext } : {}),

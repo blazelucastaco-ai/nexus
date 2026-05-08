@@ -52,6 +52,27 @@ export interface TaskRunResult {
   coworkEvents?: CoWorkEvent[];
 }
 
+// ─── Per-step model tier resolver ────────────────────────────────────────────
+//
+// 2026-05-08 per-step model selection. The planner can tag each step with a
+// model tier ("haiku" | "sonnet" | "opus") based on actual difficulty.
+// Trivial steps drop to Haiku (fast + cheap), hard reasoning bumps to Opus,
+// everything else stays on Sonnet (the existing default).
+//
+// Falls back to defaultModel whenever a tier hint is missing OR the
+// corresponding tier model isn't configured. Defense against partial config
+// keeps tasks running even if fastModel/opusModel aren't set.
+export function resolveStepModel(
+  tier: TaskStep['model'],
+  defaultModel: string,
+  fastModel: string | undefined,
+  opusModel: string | undefined,
+): string {
+  if (tier === 'haiku' && fastModel) return fastModel;
+  if (tier === 'opus' && opusModel) return opusModel;
+  return defaultModel;
+}
+
 // ─── Step System Prompt ───────────────────────────────────────────────────────
 
 function buildStepSystemPrompt(
@@ -801,12 +822,15 @@ export async function runTask(opts: {
   toolExecutor: ToolExecutor;
   telegram: TelegramGateway;
   model: string;
+  /** Optional: model strings used to resolve step.model tier hints. */
+  fastModel?: string;
+  opusModel?: string;
   maxTokens: number;
   coordinatorMode?: boolean;
   /** Pre-selected relevant skill bodies to inject into every step prompt */
   skillsContext?: string;
 }): Promise<TaskRunResult> {
-  const { plan, originalRequest, chatId, ai, toolExecutor, telegram, model, coordinatorMode, skillsContext } = opts;
+  const { plan, originalRequest, chatId, ai, toolExecutor, telegram, model, fastModel, opusModel, coordinatorMode, skillsContext } = opts;
   if (coordinatorMode) {
     log.info({ title: plan.title, steps: plan.steps.length }, 'Coordinator mode — parallel step execution');
   }
@@ -880,7 +904,7 @@ export async function runTask(opts: {
 
     const parallelResults = await Promise.allSettled(
       parallelSteps.map((step) =>
-        executeStep(step, plan, originalRequest, [], ai, toolExecutor, model, maxTokens, chatId),
+        executeStep(step, plan, originalRequest, [], ai, toolExecutor, resolveStepModel(step.model, model, fastModel, opusModel), maxTokens, chatId),
       ),
     );
 
@@ -907,7 +931,7 @@ export async function runTask(opts: {
     try {
       const aggResult = await executeStep(
         aggregateStep, plan, originalRequest, previousContext,
-        ai, toolExecutor, model, maxTokens, chatId,
+        ai, toolExecutor, resolveStepModel(aggregateStep.model, model, fastModel, opusModel), maxTokens, chatId,
       );
       previousContext.push(aggResult.context);
       allFilesProduced.push(...aggResult.context.filesWritten);
@@ -993,7 +1017,7 @@ export async function runTask(opts: {
         stepAttempts = attempt + 1;
         try {
           const result = await withTimeout(
-            executeStep(step, plan, originalRequest, previousContext, ai, toolExecutor, model, maxTokens, chatId, onDetail, undefined, undefined, skillsContext),
+            executeStep(step, plan, originalRequest, previousContext, ai, toolExecutor, resolveStepModel(step.model, model, fastModel, opusModel), maxTokens, chatId, onDetail, undefined, undefined, skillsContext),
             STEP_TIMEOUT_MS, `step ${step.id}: ${step.title}`,
           );
 
@@ -1098,7 +1122,7 @@ export async function runTask(opts: {
           // Try the step again with Co Work hint injected
           try {
             const result = await withTimeout(
-              executeStep(step, plan, originalRequest, previousContext, ai, toolExecutor, model, maxTokens, chatId, onDetail, hint, cwAttempt, skillsContext),
+              executeStep(step, plan, originalRequest, previousContext, ai, toolExecutor, resolveStepModel(step.model, model, fastModel, opusModel), maxTokens, chatId, onDetail, hint, cwAttempt, skillsContext),
               STEP_TIMEOUT_MS, `step ${step.id} cowork-${cwAttempt}`,
             );
 

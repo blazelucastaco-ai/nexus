@@ -16,6 +16,18 @@ export interface TaskStep {
   files?: string[];    // Files this step will create (relative to projectDir)
   dependsOn?: number[]; // Step IDs this step depends on
   agent?: string;      // Coordinator mode: preferred agent type (research|file|terminal|browser|code|vision)
+  /**
+   * Optional model tier the planner picked for this step.
+   *   - 'haiku'  → fast tier (config.fastModel) for trivial steps:
+   *               formatting, file moves, single shell exec, small writes.
+   *   - 'sonnet' → default tier (config.model) for normal step work
+   *               (omit the field to mean this).
+   *   - 'opus'   → strong tier (config.opusModel) for steps that need
+   *               real reasoning: debugging, architecture decisions,
+   *               complex multi-file refactors, hard verification.
+   * Resolved to an actual model string by the runner before exec.
+   */
+  model?: 'haiku' | 'sonnet' | 'opus';
 }
 
 export interface TaskPlan {
@@ -42,8 +54,8 @@ Respond ONLY with a JSON object — no markdown, no explanation, just the JSON:
   "title": "Short descriptive title (max 5 words)",
   "projectDir": "~/nexus-workspace/project-name-in-kebab-case",
   "steps": [
-    { "id": 1, "title": "Action-oriented step title", "description": "Specific instructions", "files": ["file1.ext", "file2.ext"], "dependsOn": [] },
-    { "id": 2, "title": "...", "description": "...", "files": ["file3.ext"], "dependsOn": [1] }
+    { "id": 1, "title": "Action-oriented step title", "description": "Specific instructions", "files": ["file1.ext", "file2.ext"], "dependsOn": [], "model": "sonnet" },
+    { "id": 2, "title": "...", "description": "...", "files": ["file3.ext"], "dependsOn": [1], "model": "haiku" }
   ]
 }
 
@@ -53,7 +65,12 @@ Rules:
 - Each step must list dependsOn — prior step IDs it needs output from. Empty array if independent.
 - For web projects, step 1 typically creates ALL files (HTML + CSS + JS) in one shot. Only split when there's a genuine boundary (backend + frontend, db + API + UI).
 - projectDir: ~/nexus-workspace/<name> for projects. ~/Desktop for personal files. "~" for pure survey/diagnostic tasks.
-- If the user specified a path, use that path instead — never override an explicit instruction.`;
+- If the user specified a path, use that path instead — never override an explicit instruction.
+
+Model tier per step (set the "model" field — omit it to mean sonnet, the default tier):
+- "haiku":  trivial mechanical steps. Single shell exec, file moves, small writes from a clear template, formatting, copy-paste-style work. Use this when the step is "do the obvious thing." Cheap + fast.
+- "sonnet": normal step work — building, configuring, running, ordinary verification. The default. Most steps land here.
+- "opus":   steps that need real reasoning. Debugging an issue without an obvious cause, architecture decisions, complex multi-file refactors, hard verification (does this scale, is the auth flow correct), prose synthesis under tight constraints. Use sparingly — opus is expensive and slow. If the step description is "do X" and you can imagine succeeding without thinking hard, that's not opus.`;
 
 /**
  * Extract the first balanced JSON object from a string.
