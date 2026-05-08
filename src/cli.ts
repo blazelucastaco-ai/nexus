@@ -1,7 +1,8 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { execSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from 'node:fs';
+import { config as loadDotenv } from 'dotenv';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1196,8 +1197,8 @@ program
   .option('--http', 'Use HTTP transport instead of stdio')
   .option('--port <n>', 'Port for HTTP mode (default 3333)', '3333')
   .action(async (opts: { http?: boolean; port: string }) => {
-    // Load .env
-    try { require('dotenv').config({ path: join(PROJECT_DIR, '.env') }); } catch {}
+    // Load .env (statically imported — inline require fails in ESM)
+    try { loadDotenv({ path: join(PROJECT_DIR, '.env') }); } catch {}
 
     const distMcp = join(PROJECT_DIR, 'dist', 'mcp', 'server.js');
     if (!existsSync(distMcp)) {
@@ -1383,7 +1384,7 @@ sessionsCmd
       try {
         const info = statSync(p);
         if (info.mtimeMs < cutoff) {
-          require('fs').unlinkSync(p);
+          unlinkSync(p);
           removed++;
         }
       } catch {}
