@@ -11,6 +11,7 @@ import {
   mkdir,
   chmod,
 } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { join, dirname, resolve, extname, sep } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -246,9 +247,10 @@ function validateFilePath(filePath: string): string | null {
   }
   // Canonicalize the PARENT dir. If the parent is a symlink pointing outside
   // home/tmp, we need to detect that before allowing the write.
+  // realpathSync is statically imported at the top of the file — the inline
+  // `require('node:fs')` that used to live here failed in ESM execution
+  // contexts (dev-chat via tsx), only working in the bundled daemon CJS.
   let canonicalParent = dirname(resolved);
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { realpathSync } = require('node:fs') as typeof import('node:fs');
   try {
     canonicalParent = realpathSync(canonicalParent);
   } catch {

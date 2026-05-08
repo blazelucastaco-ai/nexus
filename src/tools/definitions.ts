@@ -969,8 +969,9 @@ export const toolDefinitions: ToolDefinition[] = [
     name: 'read_project',
     description:
       'Get a structured snapshot of a tracked project: its on-disk path, description, file tree, key manifests (README.md, package.json, Cargo.toml, etc.), and the last 5 journal entries. ' +
-      'Use when the user mentions a project by name and you need its current state, or when planning a step that depends on the project structure. ' +
-      'Faster + more focused than calling list_directory + read_file separately. ' +
+      'CALL THIS — do not pull from memory — whenever the user mentions a project by name and you\'d otherwise have to guess at its current state, recent work, or stack. ' +
+      'Memory of projects is stale by design (the user keeps working on them between conversations). The snapshot reflects what\'s on disk right now. ' +
+      'Faster + more focused than chaining list_directory + read_file separately. ' +
       'If the project isn\'t tracked or has no path, the tool tells you so and lists what IS tracked. ' +
       'Cap output at ~5K chars — for deeper inspection, follow up with read_file on specific paths the snapshot mentions.',
     parameters: {
@@ -987,7 +988,10 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'list_projects',
     description:
-      'List Lucas\'s tracked projects: display name, slug, path, last-active date, task count. Cheap lookup — call this before read_project when you don\'t already know which projects exist. Returns up to 50 most recently active projects.',
+      'List Lucas\'s tracked projects: display name, slug, path, last-active date, task count. Returns up to 50 most recently active. ' +
+      'CALL THIS — do not pull from memory — whenever the user asks about their projects, what they\'re tracking, what they\'re working on, or anything that should reflect the live project state. ' +
+      'The DB is auto-backfilled from disk on every call so the list reflects what\'s actually there right now. ' +
+      'Memory is stale by design — projects evolve. The right move is always to call this and answer from fresh data.',
     parameters: {
       type: 'object',
       properties: {},
