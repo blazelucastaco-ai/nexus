@@ -21,6 +21,7 @@ import {
   getProject,
   listProjects,
   listJournalEntries,
+  backfillProjectsFromDisk,
   slugify,
 } from '../data/projects-repository.js';
 import type { SelfAwareness } from '../brain/self-awareness.js';
@@ -1612,7 +1613,11 @@ export class ToolExecutor {
   // ── list_projects ──────────────────────────────────────────────────
   // Cheap lister so the chat-mode model knows what projects exist
   // before calling read_project. Saves a wrong-guess round-trip.
+  // Auto-backfills from disk first (~/projects/* + ~/nexus) so projects
+  // Lucas hasn't recently touched via NEXUS still show up. Idempotent
+  // and fast — a few stat() calls per call.
   private async listProjectsTool(): Promise<string> {
+    try { backfillProjectsFromDisk(); } catch (err) { log.debug({ err }, 'list_projects backfill failed — falling back to DB only'); }
     const projects = listProjects({ limit: 50 });
     if (projects.length === 0) {
       return 'No projects tracked yet. They get tracked automatically when NEXUS works on files inside a project directory.';
@@ -1636,6 +1641,11 @@ export class ToolExecutor {
     if (!nameArg) {
       return 'Error: read_project requires a "name" parameter.';
     }
+
+    // Backfill the projects table from disk so projects Lucas has on
+    // disk but hasn't recently worked on via NEXUS still show up.
+    // Idempotent — upsertProject preserves existing fields.
+    try { backfillProjectsFromDisk(); } catch (err) { log.debug({ err }, 'read_project backfill failed — falling back to DB only'); }
 
     // Lookup: slug → exact name → fuzzy display-name match
     const slug = slugify(nameArg);

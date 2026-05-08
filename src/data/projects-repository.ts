@@ -7,6 +7,9 @@
 // or projectDir) — no explicit setup needed. A project is just a durable
 // handle that accumulates journal entries tagged with its name.
 
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { getDatabase } from '../memory/database.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -167,6 +170,77 @@ export function inferProjectFromPath(path: string): { name: string; dir: string 
     return { name, dir };
   }
   return null;
+}
+
+/**
+ * Scan known on-disk locations for project directories and upsert them
+ * into the projects table. Without this the table only got populated
+ * after a tool.executed / task.completed event with a path matching
+ * the workspace pattern — meaning real projects Lucas had on disk but
+ * hadn't recently worked on via NEXUS were invisible to list_projects /
+ * read_project. Backfill is idempotent (upsertProject keeps existing
+ * fields), cheap (synchronous fs reads, <10 dirs), and safe (only
+ * registers dirs that actually have a project marker file).
+ *
+ * Returns the count of dirs upserted (existing or new).
+ */
+const PROJECT_MARKERS = [
+  'package.json', 'Cargo.toml', 'pyproject.toml', 'go.mod',
+  'Gemfile', 'composer.json', '.git', 'index.html', 'tsconfig.json',
+];
+const SCAN_ROOTS = ['projects', 'nexus-workspace'];   // scan ~/<root>/* for project dirs
+const SINGLE_PROJECT_DIRS = ['nexus'];                // ~/<dir> is itself a project root
+
+function looksLikeProject(dir: string): boolean {
+  return PROJECT_MARKERS.some((m) => existsSync(join(dir, m)));
+}
+
+export function backfillProjectsFromDisk(): number {
+  const home = homedir();
+  let upserted = 0;
+
+  for (const rootName of SCAN_ROOTS) {
+    const root = join(home, rootName);
+    if (!existsSync(root)) continue;
+    let entries: string[];
+    try {
+      entries = readdirSync(root);
+    } catch (err) {
+      log.debug({ err, root }, 'backfill: readdir failed — skipping root');
+      continue;
+    }
+    for (const name of entries) {
+      if (name.startsWith('.')) continue;
+      const dir = join(root, name);
+      try {
+        if (!statSync(dir).isDirectory()) continue;
+      } catch { continue; }
+      if (!looksLikeProject(dir)) continue;
+      upsertProject({
+        name: slugify(name),
+        displayName: humanize(name),
+        path: dir,
+      });
+      upserted++;
+    }
+  }
+
+  for (const dirName of SINGLE_PROJECT_DIRS) {
+    const dir = join(home, dirName);
+    if (!existsSync(dir)) continue;
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+    } catch { continue; }
+    if (!looksLikeProject(dir)) continue;
+    upsertProject({
+      name: slugify(dirName),
+      displayName: humanize(dirName),
+      path: dir,
+    });
+    upserted++;
+  }
+
+  return upserted;
 }
 
 /** Convert a project name to a slug: lowercase, hyphens, strip unsafe chars. */
