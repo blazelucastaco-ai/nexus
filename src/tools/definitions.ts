@@ -984,6 +984,16 @@ export const toolDefinitions: ToolDefinition[] = [
       required: ['name'],
     },
   },
+  {
+    name: 'list_projects',
+    description:
+      'List Lucas\'s tracked projects: display name, slug, path, last-active date, task count. Cheap lookup — call this before read_project when you don\'t already know which projects exist. Returns up to 50 most recently active projects.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
 ];
 
 /**

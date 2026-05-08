@@ -550,6 +550,7 @@ export class ToolExecutor {
       case 'start_ultra_task':    return this.startTask(args, true, context);
       case 'ask_user':            return this.askUser(args, context);
       case 'read_project':        return this.readProject(args);
+      case 'list_projects':       return this.listProjectsTool();
       case 'generate_image':      return this.generateImage(args);
       case 'speak':               return this.speak(args);
       case 'list_sessions':       return this.listSessions();
@@ -1606,6 +1607,22 @@ export class ToolExecutor {
       ultra,
       coordinator,
     });
+  }
+
+  // ── list_projects ──────────────────────────────────────────────────
+  // Cheap lister so the chat-mode model knows what projects exist
+  // before calling read_project. Saves a wrong-guess round-trip.
+  private async listProjectsTool(): Promise<string> {
+    const projects = listProjects({ limit: 50 });
+    if (projects.length === 0) {
+      return 'No projects tracked yet. They get tracked automatically when NEXUS works on files inside a project directory.';
+    }
+    const lines = projects.map((p) => {
+      const path = p.path ?? '(no path)';
+      const lastActive = p.last_active_at.slice(0, 10);
+      return `- ${p.display_name} (${p.name}) — ${path}, last active ${lastActive}, ${p.task_count} task${p.task_count === 1 ? '' : 's'}`;
+    });
+    return lines.join('\n');
   }
 
   // ── read_project ───────────────────────────────────────────────────
