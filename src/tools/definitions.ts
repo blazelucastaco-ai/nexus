@@ -959,6 +959,31 @@ export const toolDefinitions: ToolDefinition[] = [
       required: ['question'],
     },
   },
+  // ── Project context ────────────────────────────────────────────────────
+  // Pulls a snapshot of one of Lucas's tracked projects: path, description,
+  // file tree, key files (README / package manifests), and recent journal.
+  // Saves the model 3-5 tool calls (list_directory + read_file ×N) when
+  // the user asks "what's the latest on X?" or a step needs project
+  // context to plan its work.
+  {
+    name: 'read_project',
+    description:
+      'Get a structured snapshot of a tracked project: its on-disk path, description, file tree, key manifests (README.md, package.json, Cargo.toml, etc.), and the last 5 journal entries. ' +
+      'Use when the user mentions a project by name and you need its current state, or when planning a step that depends on the project structure. ' +
+      'Faster + more focused than calling list_directory + read_file separately. ' +
+      'If the project isn\'t tracked or has no path, the tool tells you so and lists what IS tracked. ' +
+      'Cap output at ~5K chars — for deeper inspection, follow up with read_file on specific paths the snapshot mentions.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'The project name — slug ("simplexicity"), display name ("Simplexicity"), or close partial match. Case-insensitive.',
+        },
+      },
+      required: ['name'],
+    },
+  },
 ];
 
 /**

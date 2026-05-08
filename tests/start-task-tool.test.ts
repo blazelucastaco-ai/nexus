@@ -173,3 +173,15 @@ describe('ask_user tool', () => {
     );
   });
 });
+
+// read_project — input validation + lookup-failure path. Happy-path
+// (real project read) depends on the SQLite store + filesystem, covered
+// elsewhere by integration testing in the running daemon.
+describe('read_project tool', () => {
+  it('returns an error when name is missing or empty', async () => {
+    const exec = makeExecutor();
+    expect(await exec.execute('read_project', {})).toMatch(/requires a "name"/i);
+    expect(await exec.execute('read_project', { name: '' })).toMatch(/requires a "name"/i);
+    expect(await exec.execute('read_project', { name: '   ' })).toMatch(/requires a "name"/i);
+  });
+});

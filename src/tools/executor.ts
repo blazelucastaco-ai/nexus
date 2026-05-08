@@ -17,6 +17,12 @@ import { promisify } from 'node:util';
 import { createLogger } from '../utils/logger.js';
 import { nowISO, truncate } from '../utils/helpers.js';
 import { detectInjection, sanitizeInput } from '../brain/injection-guard.js';
+import {
+  getProject,
+  listProjects,
+  listJournalEntries,
+  slugify,
+} from '../data/projects-repository.js';
 import type { SelfAwareness } from '../brain/self-awareness.js';
 import type { InnerMonologue } from '../brain/inner-monologue.js';
 import {
@@ -543,6 +549,7 @@ export class ToolExecutor {
       case 'start_task':          return this.startTask(args, false, context);
       case 'start_ultra_task':    return this.startTask(args, true, context);
       case 'ask_user':            return this.askUser(args, context);
+      case 'read_project':        return this.readProject(args);
       case 'generate_image':      return this.generateImage(args);
       case 'speak':               return this.speak(args);
       case 'list_sessions':       return this.listSessions();
@@ -1599,6 +1606,152 @@ export class ToolExecutor {
       ultra,
       coordinator,
     });
+  }
+
+  // ── read_project ───────────────────────────────────────────────────
+  //
+  // Gives the chat-mode model + step executors a one-call snapshot of a
+  // tracked project: path, description, file tree, key manifests, recent
+  // journal. Saves the model 3-5 tool calls when the user asks about a
+  // project, and gives steps cheap planning context.
+  private async readProject(args: Record<string, unknown>): Promise<string> {
+    const nameArg = typeof args.name === 'string' ? args.name.trim() : '';
+    if (!nameArg) {
+      return 'Error: read_project requires a "name" parameter.';
+    }
+
+    // Lookup: slug → exact name → fuzzy display-name match
+    const slug = slugify(nameArg);
+    let project = getProject(slug);
+    if (!project) {
+      const all = listProjects({ limit: 100 });
+      const lower = nameArg.toLowerCase();
+      project =
+        all.find((p) => p.name === nameArg) ??
+        all.find((p) => p.display_name.toLowerCase() === lower) ??
+        all.find((p) => p.display_name.toLowerCase().includes(lower)) ??
+        null;
+    }
+
+    if (!project) {
+      const tracked = listProjects({ limit: 20 });
+      const list = tracked.length > 0
+        ? tracked.map((p) => p.display_name).join(', ')
+        : '(none yet)';
+      return `No project named "${nameArg}" is tracked. Tracked projects: ${list}`;
+    }
+
+    if (!project.path) {
+      return [
+        `Project "${project.display_name}" (${project.name}) has no on-disk path tracked.`,
+        project.description ? `Description: ${project.description}` : null,
+        `Last active: ${project.last_active_at}`,
+      ].filter(Boolean).join('\n');
+    }
+
+    // Resolve ~ in path
+    const dir = project.path.startsWith('~')
+      ? project.path.replace(/^~/, homedir())
+      : project.path;
+
+    const parts: string[] = [];
+    parts.push(`# ${project.display_name} (${project.name})`);
+    parts.push(`Path: ${project.path}`);
+    if (project.description) parts.push(`Description: ${project.description}`);
+    parts.push(`Last active: ${project.last_active_at}`);
+    parts.push(`Tasks completed: ${project.task_count}`);
+    if (project.last_task_title) {
+      parts.push(`Last task: ${project.last_task_title}${project.last_task_success === 1 ? ' ✓' : project.last_task_success === 0 ? ' ✗' : ''}`);
+    }
+
+    parts.push('\n## File tree');
+    try {
+      const tree = await this.buildFileTree(dir, 2);
+      parts.push(tree.trim() || '(empty)');
+    } catch (err) {
+      parts.push(`(could not read directory: ${err instanceof Error ? err.message : 'unknown'})`);
+    }
+
+    // Key files — first one that exists from each language family
+    const keyFiles = ['README.md', 'README', 'package.json', 'Cargo.toml', 'pyproject.toml', 'go.mod'];
+    for (const fname of keyFiles) {
+      const fullPath = join(dir, fname);
+      try {
+        const stats = await stat(fullPath);
+        if (stats.isFile()) {
+          const content = await fsReadFile(fullPath, 'utf8');
+          const truncated = content.slice(0, 1500);
+          parts.push(`\n## ${fname}`);
+          parts.push(truncated + (content.length > truncated.length ? '\n…[truncated]' : ''));
+        }
+      } catch {
+        // Missing file — skip silently.
+      }
+    }
+
+    // Recent journal entries (existing query — already capped + chronological)
+    try {
+      const journal = listJournalEntries(project.name, 5);
+      if (journal.length > 0) {
+        parts.push('\n## Recent activity');
+        for (const entry of journal) {
+          parts.push(`- [${entry.kind}] ${entry.summary} (${entry.created_at.slice(0, 10)})`);
+        }
+      }
+    } catch (err) {
+      log.debug({ err, project: project.name }, 'read_project journal query failed — skipping');
+    }
+
+    const result = parts.join('\n');
+    const MAX_OUT = 5000;
+    return result.length > MAX_OUT ? `${result.slice(0, MAX_OUT - 1).trimEnd()}…` : result;
+  }
+
+  /**
+   * Render a depth-limited file tree for read_project. Skips noise dirs
+   * (node_modules, .git, dist, etc.) and dotfiles. Sorts directories
+   * before files alphabetically.
+   */
+  private async buildFileTree(
+    dir: string,
+    maxDepth: number,
+    currentDepth = 0,
+    prefix = '',
+  ): Promise<string> {
+    if (currentDepth >= maxDepth) return '';
+    const ignore = new Set([
+      'node_modules', '.git', 'dist', 'build', '.next', '.turbo',
+      '__pycache__', '.venv', 'venv', '.cache', 'target', '.DS_Store',
+      'out', '.parcel-cache',
+    ]);
+    let result = '';
+    try {
+      const entries = await readdir(dir, { withFileTypes: true });
+      const filtered = entries
+        .filter((e) => !ignore.has(e.name))
+        .filter((e) => !e.name.startsWith('.') || e.name === '.env.example')
+        .sort((a, b) => {
+          if (a.isDirectory() && !b.isDirectory()) return -1;
+          if (!a.isDirectory() && b.isDirectory()) return 1;
+          return a.name.localeCompare(b.name);
+        });
+
+      for (const entry of filtered) {
+        const isDir = entry.isDirectory();
+        result += `${prefix}${isDir ? '📁 ' : '📄 '}${entry.name}\n`;
+        if (isDir && currentDepth + 1 < maxDepth) {
+          result += await this.buildFileTree(
+            join(dir, entry.name),
+            maxDepth,
+            currentDepth + 1,
+            prefix + '  ',
+          );
+        }
+      }
+    } catch {
+      // Directory unreadable — drop silently; the caller still gets the bits we have.
+    }
+    return result;
   }
 
   // ── ask_user ───────────────────────────────────────────────────────
