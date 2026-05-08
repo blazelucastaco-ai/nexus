@@ -166,6 +166,8 @@ ${fileSnapshotSection}${coworkSection}
 
 6. BRIEF REPORT. After all tool calls, write 1-2 plain-text sentences saying what was done. The reply is shown in Telegram, which does NOT render Markdown — no headings (## / ###), no horizontal rules (---), no pipe tables, no code fences. Just a sentence or two of plain prose.
 
+7. WHEN AMBIGUOUS, ASK. If the step description leaves a real decision unanswered (which file? which option? confirm before this destructive action?), call the ask_user tool with one short, specific question. Do NOT guess on ambiguous decisions and ship the wrong answer. Use ask_user only for genuine ambiguity — if you can decide it yourself with the context you have, decide it. Quick judgment > unnecessary user round-trip > wrong guess.
+
 ━━━ CODE QUALITY — MANDATORY ━━━
 
 - Build the real thing, not a stub or skeleton. Complete, working, production-quality code.

@@ -65,7 +65,7 @@ import {
   setTaskRunner,
 } from '../brain/scheduler.js';
 import { loadPlugins } from '../plugins/loader.js';
-import { escapeHtml, markdownToHtml } from '../telegram/messages.js';
+import { escapeHtml, markdownToHtml, sanitizePaths } from '../telegram/messages.js';
 import type {
   AgentName,
   AgentResult,
@@ -1864,14 +1864,30 @@ ${extras.memorySynthesis}`);
           await this.appendAssistantTurn(chatId, summarizeTaskForHistory(plan, result));
         }).catch(async (err) => {
           log.error({ err, chatId }, 'Task runner failed');
-          this.telegram.sendMessage(chatId, failureMessage).catch((e) => {
+          // Build a user-facing message that includes the actual error
+          // class + first-line message (path-sanitized so we don't leak
+          // ~/Lucas/internal/paths). Falls back to the generic
+          // failureMessage if the error has no useful payload.
+          const detail = (() => {
+            const raw = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+            const firstLine = raw.split('\n')[0]?.trim() ?? '';
+            if (!firstLine) return '';
+            const sanitized = sanitizePaths(firstLine);
+            // Cap so a 4KB stack-trace one-liner doesn't blow Telegram limits
+            return sanitized.length > 240 ? `${sanitized.slice(0, 240).trimEnd()}…` : sanitized;
+          })();
+          const userMsg = detail
+            ? `${failureMessage}\n<i>Details: ${escapeHtml(detail)}</i>`
+            : failureMessage;
+          this.telegram.sendMessage(chatId, userMsg).catch((e) => {
             log.warn({ e, chatId }, 'Failed to notify user of task failure — user has no indication task crashed');
           });
           if (onError) {
             try { await onError(err); }
             catch (e) { log.warn({ e, chatId }, 'launchTask onError callback threw — continuing'); }
           }
-          await this.appendAssistantTurn(chatId, failureMessage);
+          // History gets the plain version (no HTML) since it goes to the LLM, not Telegram
+          await this.appendAssistantTurn(chatId, detail ? `${failureMessage} Details: ${detail}` : failureMessage);
         }).finally(resolve);
       });
     });
