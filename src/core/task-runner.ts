@@ -168,6 +168,12 @@ ${fileSnapshotSection}${coworkSection}
 
 7. WHEN AMBIGUOUS, ASK. If the step description leaves a real decision unanswered (which file? which option? confirm before this destructive action?), call the ask_user tool with one short, specific question. Do NOT guess on ambiguous decisions and ship the wrong answer. Use ask_user only for genuine ambiguity — if you can decide it yourself with the context you have, decide it. Quick judgment > unnecessary user round-trip > wrong guess.
 
+8. WEB SCRAPING — USE BROWSER TOOLS, NOT PYTHON SCRAPERS. For any work involving fetching, scraping, or interacting with a real website, use the browser_navigate / browser_extract / browser_click / browser_type / browser_get_text tools. Never write a Python/Node scraper using requests / urllib / Playwright / Puppeteer — modern sites (LoopNet, Zillow, LinkedIn, X, Amazon, basically any site worth scraping) use bot protection (Cloudflare, PerimeterX, HUMAN, Datadome) that detects those tools by fingerprint and either blocks them outright or serves a challenge that hangs forever. The browser bridge runs in the user's actual Chrome — it has cookies, has passed any bot checks, and looks like a real session. ALWAYS prefer it. If the browser extension is disconnected, ask_user to reconnect it — don't fall back to a Python scraper.
+
+9. LARGE FILE GENERATION — WRITE A SCRIPT, DON'T EMIT INLINE. If a step is "generate a report" or "produce X output from Y data" and the output will be more than ~500 lines or ~10KB, do NOT try to emit the full content as the body of one write_file call — the LLM call generating that response will hit the 120s tool timeout. Instead: write a small templating script (Python or Node, 30-50 lines) that reads the source data and emits the output file. Then run_terminal_command to execute the script. Deterministic templating + structured data → output file: that's a 5-second script, not a 60-second LLM generation.
+
+10. WHEN CO WORK GIVES A DIAGNOSIS, ACT ON IT — DON'T RETRY THE SAME APPROACH. If you see "Co Work diagnosed it" in the previous attempt's hint, that's a STRATEGY change, not a parameter tweak. If the diagnosis says "stop using ai.complete for this," that means STOP — pivot to a script. If the diagnosis says "use the open browser session, not a headless one," that means STOP using Playwright. Retrying the same shape after Co Work flagged it is a guaranteed waste of time and tokens.
+
 ━━━ CODE QUALITY — MANDATORY ━━━
 
 - Build the real thing, not a stub or skeleton. Complete, working, production-quality code.

@@ -234,17 +234,18 @@ export function formatCoWorkHint(response: CoWorkResponse, attemptNumber: number
   return `
 ━━━ CO WORK — SENIOR CONSULTANT ADVICE (Attempt ${attemptNumber}/3) ━━━
 
-A senior AI consultant has reviewed this failing step and provided the following guidance.
-You MUST follow this advice in your next attempt — do not repeat what failed before.
+A senior AI consultant has reviewed this failing step. Their diagnosis is the result of looking at the actual failure and what NEXUS tried — not a hint or a tweak.
 
-🔍 Root cause diagnosis:
+THIS IS A STRATEGY CHANGE. Do NOT retry the previous approach with parameter adjustments or a different prompt. If the diagnosis says "stop using X," that means STOP using X — pivot to the suggested tool/approach completely. Repeating the same shape after Co Work flagged it wastes time and burns the remaining attempts.
+
+🔍 Root cause:
 ${response.diagnosis}
 
-💡 Suggested fix:
+💡 Pivot to:
 ${response.suggestion}${steps}
 
 Confidence: ${confidenceLabel} (${Math.round(response.confidence * 100)}%)
 
-⚠️  Important: If this approach also fails, say so explicitly in your response — do not claim success.
+If this new approach also fails: say so plainly in your final response. Don't claim success on a failed step. The user would rather hear "I tried X and Y, both failed, here's what I learned" than a polished lie.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 }
