@@ -13,6 +13,7 @@ import { LearningSystem } from './learning/index.js';
 import { EmbeddingProvider } from './providers/embeddings.js';
 import { checkPermissions, warnMissingPermissions } from './macos/permissions.js';
 import { browserBridge } from './browser/bridge.js';
+import { taskOverlayBridge } from './core/task-overlay-bridge.js';
 import { setMcpToolExecutor } from './mcp/server.js';
 
 const log = createLogger('Main');
@@ -65,6 +66,12 @@ async function main() {
   log.info('Starting browser bridge...');
   browserBridge.start();
 
+  // Start task overlay bridge — broadcasts task lifecycle events on a
+  // separate local WS port (9339) so the installer-app overlay window
+  // can render orange-tint + pill-bar + confetti during tasks.
+  log.info('Starting task overlay bridge...');
+  taskOverlayBridge.start();
+
   // Notify Telegram when the Chrome extension connects / disconnects
   browserBridge.onConnect(() => {
     const chatId = config.telegram.chatId;
@@ -98,6 +105,7 @@ async function main() {
   const shutdown = async () => {
     log.info('Received shutdown signal');
     browserBridge.stop();
+    taskOverlayBridge.stop();
     await orchestrator.stop();
     process.exit(0);
   };
