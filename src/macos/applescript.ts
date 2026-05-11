@@ -42,11 +42,17 @@ function assertSafeAppleScriptArg(name: string, value: string): void {
  * Execute an arbitrary AppleScript string via osascript.
  * @param script - The AppleScript source code
  * @returns The stdout output from the script, trimmed
+ *
+ * Timeout: 120s by default. App-specific queries (Calendar, Mail,
+ * Music) routinely take >30s because the apps lazy-load iCloud data
+ * before the script can read it. 30s caused real Calendar queries
+ * to SIGTERM mid-flight (observed 2026-05-11). 120s matches the
+ * standard tool timeout.
  */
 export async function runAppleScript(script: string): Promise<string> {
   try {
     const { stdout } = await execFileAsync('osascript', ['-e', script], {
-      timeout: 30_000,
+      timeout: 120_000,
     });
     logger.debug({ scriptLength: script.length }, 'AppleScript executed');
     return stdout.trim();
@@ -61,11 +67,14 @@ export async function runAppleScript(script: string): Promise<string> {
  * Execute a JXA (JavaScript for Automation) script via osascript.
  * @param script - The JavaScript source code
  * @returns The stdout output from the script, trimmed
+ *
+ * Same 120s timeout as runAppleScript — JXA queries against
+ * iCloud-backed apps can be similarly slow.
  */
 export async function runJxa(script: string): Promise<string> {
   try {
     const { stdout } = await execFileAsync('osascript', ['-l', 'JavaScript', '-e', script], {
-      timeout: 30_000,
+      timeout: 120_000,
     });
     logger.debug({ scriptLength: script.length }, 'JXA executed');
     return stdout.trim();

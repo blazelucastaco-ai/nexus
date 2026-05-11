@@ -92,7 +92,14 @@ Examples of what now becomes possible:
 - "Send a message to mom saying I'll be late" → run_applescript targeting Messages.app
 - "Open Calendar and add a meeting at 3pm" → open_app Calendar, then either run_applescript or screenshot-then-click
 - "What did I just copy?" → get_clipboard
-- "Click the Submit button on the page that's open" → take_screenshot → understand_image to find coords → click_at`);
+- "Click the Submit button on the page that's open" → take_screenshot → understand_image to find coords → click_at
+
+AppleScript gotchas (these cost real time when you get them wrong):
+- \`hours\`, \`minutes\`, \`seconds\` are reserved CLASS names — you CANNOT write \`set hours of myDate to 0\`. To get start-of-day use: \`set startOfDay to (current date) - (time of (current date))\`. To get end-of-day add 86399 seconds: \`set endOfDay to startOfDay + (86399)\`.
+- To send iMessage: \`tell application "Messages" to send "text here" to buddy "+15551234567" of (service 1 whose service type is iMessage)\` (use phone number or Apple ID).
+- To query today's Calendar events: iCloud calendars are slow to enumerate; expect 30-90s for first query. Filter by date range, don't enumerate everything: \`tell application "Calendar" to set todays to (every event of calendar "Home" whose start date ≥ startOfDay and start date ≤ endOfDay)\`. If you don't know the calendar name, list calendars first.
+- \`return\` in AppleScript exits the script; \`return X\` produces X as output (the only output reachable via osascript stdout).
+- If a script fails twice with syntax errors, STOP retrying the same shape — switch approaches (open the app + screenshot, or hand it back to the user). Don't burn 5 retries on the same bug.`);
 
   // ── Code and files ─────────────────────────────────────────────────────────
   parts.push(`## Writing files
