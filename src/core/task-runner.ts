@@ -50,6 +50,12 @@ export interface TaskRunResult {
   durationMs: number;
   timedOut?: boolean;
   coworkEvents?: CoWorkEvent[];
+  /** Titles of steps that finished verified=true. Used by
+   *  summarizeTaskForHistory so the chat-mode model can answer
+   *  follow-ups like "where's the report?" without taking a screenshot. */
+  successfulStepTitles?: string[];
+  /** Titles of steps that failed (verified=false or crashed). Same use. */
+  failedStepTitles?: string[];
 }
 
 // ─── Per-step model tier resolver ────────────────────────────────────────────
@@ -415,10 +421,27 @@ export function summarizeTaskForHistory(
     : result.timedOut
       ? `timed out after ${result.completedSteps}/${result.totalSteps} steps`
       : `partial — ${result.completedSteps}/${result.totalSteps} steps completed`;
-  const filesLine = result.filesProduced.length > 0
-    ? ` Files created: ${result.filesProduced.join(', ')}.`
-    : '';
-  return `I completed the task "${plan.title}" — ${status}.${filesLine}`;
+
+  const parts: string[] = [`I completed the task "${plan.title}" — ${status}.`];
+
+  // Named successes + failures. Without this, a follow-up like "where is
+  // the report?" lands on a vague "2/4 steps completed" message and the
+  // chat-mode model can't tell what's missing — observed 2026-05-11
+  // when NEXUS took a screenshot of the desktop instead of saying the
+  // report step had failed three times.
+  if (result.failedStepTitles && result.failedStepTitles.length > 0) {
+    parts.push(`Failed steps: ${result.failedStepTitles.join('; ')}.`);
+  }
+  if (result.successfulStepTitles && result.successfulStepTitles.length > 0 && !result.success) {
+    parts.push(`Completed steps: ${result.successfulStepTitles.join('; ')}.`);
+  }
+  if (result.filesProduced.length > 0) {
+    parts.push(`Files created: ${result.filesProduced.join(', ')}.`);
+  } else if (!result.success) {
+    parts.push('No files were produced.');
+  }
+
+  return parts.join(' ');
 }
 
 /**
@@ -1261,6 +1284,11 @@ export async function runTask(opts: {
     filesProduced: uniqueFiles,
   });
 
+  // Split step titles by outcome so the chat-mode model can answer
+  // follow-ups about what succeeded vs failed without re-checking files.
+  const successfulStepTitles = stepResults.filter((r) => r.success).map((r) => r.step.title);
+  const failedStepTitles = stepResults.filter((r) => !r.success).map((r) => r.step.title);
+
   return {
     success: finalSuccess,
     completedSteps: stepsCompleted,
@@ -1271,6 +1299,8 @@ export async function runTask(opts: {
     durationMs: totalDuration,
     timedOut: taskTimedOut,
     coworkEvents: allCoworkEvents,
+    successfulStepTitles,
+    failedStepTitles,
   };
 }
 

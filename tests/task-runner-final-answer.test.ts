@@ -226,6 +226,57 @@ describe('summarizeTaskForHistory', () => {
     expect(out.startsWith('I completed the task')).toBe(true);
     expect(out.startsWith('[')).toBe(false);
   });
+
+  // 2026-05-11: enriched with per-step success/failure titles so the
+  // chat-mode model can answer "where is the report?" with specifics
+  // instead of grabbing a screenshot. Observed bug: NEXUS finished a
+  // LoopNet scrape task where step 3 (generate report) failed; user asked
+  // "where is the report?" and NEXUS took a screenshot of the desktop
+  // because the history summary just said "2/4 steps completed" with no
+  // detail on WHICH step failed.
+  it('names the failed steps when the task was partial', () => {
+    const out = summarizeTaskForHistory(
+      { title: 'Scrape LoopNet Cell Towers' },
+      baseResult({
+        success: false,
+        completedSteps: 2,
+        totalSteps: 4,
+        filesProduced: ['~/Desktop/loopnet_scrape_v2.py'],
+        failedStepTitles: ['Generate dark-mode HTML report', 'Verify report opens correctly'],
+        successfulStepTitles: ['Scrape all 8 pages', 'Identify cell towers'],
+      }),
+    );
+    expect(out).toContain('Failed steps: Generate dark-mode HTML report; Verify report opens correctly.');
+    expect(out).toContain('Completed steps: Scrape all 8 pages; Identify cell towers.');
+    expect(out).toContain('Files created: ~/Desktop/loopnet_scrape_v2.py.');
+  });
+
+  it('does not name completed steps on a fully successful task (would be redundant)', () => {
+    const out = summarizeTaskForHistory(
+      { title: 'All good' },
+      baseResult({
+        success: true,
+        successfulStepTitles: ['Step A', 'Step B'],
+        failedStepTitles: [],
+      }),
+    );
+    expect(out).not.toContain('Completed steps:');
+    expect(out).not.toContain('Failed steps:');
+  });
+
+  it('explicitly says no files were produced on a partial failure with no files', () => {
+    const out = summarizeTaskForHistory(
+      { title: 'All failed' },
+      baseResult({
+        success: false,
+        completedSteps: 0,
+        totalSteps: 2,
+        filesProduced: [],
+        failedStepTitles: ['Step 1', 'Step 2'],
+      }),
+    );
+    expect(out).toContain('No files were produced.');
+  });
 });
 
 describe('formatDuration', () => {
