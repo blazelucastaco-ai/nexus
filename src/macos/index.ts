@@ -1,6 +1,6 @@
 import { createLogger } from '../utils/logger.js';
 import { captureScreen, captureRegion, captureWindow } from './screenshots.js';
-import { moveMouse, click, typeText, keyPress, type Modifier } from './input.js';
+import { moveMouse, click, doubleClick, scroll, typeText, keyPress, type Modifier } from './input.js';
 import {
   getFrontmostApp,
   getWindowList,
@@ -200,6 +200,8 @@ export {
   captureWindow,
   moveMouse,
   click,
+  doubleClick,
+  scroll,
   typeText,
   keyPress,
   getFrontmostApp,

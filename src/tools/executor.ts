@@ -25,6 +25,22 @@ import {
   backfillProjectsFromDisk,
   slugify,
 } from '../data/projects-repository.js';
+import {
+  moveMouse as macMoveMouse,
+  click as macClick,
+  doubleClick as macDoubleClick,
+  scroll as macScroll,
+  typeText as macTypeText,
+  keyPress as macKeyPress,
+  openApp as macOpenApp,
+  activateApp as macActivateApp,
+  quitApp as macQuitApp,
+  getFrontmostApp as macGetFrontmostApp,
+  getClipboard as macGetClipboard,
+  setClipboard as macSetClipboard,
+  runAppleScript as macRunAppleScript,
+  type Modifier as MacModifier,
+} from '../macos/index.js';
 import type { SelfAwareness } from '../brain/self-awareness.js';
 import type { InnerMonologue } from '../brain/inner-monologue.js';
 import {
@@ -136,6 +152,21 @@ const TOOL_RISK: Record<string, 'AUTO' | 'LOGGED' | 'CONFIRM'> = {
   transcribe_audio:    'AUTO',
   // Approval
   check_command_risk:  'AUTO',
+  // GUI / Computer Use — driving Lucas's actual Mac. LOGGED so every
+  // mouse/keyboard/app action is loud in logs.
+  click_at:            'LOGGED',
+  double_click_at:     'LOGGED',
+  move_mouse:          'AUTO',     // mouse move alone is harmless
+  type_text:           'LOGGED',
+  press_keys:          'LOGGED',
+  scroll_at:           'AUTO',     // scrolling is read-only
+  open_app:            'LOGGED',
+  activate_app:        'AUTO',     // just brings to front
+  quit_app:            'LOGGED',
+  get_frontmost_app:   'AUTO',     // read-only
+  get_clipboard:       'AUTO',     // read-only
+  set_clipboard:       'LOGGED',
+  run_applescript:     'LOGGED',   // same risk class as run_terminal_command
   // Chrome Browser Control
   browser_navigate:       'AUTO',
   browser_extract:        'AUTO',
@@ -554,6 +585,20 @@ export class ToolExecutor {
       case 'ask_user':            return this.askUser(args, context);
       case 'read_project':        return this.readProject(args);
       case 'list_projects':       return this.listProjectsTool();
+      // GUI / Computer Use
+      case 'click_at':            return this.guiClick(args, false);
+      case 'double_click_at':     return this.guiDoubleClick(args);
+      case 'move_mouse':          return this.guiMoveMouse(args);
+      case 'type_text':           return this.guiTypeText(args);
+      case 'press_keys':          return this.guiPressKeys(args);
+      case 'scroll_at':           return this.guiScroll(args);
+      case 'open_app':            return this.guiOpenApp(args);
+      case 'activate_app':        return this.guiActivateApp(args);
+      case 'quit_app':            return this.guiQuitApp(args);
+      case 'get_frontmost_app':   return this.guiGetFrontmostApp();
+      case 'get_clipboard':       return this.guiGetClipboard();
+      case 'set_clipboard':       return this.guiSetClipboard(args);
+      case 'run_applescript':     return this.guiRunAppleScript(args);
       case 'generate_image':      return this.generateImage(args);
       case 'speak':               return this.speak(args);
       case 'list_sessions':       return this.listSessions();
@@ -1630,6 +1675,186 @@ export class ToolExecutor {
       return `- ${p.display_name} (${p.name}) — ${path}, last active ${lastActive}, ${p.task_count} task${p.task_count === 1 ? '' : 's'}`;
     });
     return lines.join('\n');
+  }
+
+  // ── GUI / Computer Use (2026-05-11) ────────────────────────────────
+  //
+  // Real mouse + keyboard control. Pairs with take_screenshot +
+  // understand_image to give NEXUS a full perception → action loop on
+  // the user's Mac. Every method here delegates to src/macos/ helpers
+  // that already worked in isolation; this just exposes them as model-
+  // callable tools and wraps the I/O contract (parse args → call →
+  // format a short result string).
+  private guiClick(args: Record<string, unknown>, _double: boolean): Promise<string> {
+    return this._guiClickImpl(args, false);
+  }
+  private guiDoubleClick(args: Record<string, unknown>): Promise<string> {
+    return this._guiClickImpl(args, true);
+  }
+  private async _guiClickImpl(args: Record<string, unknown>, isDouble: boolean): Promise<string> {
+    const x = Number(args.x);
+    const y = Number(args.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return `Error: ${isDouble ? 'double_click_at' : 'click_at'} requires numeric x and y.`;
+    }
+    const button = (args.button === 'right' ? 'right' : 'left') as 'left' | 'right';
+    try {
+      if (isDouble) {
+        await macDoubleClick(x, y);
+        return `Double-clicked at (${x}, ${y}).`;
+      }
+      await macClick(x, y, button);
+      return `${button === 'right' ? 'Right' : 'Left'}-clicked at (${x}, ${y}).`;
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  private async guiMoveMouse(args: Record<string, unknown>): Promise<string> {
+    const x = Number(args.x);
+    const y = Number(args.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return 'Error: move_mouse requires numeric x and y.';
+    }
+    try {
+      await macMoveMouse(x, y);
+      return `Moved mouse to (${x}, ${y}).`;
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  private async guiTypeText(args: Record<string, unknown>): Promise<string> {
+    const text = typeof args.text === 'string' ? args.text : '';
+    if (!text) return 'Error: type_text requires a non-empty "text" parameter.';
+    try {
+      await macTypeText(text);
+      const preview = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+      return `Typed: ${preview}`;
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  private async guiPressKeys(args: Record<string, unknown>): Promise<string> {
+    const key = typeof args.key === 'string' ? args.key.trim() : '';
+    if (!key) return 'Error: press_keys requires a "key" parameter.';
+    let modifiers: MacModifier[] | undefined;
+    if (typeof args.modifiers === 'string' && args.modifiers.trim()) {
+      try {
+        const parsed = JSON.parse(args.modifiers) as unknown;
+        if (Array.isArray(parsed)) {
+          modifiers = parsed.filter((m): m is MacModifier =>
+            typeof m === 'string' && ['command', 'shift', 'option', 'control', 'fn'].includes(m),
+          );
+        }
+      } catch {
+        return `Error: modifiers must be a JSON array string like '["command","shift"]'. Got: ${args.modifiers}`;
+      }
+    } else if (Array.isArray(args.modifiers)) {
+      modifiers = (args.modifiers as unknown[]).filter((m): m is MacModifier =>
+        typeof m === 'string' && ['command', 'shift', 'option', 'control', 'fn'].includes(m),
+      );
+    }
+    try {
+      await macKeyPress(key, modifiers);
+      const combo = modifiers && modifiers.length > 0 ? `${modifiers.join('+')}+${key}` : key;
+      return `Pressed ${combo}.`;
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  private async guiScroll(args: Record<string, unknown>): Promise<string> {
+    const x = Number(args.x);
+    const y = Number(args.y);
+    const amount = Number(args.amount);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(amount)) {
+      return 'Error: scroll_at requires numeric x, y, amount.';
+    }
+    try {
+      await macScroll(x, y, amount);
+      return `Scrolled ${amount > 0 ? 'down' : 'up'} ${Math.abs(amount)} at (${x}, ${y}).`;
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  private async guiOpenApp(args: Record<string, unknown>): Promise<string> {
+    const name = typeof args.name === 'string' ? args.name.trim() : '';
+    if (!name) return 'Error: open_app requires a "name" parameter.';
+    try {
+      await macOpenApp(name);
+      return `Opened ${name}.`;
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  private async guiActivateApp(args: Record<string, unknown>): Promise<string> {
+    const name = typeof args.name === 'string' ? args.name.trim() : '';
+    if (!name) return 'Error: activate_app requires a "name" parameter.';
+    try {
+      await macActivateApp(name);
+      return `${name} is now frontmost.`;
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  private async guiQuitApp(args: Record<string, unknown>): Promise<string> {
+    const name = typeof args.name === 'string' ? args.name.trim() : '';
+    if (!name) return 'Error: quit_app requires a "name" parameter.';
+    try {
+      await macQuitApp(name);
+      return `Quit ${name}.`;
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  private async guiGetFrontmostApp(): Promise<string> {
+    try {
+      const name = await macGetFrontmostApp();
+      return `Frontmost app: ${name || '(none)'}.`;
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  private async guiGetClipboard(): Promise<string> {
+    try {
+      const text = await macGetClipboard();
+      if (!text) return 'Clipboard is empty.';
+      const preview = text.length > 1500 ? `${text.slice(0, 1500)}…` : text;
+      return `Clipboard:\n${preview}`;
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  private async guiSetClipboard(args: Record<string, unknown>): Promise<string> {
+    const text = typeof args.text === 'string' ? args.text : '';
+    if (text === '') return 'Error: set_clipboard requires a "text" parameter (empty string allowed only if intentional).';
+    try {
+      await macSetClipboard(text);
+      const preview = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+      return `Clipboard set: ${preview}`;
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  private async guiRunAppleScript(args: Record<string, unknown>): Promise<string> {
+    const script = typeof args.script === 'string' ? args.script : '';
+    if (!script.trim()) return 'Error: run_applescript requires a non-empty "script" parameter.';
+    try {
+      const out = await macRunAppleScript(script);
+      if (!out) return 'AppleScript ran successfully (no output).';
+      return `AppleScript output:\n${out.length > 3000 ? `${out.slice(0, 3000)}…` : out}`;
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
   }
 
   // ── read_project ───────────────────────────────────────────────────

@@ -998,6 +998,186 @@ export const toolDefinitions: ToolDefinition[] = [
       required: [],
     },
   },
+  // ── GUI / Computer Use (2026-05-11) ─────────────────────────────────────
+  // Real mouse + keyboard control over the user's Mac. The model sees the
+  // screen via take_screenshot + understand_image, decides what to do, then
+  // acts. Combined with the existing perception tools, this is a full
+  // perception → action loop. Use carefully — these tools drive the user's
+  // actual Mac, not a sandbox.
+  //
+  // Coordinate convention: absolute screen coordinates, origin top-left.
+  // On Retina displays, coordinates are in POINTS not pixels (a 2560×1600
+  // physical display is typically 1280×800 in points).
+  {
+    name: 'click_at',
+    description:
+      'Left-click (default) or right-click at absolute screen coordinates. Use this to click buttons, menus, links — anything on screen. ' +
+      'BEFORE you click, take_screenshot and look at where you\'re aiming. Don\'t guess coordinates from memory. After the click, take another screenshot to confirm the state changed. ' +
+      'Coordinates are in points from the top-left of the primary display. Retina displays use logical points, not raw pixels.',
+    parameters: {
+      type: 'object',
+      properties: {
+        x: { type: 'number', description: 'Screen x coordinate (points from left edge)' },
+        y: { type: 'number', description: 'Screen y coordinate (points from top edge)' },
+        button: { type: 'string', enum: ['left', 'right'], description: 'Mouse button — default left' },
+      },
+      required: ['x', 'y'],
+    },
+  },
+  {
+    name: 'double_click_at',
+    description:
+      'Double-left-click at absolute screen coordinates. Use for opening files in Finder, selecting words, anywhere a single click is wrong. Same coordinate rules as click_at — take_screenshot first, don\'t guess.',
+    parameters: {
+      type: 'object',
+      properties: {
+        x: { type: 'number', description: 'Screen x coordinate (points)' },
+        y: { type: 'number', description: 'Screen y coordinate (points)' },
+      },
+      required: ['x', 'y'],
+    },
+  },
+  {
+    name: 'move_mouse',
+    description:
+      'Move the cursor to a screen location WITHOUT clicking. Useful for triggering hover states (tooltips, menus that open on hover) or positioning before a deliberate click. Same coordinate rules as click_at.',
+    parameters: {
+      type: 'object',
+      properties: {
+        x: { type: 'number', description: 'Screen x coordinate (points)' },
+        y: { type: 'number', description: 'Screen y coordinate (points)' },
+      },
+      required: ['x', 'y'],
+    },
+  },
+  {
+    name: 'type_text',
+    description:
+      'Type a string of text into the currently focused field. The focused field is wherever the cursor currently sits — click_at first to focus a specific input. Types literally, so newlines in the string become Return presses. ' +
+      'Do NOT use for keyboard shortcuts (Cmd+C, Cmd+Tab, etc.) — use press_keys for those.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Exact text to type. Includes punctuation and case.' },
+      },
+      required: ['text'],
+    },
+  },
+  {
+    name: 'press_keys',
+    description:
+      'Press a keyboard shortcut or single key. Examples: ' +
+      '{"key": "space", "modifiers": ["command"]} for Cmd+Space (Spotlight). ' +
+      '{"key": "tab", "modifiers": ["command"]} for app switcher. ' +
+      '{"key": "return"} for Enter. ' +
+      '{"key": "escape"} for Esc. ' +
+      'Use modifier names: command, shift, option, control, fn.',
+    parameters: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Key name: a-z, 0-9, return, tab, space, escape, delete, left, right, up, down, etc.' },
+        modifiers: { type: 'string', description: 'JSON-array string of modifiers: ["command", "shift"]. Omit if no modifiers.' },
+      },
+      required: ['key'],
+    },
+  },
+  {
+    name: 'scroll_at',
+    description:
+      'Scroll at a screen location. Positive amount = scroll down/right; negative = scroll up/left. The cursor moves to (x, y) first so the scroll happens over the right element.',
+    parameters: {
+      type: 'object',
+      properties: {
+        x: { type: 'number', description: 'Screen x coordinate to scroll over' },
+        y: { type: 'number', description: 'Screen y coordinate to scroll over' },
+        amount: { type: 'number', description: 'Scroll amount in lines. Positive = down, negative = up.' },
+      },
+      required: ['x', 'y', 'amount'],
+    },
+  },
+  {
+    name: 'open_app',
+    description:
+      'Launch a macOS application by name. Examples: "Safari", "Messages", "Calendar", "Visual Studio Code". ' +
+      'If the app is already running, brings it to front. After opening, take_screenshot to see its current state before deciding what to do next.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Application name as it appears in /Applications or anywhere Spotlight finds it.' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'activate_app',
+    description:
+      'Bring an already-running app to the front (focus it). Like clicking its Dock icon. Does not launch the app if it\'s not running — use open_app for that. Useful when you want to switch focus to an app that\'s already open in the background.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Application name.' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'quit_app',
+    description:
+      'Quit a running macOS application gracefully (Cmd+Q equivalent). The app gets to prompt about unsaved changes if any. Does NOT force-kill — for that use run_terminal_command with `killall`.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Application name.' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'get_frontmost_app',
+    description:
+      'Returns the name of the app currently in focus. Use this when you\'ve just sent a hotkey or click and want to know which app received the action, or when you need to know what the user is looking at.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'get_clipboard',
+    description:
+      'Read the current contents of the system clipboard. Use when the user references "what I just copied" or "what\'s on my clipboard."',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'set_clipboard',
+    description:
+      'Write text to the system clipboard. The user can then paste it (Cmd+V) anywhere. Use this for handing off generated content to the user without typing it into a specific field.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Text to place on the clipboard.' },
+      },
+      required: ['text'],
+    },
+  },
+  {
+    name: 'run_applescript',
+    description:
+      'Run an arbitrary AppleScript snippet via osascript. Returns stdout. Use this for complex automation that\'s reliable via AppleScript but awkward via clicks (sending iMessages, controlling Music/Spotify, scripting Mail, etc.). ' +
+      'AppleScript is MUCH more reliable than coordinate-clicking for apps that support it — prefer this over click_at for Messages, Mail, Calendar, Safari URL navigation, etc. ' +
+      'Powerful tool — equivalent to run_terminal_command in risk. Don\'t use it for things you can do with the higher-level tools.',
+    parameters: {
+      type: 'object',
+      properties: {
+        script: { type: 'string', description: 'AppleScript source. Multi-line OK. Returns the last expression as a string.' },
+      },
+      required: ['script'],
+    },
+  },
 ];
 
 /**
