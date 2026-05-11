@@ -5,44 +5,48 @@
 //   - white pill bar at the bottom showing the current step text
 //   - smooth slide-out animation + confetti burst on task completion
 //
-// Subscribes to the daemon's task-overlay-bridge WebSocket on
-// 127.0.0.1:9339. Auto-reconnects on disconnect so a daemon restart
-// doesn't strand the overlay forever.
+// Architecture: the RENDERER process owns the WebSocket connection to
+// the daemon's task-overlay-bridge on ws://127.0.0.1:9339. The main
+// process just creates the window once at app start. The window is
+// always visible but fully transparent + click-through until the
+// renderer's incoming WS events flip CSS classes that fade in the glow
+// and slide the pill up.
+//
+// Why renderer-owned WS:
+//   - No postMessage race between main → renderer (was losing the first
+//     event because the renderer hadn't finished loading the data URL
+//     by the time main fired executeJavaScript).
+//   - Browser WebSocket API is built in, no `ws` dep needed in the
+//     main process.
+//   - Single source of truth for visual state.
 //
 // Window flags:
 //   - transparent: true        — see-through background
 //   - frame: false             — no titlebar / chrome
-//   - alwaysOnTop: true        — stays above all app windows
+//   - alwaysOnTop: 'screen-saver' — above everything, including fullscreen
 //   - skipTaskbar: true        — doesn't show in Dock/CMD-Tab
-//   - resizable: false
-//   - focusable: false         — clicks pass to the window underneath
+//   - resizable / movable / focusable: false
 //   - hasShadow: false         — no native shadow
-// setIgnoreMouseEvents(true)   — every click passes through
+//   - setIgnoreMouseEvents(true, { forward: true }) — clicks pass through
 
 import { BrowserWindow, screen } from 'electron';
-import WebSocket from 'ws';
-
-const BRIDGE_URL = 'ws://127.0.0.1:9339';
-const RECONNECT_MS = 3_000;
 
 let overlayWindow: BrowserWindow | null = null;
-let bridgeSocket: WebSocket | null = null;
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-// ─── HTML payload (inlined; loaded via data: URL) ──────────────────────
-// Self-contained so we don't need a separate vite entry point or asset
-// pipeline for the overlay. ~150 LOC of HTML+CSS+JS.
+// ─── HTML payload (self-contained, loaded via data: URL) ──────────────
+//
+// Inline so we don't need a separate vite entry point. Renderer connects
+// directly to ws://127.0.0.1:9339 with reconnect on disconnect. State is
+// driven entirely by event class toggles on #glow + #pill.
 const OVERLAY_HTML = String.raw`<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <title>NEXUS Overlay</title>
 <style>
-  /* fully transparent root; only the glow + pill are visible */
   html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; height: 100%; width: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; }
   body { pointer-events: none; }
 
-  /* orange ambient glow — radial gradient at the edges of the screen */
   #glow {
     position: fixed; inset: 0;
     background: radial-gradient(ellipse at center, transparent 40%, rgba(255, 140, 0, 0.22) 100%);
@@ -52,12 +56,11 @@ const OVERLAY_HTML = String.raw`<!DOCTYPE html>
   }
   #glow.show { opacity: 1; }
 
-  /* bottom pill */
   #pill {
     position: fixed;
     bottom: 36px;
     left: 50%;
-    transform: translateX(-50%) translateY(60px);
+    transform: translateX(-50%) translateY(80px);
     background: #FFFFFF;
     color: #111;
     padding: 14px 22px;
@@ -71,15 +74,9 @@ const OVERLAY_HTML = String.raw`<!DOCTYPE html>
     transition: transform 480ms cubic-bezier(.34,1.56,.64,1), opacity 280ms ease-out;
     will-change: transform, opacity;
   }
-  #pill.show {
-    transform: translateX(-50%) translateY(0);
-    opacity: 1;
-  }
-  #pill.hide {
-    transform: translateX(-50%) translateY(80px);
-    opacity: 0;
-    transition: transform 540ms cubic-bezier(.4,0,.2,1), opacity 420ms ease-in;
-  }
+  #pill.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+  #pill.hide { transform: translateX(-50%) translateY(80px); opacity: 0; transition: transform 540ms cubic-bezier(.4,0,.2,1), opacity 420ms ease-in; }
+
   #pill-dot {
     width: 8px; height: 8px; border-radius: 50%;
     background: #FF8C00;
@@ -92,16 +89,10 @@ const OVERLAY_HTML = String.raw`<!DOCTYPE html>
     70%  { box-shadow: 0 0 0 14px rgba(255, 140, 0, 0); }
     100% { box-shadow: 0 0 0 0 rgba(255, 140, 0, 0); }
   }
-  #pill-text {
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
 
-  /* confetti canvas — full screen, drawn on top */
-  #confetti {
-    position: fixed; inset: 0;
-    pointer-events: none;
-    width: 100%; height: 100%;
-  }
+  #pill-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  #confetti { position: fixed; inset: 0; pointer-events: none; width: 100%; height: 100%; }
 </style>
 </head>
 <body>
@@ -113,6 +104,7 @@ const OVERLAY_HTML = String.raw`<!DOCTYPE html>
   <canvas id="confetti"></canvas>
 
 <script>
+(function () {
   const glow = document.getElementById('glow');
   const pill = document.getElementById('pill');
   const pillText = document.getElementById('pill-text');
@@ -129,8 +121,7 @@ const OVERLAY_HTML = String.raw`<!DOCTYPE html>
   resizeCanvas();
   window.addEventListener('resize', resizeCanvas);
 
-  // Tiny self-contained confetti — no external library. Each piece is a
-  // small rotated rectangle with gravity + drag. ~200 pieces per burst.
+  // Confetti — 220 rotated rectangles, gravity + drag, ~120-frame lifetime
   const particles = [];
   function spawnConfetti() {
     const colors = ['#FF8C00', '#FFC857', '#FFFFFF', '#FF6B35', '#06D6A0', '#118AB2'];
@@ -152,13 +143,12 @@ const OVERLAY_HTML = String.raw`<!DOCTYPE html>
       });
     }
   }
-
   function tickConfetti() {
     if (particles.length === 0) return;
     ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
-      p.vy += 0.35;           // gravity
+      p.vy += 0.35;
       p.vx *= 0.99; p.vy *= 0.99;
       p.x += p.vx; p.y += p.vy;
       p.rot += p.rotV;
@@ -170,43 +160,51 @@ const OVERLAY_HTML = String.raw`<!DOCTYPE html>
       ctx.fillStyle = p.color;
       ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
       ctx.restore();
-      if (p.y > window.innerHeight + 50 || p.life > 140) {
-        particles.splice(i, 1);
-      }
+      if (p.y > window.innerHeight + 50 || p.life > 140) particles.splice(i, 1);
     }
     if (particles.length > 0) requestAnimationFrame(tickConfetti);
     else ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
   }
 
-  // Drive the visual state from messages posted by the main process.
-  // The main process owns the WebSocket connection; it forwards each
-  // overlay event here via webContents.send → ipcRenderer in preload.
-  // To keep this overlay window simple + sandbox-safe we use a window
-  // message channel instead of preload.
-  window.addEventListener('message', (e) => {
-    const evt = e.data;
-    if (!evt || typeof evt !== 'object') return;
-    if (evt.kind === 'task.planned' || evt.kind === 'task.step') {
-      pillText.textContent = evt.text || 'Working…';
-      glow.classList.add('show');
-      pill.classList.remove('hide');
-      pill.classList.add('show');
-    } else if (evt.kind === 'task.completed') {
-      pillText.textContent = evt.text || 'Done';
-      // Brief moment showing the final text before sliding out
-      setTimeout(() => {
-        pill.classList.remove('show');
-        pill.classList.add('hide');
-        glow.classList.remove('show');
-        spawnConfetti();
-        requestAnimationFrame(tickConfetti);
-      }, 280);
-    } else if (evt.kind === 'hide') {
+  function showActive(text) {
+    pillText.textContent = text || 'Working…';
+    glow.classList.add('show');
+    pill.classList.remove('hide');
+    pill.classList.add('show');
+  }
+  function showDone(text) {
+    pillText.textContent = text || 'Done';
+    setTimeout(() => {
       pill.classList.remove('show');
       pill.classList.add('hide');
       glow.classList.remove('show');
-    }
-  });
+      spawnConfetti();
+      requestAnimationFrame(tickConfetti);
+    }, 280);
+  }
+
+  // WebSocket connection to daemon's task-overlay-bridge.
+  let ws = null;
+  let reconnectTimer = null;
+  function connect() {
+    try { ws = new WebSocket('ws://127.0.0.1:9339'); } catch (e) { scheduleReconnect(); return; }
+    ws.onopen = () => { if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; } };
+    ws.onmessage = (e) => {
+      let evt;
+      try { evt = JSON.parse(e.data); } catch { return; }
+      if (!evt || typeof evt.kind !== 'string') return;
+      if (evt.kind === 'task.planned' || evt.kind === 'task.step') showActive(evt.text);
+      else if (evt.kind === 'task.completed') showDone(evt.text);
+    };
+    ws.onclose = () => { ws = null; scheduleReconnect(); };
+    ws.onerror = () => { /* close handler covers reconnect */ };
+  }
+  function scheduleReconnect() {
+    if (reconnectTimer) return;
+    reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, 3000);
+  }
+  connect();
+})();
 </script>
 </body>
 </html>`;
@@ -232,7 +230,7 @@ function createOverlayWindow(): void {
     focusable: false,
     hasShadow: false,
     show: false,
-    backgroundColor: '#00000000', // fully transparent
+    backgroundColor: '#00000000',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -241,92 +239,31 @@ function createOverlayWindow(): void {
     },
   });
 
-  // Always above EVERYTHING — including fullscreen apps. 'screen-saver'
-  // is the highest level Electron exposes on macOS.
+  // Highest z-order Electron exposes on macOS.
   overlayWindow.setAlwaysOnTop(true, 'screen-saver');
-
-  // Mouse passes through the entire overlay — user can keep working.
+  // Every click passes through to whatever's underneath.
   overlayWindow.setIgnoreMouseEvents(true, { forward: true });
-
-  // Show on all spaces / desktops + above fullscreen apps.
+  // Visible on every Space + over fullscreen apps.
   overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
   const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(OVERLAY_HTML)}`;
   void overlayWindow.loadURL(dataUrl);
 
-  overlayWindow.on('closed', () => {
-    overlayWindow = null;
+  // Show only after the renderer is ready so we don't briefly flash a
+  // blank transparent canvas. Pill + glow are invisible-by-default via
+  // CSS until the renderer's WS receives an event and flips the classes.
+  overlayWindow.once('ready-to-show', () => {
+    if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.showInactive();
   });
-}
 
-function showOverlay(evt: { kind: string; text: string }): void {
-  if (!overlayWindow || overlayWindow.isDestroyed()) {
-    createOverlayWindow();
-  }
-  if (!overlayWindow) return;
-  overlayWindow.showInactive(); // show without stealing focus
-  // Wait a tick for the renderer to be ready, then post the event in.
-  setTimeout(() => {
-    if (overlayWindow && !overlayWindow.isDestroyed()) {
-      // executeJavaScript posts the event to the renderer's window.
-      // JSON.stringify the event so the renderer just reads it as data.
-      const js = `window.postMessage(${JSON.stringify(evt)}, '*');`;
-      void overlayWindow.webContents.executeJavaScript(js).catch(() => { /* tolerate */ });
-    }
-  }, 50);
-}
-
-function hideOverlay(): void {
-  if (!overlayWindow || overlayWindow.isDestroyed()) return;
-  // Let the renderer animate the pill out + confetti before hiding the window.
-  const js = `window.postMessage({ kind: 'hide' }, '*');`;
-  void overlayWindow.webContents.executeJavaScript(js).catch(() => { /* tolerate */ });
-  setTimeout(() => {
-    if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.hide();
-  }, 1200);
-}
-
-function connectBridge(): void {
-  try {
-    bridgeSocket = new WebSocket(BRIDGE_URL);
-  } catch {
-    scheduleReconnect();
-    return;
-  }
-  bridgeSocket.on('open', () => {
-    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-  });
-  bridgeSocket.on('message', (raw: Buffer) => {
-    let evt: { kind: string; text: string };
-    try { evt = JSON.parse(raw.toString()); } catch { return; }
-    if (!evt || typeof evt.kind !== 'string') return;
-    if (evt.kind === 'task.planned' || evt.kind === 'task.step') {
-      showOverlay(evt);
-    } else if (evt.kind === 'task.completed') {
-      // Show final state + confetti, then hide after the animation runs.
-      showOverlay(evt);
-      setTimeout(hideOverlay, 1500);
-    }
-  });
-  bridgeSocket.on('close', () => { bridgeSocket = null; scheduleReconnect(); });
-  bridgeSocket.on('error', () => { /* swallow — reconnect handler covers it */ });
-}
-
-function scheduleReconnect(): void {
-  if (reconnectTimer) return;
-  reconnectTimer = setTimeout(() => { reconnectTimer = null; connectBridge(); }, RECONNECT_MS);
+  overlayWindow.on('closed', () => { overlayWindow = null; });
 }
 
 export function startTaskOverlay(): void {
   createOverlayWindow();
-  connectBridge();
 }
 
 export function stopTaskOverlay(): void {
-  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-  if (bridgeSocket) { try { bridgeSocket.close(); } catch { /* ignore */ } bridgeSocket = null; }
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.destroy();
-  }
+  if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.destroy();
   overlayWindow = null;
 }
