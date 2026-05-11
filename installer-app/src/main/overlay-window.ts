@@ -249,12 +249,22 @@ function createOverlayWindow(): void {
   const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(OVERLAY_HTML)}`;
   void overlayWindow.loadURL(dataUrl);
 
-  // Show only after the renderer is ready so we don't briefly flash a
-  // blank transparent canvas. Pill + glow are invisible-by-default via
-  // CSS until the renderer's WS receives an event and flips the classes.
+  // Show after the renderer is ready so we don't briefly flash a blank
+  // transparent canvas. Pill + glow are invisible-by-default via CSS
+  // until the renderer's WS receives an event and flips the classes.
   overlayWindow.once('ready-to-show', () => {
     if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.showInactive();
   });
+
+  // Fallback — data: URLs can be flaky about firing ready-to-show on
+  // some Electron versions. Force-show after 1.5s if it hasn't fired.
+  // The window is fully transparent until the renderer's WS gets an
+  // event so this is safe to do early.
+  setTimeout(() => {
+    if (overlayWindow && !overlayWindow.isDestroyed() && !overlayWindow.isVisible()) {
+      overlayWindow.showInactive();
+    }
+  }, 1500);
 
   overlayWindow.on('closed', () => { overlayWindow = null; });
 }
