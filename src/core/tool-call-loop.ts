@@ -31,6 +31,20 @@ const MAX_TOOL_ITERATIONS = 50;
 const TOOL_TIMEOUT_MS = 120_000;
 const MAX_SCREENSHOTS_PER_TURN = 1;
 
+// Per-tool timeout overrides. Tools that legitimately need longer than
+// the standard 120s wrapper get a bigger budget here. ask_user blocks
+// on a real user reply (10 min). run_applescript can hit iCloud-backed
+// apps (Calendar, Mail) that lazy-load slowly — same 120s collision
+// caused a Calendar query to fail mid-flight on 2026-05-11.
+const TOOL_TIMEOUT_OVERRIDES: Record<string, number> = {
+  ask_user: 10 * 60 * 1000,         // 10 min — user reply
+  run_applescript: 3 * 60 * 1000,   // 3 min — iCloud-backed app queries
+};
+
+function getToolTimeout(toolName: string): number {
+  return TOOL_TIMEOUT_OVERRIDES[toolName] ?? TOOL_TIMEOUT_MS;
+}
+
 // Tools that can safely run in parallel within a single iteration.
 // Reads + queries only — anything that mutates state must be sequential.
 const PARALLEL_SAFE_TOOLS = new Set([
@@ -344,7 +358,7 @@ export class ToolCallLoop {
           const parallelResults = await Promise.all(
             parallelJobs.map(async (job) => {
               log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (parallel)');
-              let result = await withTimeout(toolExecutor.execute(job.toolName, job.toolArgs, { chatId }), TOOL_TIMEOUT_MS, job.toolName);
+              let result = await withTimeout(toolExecutor.execute(job.toolName, job.toolArgs, { chatId }), getToolTimeout(job.toolName), job.toolName);
               result = repairToolResult(result);
               if (isToolError(result)) {
                 result += '\n\n[TOOL RETURNED AN ERROR — do not claim success. Report the error to the user.]';
@@ -367,7 +381,7 @@ export class ToolCallLoop {
           }
           onStatus?.(getToolStatus(job.toolName, job.toolArgs));
           log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (sequential)');
-          let result = await withTimeout(toolExecutor.execute(job.toolName, job.toolArgs, { chatId }), TOOL_TIMEOUT_MS, job.toolName);
+          let result = await withTimeout(toolExecutor.execute(job.toolName, job.toolArgs, { chatId }), getToolTimeout(job.toolName), job.toolName);
           result = repairToolResult(result);
           if (isToolError(result)) {
             result += '\n\n[TOOL RETURNED AN ERROR — do not claim success. Report the error to the user.]';

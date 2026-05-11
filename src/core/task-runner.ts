@@ -699,7 +699,14 @@ async function executeStep(
         // ask_user blocks waiting for the user to reply via Telegram —
         // the standard 120s tool timeout would always kill it. Give that
         // tool a 10-minute window instead. Other tools keep the standard.
-        const toolTimeoutMs = toolName === 'ask_user' ? 10 * 60 * 1000 : TOOL_TIMEOUT_MS;
+        // Per-tool wrapper timeout overrides. Same shape as the chat-mode
+        // tool-call-loop overrides (kept in sync; see tool-call-loop.ts).
+        // ask_user blocks on a real user reply, run_applescript can hit
+        // iCloud-backed apps that lazy-load slowly.
+        const toolTimeoutMs =
+          toolName === 'ask_user' ? 10 * 60 * 1000 :
+          toolName === 'run_applescript' ? 3 * 60 * 1000 :
+          TOOL_TIMEOUT_MS;
         result = await withTimeout(
           toolExecutor.execute(toolName, toolArgs, { chatId }),
           toolTimeoutMs,

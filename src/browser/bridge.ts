@@ -7,6 +7,15 @@ const log = createLogger('BrowserBridge');
 
 export const BRIDGE_PORT = 9338;
 const COMMAND_TIMEOUT_MS = 30_000;
+// 25s server-side WebSocket ping keeps Chrome MV3 service workers from
+// going idle and dropping the connection (2026-05-11 flap diagnosis —
+// observed 5+ disconnect/reconnect cycles during a single 30 min task).
+const KEEPALIVE_INTERVAL_MS = 25_000;
+// 10 MB max frame — LoopNet / large-content pages extracted via
+// browser_extract routinely exceed 1 MB. The earlier 1 MB cap was
+// silently killing the connection mid-extract, causing the flap pattern.
+// Origin check already rejects non-extension connections.
+const MAX_BRIDGE_PAYLOAD = 10 * 1024 * 1024;
 
 interface PendingCommand {
   resolve: (data: unknown) => void;
@@ -32,13 +41,16 @@ export class BrowserBridge {
     if (this.wss) return;
 
     try {
-      // maxPayload caps incoming frames at 1 MB — prevents a hostile /
-      // misbehaving extension from memory-exhausting us with a giant frame.
-      // 1 MB is ample for all real bridge commands + responses (FIND-SEC-05).
+      // maxPayload caps incoming frames. 10 MB accommodates browser_extract
+      // results from content-heavy pages (LoopNet listings, multi-pane SPAs,
+      // pages with embedded data tables). Earlier 1 MB cap silently closed
+      // the connection mid-extract — the symptom Lucas observed was the
+      // flap pattern during a real LoopNet scrape. Origin check (below)
+      // still rejects non-extension WebSocket clients.
       this.wss = new WebSocketServer({
         port: BRIDGE_PORT,
         host: '127.0.0.1',
-        maxPayload: 1_000_000,
+        maxPayload: MAX_BRIDGE_PAYLOAD,
       });
     } catch (err) {
       log.error({ err, port: BRIDGE_PORT }, `Failed to start browser bridge — port may be in use`);
@@ -75,6 +87,16 @@ export class BrowserBridge {
       this._connectedAt = new Date();
       this.onConnectCb?.();
 
+      // Server-initiated keepalive — WebSocket protocol-level ping every
+      // 25s. Chrome auto-responds with pong without waking the user's
+      // page-level code, but the activity keeps the extension's service
+      // worker alive past its idle threshold and lets us detect a dead
+      // socket via ws.on('close') instead of stale-pending-command leaks.
+      const keepaliveTimer = setInterval(() => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        try { ws.ping(); } catch (e) { log.debug({ e }, 'Bridge keepalive ping failed (non-fatal)'); }
+      }, KEEPALIVE_INTERVAL_MS);
+
       ws.on('message', (raw) => {
         try {
           const msg = JSON.parse(raw.toString()) as BridgeResponse | { type: 'ping' };
@@ -104,6 +126,7 @@ export class BrowserBridge {
 
       ws.on('close', () => {
         log.info('Chrome extension disconnected');
+        clearInterval(keepaliveTimer);
         if (this.client === ws) {
           this.client = null;
           this._connectedAt = null;
