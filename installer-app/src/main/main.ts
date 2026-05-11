@@ -34,6 +34,7 @@ import {
   getAboutInfo,
 } from './installer-core';
 import type { ConfigInput, InstallProgress, UpdateProgress } from '../shared/types';
+import { startTaskOverlay, stopTaskOverlay } from './overlay-window';
 
 const isDev = process.env.NEXUS_INSTALLER_DEV === '1';
 const isMenubarMode = process.argv.includes('--menubar');
@@ -368,6 +369,7 @@ function startMenubarMode(): void {
       clearInterval(statusPollTimer);
       statusPollTimer = null;
     }
+    stopTaskOverlay();
   });
 }
 
@@ -376,6 +378,12 @@ function startMenubarMode(): void {
 // ─────────────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
+  // Task overlay — fires the orange-tint + pill-bar + confetti UI while
+  // the daemon is running a task. Connects to the daemon's task overlay
+  // bridge on ws://127.0.0.1:9339 and reconnects on disconnect. Cheap to
+  // run when idle (one suspended Electron window + a WebSocket).
+  startTaskOverlay();
+
   // Wizard IPC
   ipcMain.handle('system:checks', async () => runSystemChecks());
   ipcMain.handle('repo:status', async () => checkRepo());
