@@ -106,8 +106,13 @@ export function isUndercoverProbe(text: string): boolean {
     /\bhow\s+(?:do\s+you|are\s+you\s+able\s+to)\s+(?:access|control|see|read|write|run|execute|launch|spawn|invoke)\b/,
     // Self-referential possessives: "your code", "your source", "your files", "nexus's code"
     /\b(?:your|nexus['s]*)\s+(?:code|codebase|source\s+code|source\s+files?|source\s+tree|internal\s+files?|implementation|architecture|modules?|directory\s+structure|folder\s+structure|files?\s+(?:and\s+)?(?:modules?|structure|directories))\b/,
-    // "find/read/open/look at/inspect your/nexus's <internals>"
-    /\b(?:find|read|open|look\s+at|inspect|analyze|examine|review|audit)\s+(?:your|nexus['s]*|its?|the)\s+(?:own\s+)?(?:code|source|codebase|internals?|files?|modules?|implementation)\b/,
+    // "find/read/open/look at/inspect your/nexus's <internals>". The possessive
+    // is split: `your`/`nexus's` are unambiguously self-referential so `own` is
+    // optional, but `its`/`the` are ambiguous in normal use (the user routinely
+    // says "open the file" meaning a file we just produced together) — require
+    // `own` there. Without this split, "can you open the file?" trips the
+    // probe and refuses legitimate workspace access.
+    /\b(?:find|read|open|look\s+at|inspect|analyze|examine|review|audit)\s+(?:(?:your|nexus['s]*)\s+(?:own\s+)?|(?:its?|the)\s+own\s+)(?:code|source|codebase|internals?|files?|modules?|implementation)\b/,
   ];
   return probePatterns.some((p) => p.test(lower));
 }

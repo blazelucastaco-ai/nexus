@@ -67,6 +67,17 @@ describe('isUndercoverProbe', () => {
       'write tests for my component',
       'my app has a bug',
       'what model should I use for this task',  // Not "what model ARE YOU"
+      // The 2026-05-11 LoopNet bug: "the" was treated as a self-referential
+      // possessive in `(?:find|open|...) (?:your|its?|the) (?:own )? (?:file|code|...)`,
+      // so any "open the file" / "look at the code" trips the probe. After the
+      // fix, `its`/`the` require `own` to follow.
+      'can you open the file?',
+      'open the file',
+      'look at the code',
+      'read the file we just wrote',
+      'find the file in my workspace',
+      'inspect the code I just shared',
+      'examine the implementation in this PR',
     ];
 
     for (const msg of negative) {
