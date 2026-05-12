@@ -32,7 +32,7 @@ import { BrowserWindow, ipcMain, screen, app } from 'electron';
 import { join } from 'node:path';
 
 const POPUP_WIDTH = 380;
-const POPUP_HEIGHT = 140;
+const POPUP_HEIGHT = 168;  // +28px over base to fit the "release notes" link
 // 12px right margin + ~30px clearance from the menu bar. macOS notifications
 // sit at roughly y=44 — we match.
 const POPUP_RIGHT_MARGIN = 16;
@@ -41,7 +41,7 @@ const POPUP_TOP_MARGIN = 44;
 let popupWindow: BrowserWindow | null = null;
 
 export type UpdatePopupState =
-  | { phase: 'prompt';      installedVersion: string; latestVersion: string; downloadUrl: string }
+  | { phase: 'prompt';      installedVersion: string; latestVersion: string; downloadUrl: string; releasePageUrl?: string }
   | { phase: 'downloading'; pct: number; label: string }
   | { phase: 'installing';  label: string }
   | { phase: 'restarting';  label: string }
@@ -136,6 +136,18 @@ const POPUP_HTML = String.raw`<!DOCTYPE html>
   @keyframes spin { to { transform: rotate(360deg); } }
 
   .status-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: rgba(255,255,255,0.84); }
+
+  .release-link {
+    display: inline-block;
+    font-size: 11px;
+    color: rgba(255,255,255,0.62);
+    text-decoration: none;
+    margin-top: 2px;
+    margin-left: 38px; /* aligns under the title, past the icon column */
+    transition: color 120ms ease;
+    cursor: pointer;
+  }
+  .release-link:hover { color: rgba(255,255,255,0.92); }
 </style>
 </head>
 <body>
@@ -151,6 +163,9 @@ const POPUP_HTML = String.raw`<!DOCTYPE html>
     card.classList.remove('error');
 
     if (state.phase === 'prompt') {
+      const notesLink = state.releasePageUrl
+        ? \`<a class="release-link" id="release-link" href="#">View release notes →</a>\`
+        : '';
       card.innerHTML = \`
         <div class="row">
           <div class="icon">↑</div>
@@ -159,12 +174,20 @@ const POPUP_HTML = String.raw`<!DOCTYPE html>
             <div class="subtitle">v\${escape(state.installedVersion)} → v\${escape(state.latestVersion)}</div>
           </div>
         </div>
+        \${notesLink}
         <div class="actions">
           <button class="btn-secondary" id="later">Later</button>
           <button class="btn-primary" id="update">Update Now</button>
         </div>\`;
       document.getElementById('update').onclick = () => window.updatePopup.update();
       document.getElementById('later').onclick = () => window.updatePopup.dismiss();
+      const linkEl = document.getElementById('release-link');
+      if (linkEl) {
+        linkEl.onclick = (e) => {
+          e.preventDefault();
+          window.updatePopup.openReleaseNotes();
+        };
+      }
     }
     else if (state.phase === 'downloading') {
       card.innerHTML = \`
@@ -341,6 +364,7 @@ export function hideUpdatePopup(): void {
 export function registerUpdatePopupIpc(handlers: {
   onUpdate: (sendState: (s: UpdatePopupState) => void) => Promise<void>;
   onDismiss: () => void;
+  onOpenReleaseNotes: () => void;
 }): void {
   ipcMain.handle('update-popup:update', async () => {
     const sendState = (s: UpdatePopupState): void => showUpdatePopup(s);
@@ -353,6 +377,9 @@ export function registerUpdatePopupIpc(handlers: {
   ipcMain.handle('update-popup:dismiss', async () => {
     handlers.onDismiss();
     hideUpdatePopup();
+  });
+  ipcMain.handle('update-popup:open-release-notes', async () => {
+    handlers.onOpenReleaseNotes();
   });
 }
 

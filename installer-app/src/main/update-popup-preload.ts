@@ -28,4 +28,7 @@ contextBridge.exposeInMainWorld('updatePopup', {
   dismiss(): void {
     void ipcRenderer.invoke('update-popup:dismiss');
   },
+  openReleaseNotes(): void {
+    void ipcRenderer.invoke('update-popup:open-release-notes');
+  },
 });

@@ -17,7 +17,7 @@ import { rmSync } from 'node:fs';
 
 const execFileAsync = promisify(execFile);
 
-const VERSION = '0.2.4';
+const VERSION = '0.2.5';
 const HOME = homedir();
 const NEXUS_DIR = join(HOME, '.nexus');
 // NEXUS daemon reads ONLY from config.yaml (see src/config.ts). Detection

@@ -127,17 +127,22 @@ let statusPollTimer: ReturnType<typeof setInterval> | null = null;
 // Updates Now" tray menu item, where the user explicitly wants to be told
 // again, and also surfaces an "you're up to date" toast if there's nothing.
 let lastPromptedVersion: string | null = null;
+// Cache the most recent releasePageUrl so the "View release notes →" link
+// in the popup knows where to open. Refreshed whenever a poll prompts.
+let lastReleasePageUrl: string | null = null;
 async function pollForUpdate(): Promise<void> {
   try {
     const check = await checkForUpdates();
     if (!check.updateAvailable) return;
     if (lastPromptedVersion === check.latestVersion) return;
     lastPromptedVersion = check.latestVersion;
+    lastReleasePageUrl = check.releasePageUrl;
     showUpdatePopup({
       phase: 'prompt',
       installedVersion: check.installedVersion,
       latestVersion: check.latestVersion,
       downloadUrl: check.downloadUrl,
+      releasePageUrl: check.releasePageUrl,
     });
   } catch { /* tolerated — try again on next interval */ }
 }
@@ -146,11 +151,13 @@ async function forceCheckForUpdate(): Promise<void> {
     const check = await checkForUpdates();
     if (check.updateAvailable) {
       lastPromptedVersion = check.latestVersion;
+      lastReleasePageUrl = check.releasePageUrl;
       showUpdatePopup({
         phase: 'prompt',
         installedVersion: check.installedVersion,
         latestVersion: check.latestVersion,
         downloadUrl: check.downloadUrl,
+        releasePageUrl: check.releasePageUrl,
       });
     } else {
       // Surface an "up to date" confirmation so the menu click doesn't
@@ -487,6 +494,14 @@ app.whenReady().then(() => {
       }, 800);
     },
     onDismiss: () => { hideUpdatePopup(); },
+    onOpenReleaseNotes: () => {
+      // Pre-validated by safe-url allowlist when set. lastReleasePageUrl
+      // comes from GitHub's release API in checkForUpdates, so it's already
+      // a github.com URL — no untrusted-input risk.
+      if (lastReleasePageUrl && isSafeExternalUrl(lastReleasePageUrl)) {
+        void shell.openExternal(lastReleasePageUrl);
+      }
+    },
   });
 
   // Wizard IPC
