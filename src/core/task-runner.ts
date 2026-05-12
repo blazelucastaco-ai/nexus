@@ -180,6 +180,8 @@ ${fileSnapshotSection}${coworkSection}
 
 10. WHEN CO WORK GIVES A DIAGNOSIS, ACT ON IT — DON'T RETRY THE SAME APPROACH. If you see "Co Work diagnosed it" in the previous attempt's hint, that's a STRATEGY change, not a parameter tweak. If the diagnosis says "stop using ai.complete for this," that means STOP — pivot to a script. If the diagnosis says "use the open browser session, not a headless one," that means STOP using Playwright. Retrying the same shape after Co Work flagged it is a guaranteed waste of time and tokens.
 
+11. NEVER SHIP A TEMPLATE AS THE FINAL OUTPUT. If a previous step produced a templating file with placeholders like {{NAME}}, \${VAR}, __X__, <FILL_ME>, or %VAR%, that file is the source-of-truth FOR the final output — it is NOT the final output itself. Before opening, displaying, or claiming completion on a "report"/"final"/"rendered" file, you MUST have run the templating substitution (script + data → new file with placeholders replaced) and produced a NEW file at a different path. Then open the NEW file. Never run \`open\` on a path that still contains unsubstituted placeholders — the user will see {{COUNT}} on screen and know the work wasn't done.
+
 ━━━ CODE QUALITY — MANDATORY ━━━
 
 - Build the real thing, not a stub or skeleton. Complete, working, production-quality code.
@@ -201,17 +203,62 @@ macOS notes:
 
 // ─── Verification Prompt ──────────────────────────────────────────────────────
 
-function buildVerifyPrompt(step: TaskStep, filesWritten: string[]): string {
-  const fileList = filesWritten.join(', ');
-  return `Verify step "${step.title}" is complete.
+/**
+ * Step titles that imply the step MUST produce an artifact (a file, a
+ * populated database row, a rendered page, etc.). When such a step ends
+ * with filesWritten=0, verifyStep should NOT auto-pass — it must probe
+ * the workspace to confirm the expected output actually exists.
+ *
+ * The 2026-05-11 LoopNet incident: a step titled "Generate final report
+ * and open in Chrome" ran a single `open ~/.../template.html` command
+ * (zero files written) and was auto-passed. The "final report" the user
+ * saw was the raw template with {{COUNT}}/{{TIMESTAMP}}/{{LISTINGS_JSON}}
+ * placeholders unsubstituted.
+ */
+const OUTPUT_VERBS = /\b(?:generate|build|create|write|render|produce|compile|scaffold|extract|scrape|fetch|download|export|publish|assemble|populate|fill|substitute)\b/i;
 
-${filesWritten.length > 0 ? `Use read_file to check these files: ${fileList}` : 'Check for any output or side effects.'}
+export function stepImpliesOutput(title: string): boolean {
+  return OUTPUT_VERBS.test(title);
+}
+
+function buildVerifyPrompt(step: TaskStep, filesWritten: string[]): string {
+  // Branch A: no files written, but the step title says it should have
+  // produced something. Make the verifier inspect the workspace and
+  // confirm — don't take silence as success.
+  if (filesWritten.length === 0) {
+    return `Step "${step.title}" was just executed but wrote no new files.
+
+Its title implies it should have produced an artifact (a populated file,
+a rendered output, etc.). Use list_directory and read_file on the relevant
+workspace directory to confirm the expected output exists AND contains real
+content — not just template placeholders.
 
 After checking, respond with EXACTLY one of these two lines (nothing else before it):
   VERIFIED: PASS — [one sentence summary of what was found]
-  VERIFIED: FAIL — [specific reason: empty file / only TODO stubs / critical syntax error]
+  VERIFIED: FAIL — [specific reason: expected output missing / file contains only unsubstituted placeholders / etc.]
 
-Only fail if the file is literally empty, contains only placeholder stubs like "// TODO" or "Lorem ipsum", or has a syntax error so severe the file cannot run at all. Real content with minor issues = PASS.`;
+FAIL signals to watch for:
+  - The expected artifact is missing from the workspace.
+  - The "final" file still contains unsubstituted template variables: {{NAME}}, \${VAR}, __PLACEHOLDER__, <FILL_ME>, %VAR%.
+  - A step that promised "open the report" actually opened a template, not a rendered report.`;
+  }
+
+  // Branch B: files were written — verify their content.
+  const fileList = filesWritten.join(', ');
+  return `Verify step "${step.title}" is complete.
+
+Use read_file to check these files: ${fileList}
+
+After checking, respond with EXACTLY one of these two lines (nothing else before it):
+  VERIFIED: PASS — [one sentence summary of what was found]
+  VERIFIED: FAIL — [specific reason: empty file / unsubstituted placeholders / only TODO stubs / critical syntax error]
+
+FAIL the step if the file contains:
+  - Unsubstituted template placeholders like {{NAME}}, \${VAR}, __PLACEHOLDER__, <FILL_ME>, or %VAR% in a file presented as a final/rendered output. (A template file that's MEANT to have placeholders is fine — judge by the step title.)
+  - Only "// TODO", "Lorem ipsum", or other stub content where real data was expected.
+  - A syntax error so severe the file cannot run at all.
+
+Real content with minor issues = PASS. But a "final report" with unfilled {{...}} = FAIL.`;
 }
 
 // ─── Step Verification ────────────────────────────────────────────────────────
@@ -229,7 +276,12 @@ async function verifyStep(
   toolExecutor: ToolExecutor,
   model: string,
 ): Promise<{ passed: boolean; summary: string }> {
-  if (filesWritten.length === 0) return { passed: true, summary: 'No files to verify.' };
+  // Auto-pass only when the step truly had no expected output. If filesWritten=0
+  // but the title says "generate/render/produce …", we must probe the workspace —
+  // otherwise an `open template.html` no-op claims success.
+  if (filesWritten.length === 0 && !stepImpliesOutput(step.title)) {
+    return { passed: true, summary: 'No files to verify.' };
+  }
 
   const tools = toOpenAITools();
   const verifyPrompt = buildVerifyPrompt(step, filesWritten);
@@ -808,9 +860,12 @@ async function executeStep(
 
   // ── Verification pass ────────────────────────────────────────────────────
   // Read back written files and confirm they are complete and correct.
+  // Also fire when a step produced no files BUT its title implies output —
+  // covers the "Generate final report and open in Chrome" case where the
+  // model ran `open` on a template instead of producing a rendered file.
   let verified = true;
   let verifyNote = '';
-  if (filesWritten.length > 0) {
+  if (filesWritten.length > 0 || stepImpliesOutput(step.title)) {
     try {
       const vResult = await verifyStep(step, filesWritten, ai, toolExecutor, model);
       verified = vResult.passed;
