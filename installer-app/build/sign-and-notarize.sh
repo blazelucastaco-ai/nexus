@@ -64,12 +64,33 @@ echo "[sign-and-notarize] step 3/4 — stapler staple"
 xcrun stapler staple "$DMG"
 
 # ── 4) Verify ──────────────────────────────────────────────────────────────
-echo "[sign-and-notarize] step 4/4 — spctl assess"
-spctl -a -t install -vv "$DMG" || {
-  echo "[sign-and-notarize] WARNING — spctl assessment did not report success."
-  echo "[sign-and-notarize] The DMG is signed + notarized but Gatekeeper rejected it."
-  echo "[sign-and-notarize] Run \`xcrun stapler validate $DMG\` for details."
+# `spctl -t install` is for .pkg installer packages, not .dmg images — using
+# it on a DMG always rejects with a misleading error even when the DMG is
+# fully notarized. The real Gatekeeper test for a notarized DMG is:
+#   (a) the DMG has a valid stapled notarization ticket  → xcrun stapler validate
+#   (b) the .app inside it is recognized as Notarized Developer ID
+#       → mount the DMG, run spctl on the .app, detach.
+# Both checks have to pass before we say the build is shippable.
+echo "[sign-and-notarize] step 4/4 — verify"
+xcrun stapler validate "$DMG"
+
+MOUNT_PT="$(hdiutil attach -nobrowse -readonly "$DMG" -plist \
+  | grep -A1 '<key>mount-point</key>' \
+  | grep '<string>' \
+  | sed -E 's/.*<string>([^<]+)<\/string>.*/\1/' \
+  | head -1)"
+if [ -z "$MOUNT_PT" ] || [ ! -d "$MOUNT_PT" ]; then
+  echo "[sign-and-notarize] FAILED — could not mount DMG for verification"
   exit 1
-}
+fi
+trap 'hdiutil detach "$MOUNT_PT" -quiet >/dev/null 2>&1 || true' EXIT
+
+ASSESS="$(spctl -a -vv "$MOUNT_PT/NEXUS.app" 2>&1)"
+echo "$ASSESS"
+if ! echo "$ASSESS" | grep -q 'source=Notarized Developer ID'; then
+  echo "[sign-and-notarize] FAILED — .app inside DMG is not Gatekeeper-approved."
+  echo "[sign-and-notarize] Expected: source=Notarized Developer ID"
+  exit 1
+fi
 
 echo "[sign-and-notarize] DONE — $DMG is signed, notarized, stapled, and Gatekeeper-approved."
