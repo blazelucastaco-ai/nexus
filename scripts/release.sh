@@ -76,7 +76,12 @@ sed -i.bak "s/const VERSION = '${CURRENT}'/const VERSION = '${NEW}'/" installer-
 sed -i.bak "s/v${CURRENT} · INSTALLER/v${NEW} · INSTALLER/" installer-app/src/renderer/App.tsx
 # Drop the .bak files sed left behind. Doing this in a separate step keeps
 # the diff small if some surface fails to update (caller can inspect .bak).
-find installer-app package.json -maxdepth 3 -name '*.bak' -delete 2>/dev/null || true
+# Explicit `rm -f` per known-target rather than `find -delete` so we don't
+# accidentally nuke anyone else's .bak files in the tree.
+rm -f package.json.bak \
+      installer-app/package.json.bak \
+      installer-app/src/main/installer-core.ts.bak \
+      installer-app/src/renderer/App.tsx.bak
 
 # Sanity-check the patch took.
 ACTUAL="$(node -p "require('./installer-app/package.json').version")"
