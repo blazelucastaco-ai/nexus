@@ -341,9 +341,36 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
   {
+    name: 'schedule_prompt',
+    description:
+      'Schedule a recurring NEXUS prompt that fires on a cron schedule. At trigger time the prompt is processed by NEXUS exactly as if the user had typed it, and the response is delivered back via Telegram. ' +
+      'USE THIS — not schedule_task — when the user wants NEXUS to think / check / report on something recurring (calendar, inbox, project state, social feed, market data, anything that needs language understanding or memory). ' +
+      'schedule_task is only for raw shell commands. schedule_prompt is what you want for "every morning at 8am tell me X" / "every monday check Y" / "remind me at noon to Z." ' +
+      'Cron format: "minute hour dom month dow" (e.g. "0 6 * * *" = daily 6am, "0 9 * * 1" = Monday 9am, "*/15 * * * *" = every 15 min). ' +
+      'Pass the natural-language prompt verbatim — don\'t pre-resolve it. The orchestrator will resolve all current context at fire time.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Unique short name (e.g. "morning-calendar", "weekly-summary").',
+        },
+        cron: {
+          type: 'string',
+          description: '5-field cron expression: minute hour dom month dow.',
+        },
+        prompt: {
+          type: 'string',
+          description: 'The exact natural-language prompt to run. Treat it as if the user is typing it fresh each time.',
+        },
+      },
+      required: ['name', 'cron', 'prompt'],
+    },
+  },
+  {
     name: 'list_tasks',
     description:
-      'List all scheduled tasks, their cron expressions, commands, and last/next run times. ' +
+      'List all scheduled tasks (both shell schedule_task and natural-language schedule_prompt), their cron expressions, commands/prompts, and last/next run times. ' +
       'Use when asked about scheduled jobs, cron tasks, or recurring automation.',
     parameters: {
       type: 'object',

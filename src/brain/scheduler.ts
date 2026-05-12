@@ -21,18 +21,34 @@ export interface ScheduledTask {
   last_exit_code: number | null;
   last_duration_ms: number | null;
   consecutive_failures: number;
+  /** When set, this task runs the natural-language prompt through NEXUS's
+   *  message handler at the scheduled time and sends the response back
+   *  via Telegram. Mutually exclusive with `command` (only one fires). */
+  prompt: string | null;
+  /** Telegram chat ID the response is delivered to. Required for prompt
+   *  tasks. Schema added in migration v11 (2026-05-11). */
+  chat_id: string | null;
 }
 
 const MAX_CONSECUTIVE_FAILURES = 5;
 
 let tickInterval: ReturnType<typeof setInterval> | null = null;
 let initialTickTimeout: ReturnType<typeof setTimeout> | null = null;
-/** Callback invoked when a task fires — wired to the tool executor at startup */
+/** Callback invoked when a SHELL task fires — wired to run_terminal_command */
 let taskRunner: ((command: string) => Promise<string>) | null = null;
+/** Callback invoked when a PROMPT task fires — wired to the orchestrator's
+ *  message handler so NEXUS processes the prompt as if the user had typed
+ *  it, and the response is sent back via Telegram to chat_id. */
+let promptRunner: ((prompt: string, chatId: string) => Promise<void>) | null = null;
 
 /** Wire the scheduler to the tool executor's run_terminal_command */
 export function setTaskRunner(fn: (command: string) => Promise<string>): void {
   taskRunner = fn;
+}
+
+/** Wire the scheduler to the orchestrator's message handler for prompt tasks. */
+export function setPromptRunner(fn: (prompt: string, chatId: string) => Promise<void>): void {
+  promptRunner = fn;
 }
 
 // ── Cron Parsing ──────────────────────────────────────────────────────────────
@@ -121,7 +137,39 @@ export function createTask(
     VALUES (?, ?, ?, ?, 1, NULL, ?, ?)
   `).run(id, name, cronExpr, command, nextRun?.toISOString() ?? null, now);
 
-  log.info({ id, name, cronExpr, command }, 'Scheduled task created');
+  log.info({ id, name, cronExpr, command }, 'Scheduled task created (shell)');
+  return getTask(id)!;
+}
+
+/**
+ * Create a PROMPT-based scheduled task. At trigger time the orchestrator
+ * processes the prompt as if the user had typed it, and the response is
+ * sent back via Telegram to chatId. Example: "every day at 6am, check my
+ * calendar and tell me my schedule" — prompt="Check my calendar and tell
+ * me my schedule for today", cron="0 6 * * *", chatId=Lucas's chat.
+ */
+export function createPromptTask(
+  name: string,
+  cronExpr: string,
+  prompt: string,
+  chatId: string,
+): ScheduledTask {
+  const db = getDatabase();
+  matchesCron(cronExpr, new Date()); // validate shape
+
+  const id = `task_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const now = nowISO();
+  const nextRun = nextRunAfter(cronExpr, new Date());
+
+  // command stores empty string because the column was NOT NULL in the
+  // original schema and SQLite can't drop NOT NULL via ALTER. We
+  // distinguish by checking which of (prompt, command) is non-empty.
+  db.prepare(`
+    INSERT INTO scheduled_tasks (id, name, cron_expression, command, prompt, chat_id, enabled, last_run, next_run, created_at)
+    VALUES (?, ?, ?, '', ?, ?, 1, NULL, ?, ?)
+  `).run(id, name, cronExpr, prompt, chatId, nextRun?.toISOString() ?? null, now);
+
+  log.info({ id, name, cronExpr, prompt: prompt.slice(0, 80), chatId }, 'Scheduled task created (prompt)');
   return getTask(id)!;
 }
 
@@ -196,13 +244,35 @@ async function tick(): Promise<void> {
       UPDATE scheduled_tasks SET last_run = ?, next_run = ? WHERE id = ?
     `).run(nowISO(), nextRun?.toISOString() ?? null, task.id);
 
-    if (!taskRunner) {
+    // Decide which runner to use: prompt-based tasks route through the
+    // orchestrator's message handler so NEXUS processes them with full
+    // context, memory, and Telegram delivery. Shell tasks use the legacy
+    // run_terminal_command path.
+    const isPromptTask = !!(task.prompt && task.prompt.trim());
+
+    if (isPromptTask) {
+      if (!promptRunner) {
+        log.warn({ name: task.name }, 'Prompt task fired but no prompt runner configured — skipping');
+        continue;
+      }
+      if (!task.chat_id) {
+        log.warn({ name: task.name }, 'Prompt task missing chat_id — skipping');
+        continue;
+      }
+    } else if (!taskRunner) {
       log.warn({ name: task.name }, 'No task runner configured — skipping execution');
       continue;
     }
 
     try {
-      const result = await taskRunner(task.command);
+      let resultPreview = '';
+      if (isPromptTask) {
+        await promptRunner!(task.prompt!, task.chat_id!);
+        resultPreview = `(prompt) ${task.prompt!.slice(0, 80)}`;
+      } else {
+        const result = await taskRunner!(task.command);
+        resultPreview = result.slice(0, 200);
+      }
       const durationMs = Date.now() - startMs;
 
       db.prepare(`
@@ -211,7 +281,7 @@ async function tick(): Promise<void> {
         WHERE id = ?
       `).run(durationMs, task.id);
 
-      log.info({ name: task.name, durationMs, result: result.slice(0, 200) }, 'Task completed');
+      log.info({ name: task.name, durationMs, kind: isPromptTask ? 'prompt' : 'command', result: resultPreview }, 'Task completed');
     } catch (err) {
       const durationMs = Date.now() - startMs;
       const newFailures = (task.consecutive_failures ?? 0) + 1;
@@ -265,15 +335,21 @@ export function scheduleTaskTool(args: Record<string, unknown>): string {
 export function listTasksTool(): string {
   const tasks = listTasks();
   if (tasks.length === 0) {
-    return 'No scheduled tasks. Use schedule_task to create one.';
+    return 'No scheduled tasks. Use schedule_task (shell) or schedule_prompt (natural-language) to create one.';
   }
 
   const lines = [`Scheduled tasks (${tasks.length}):\n`];
   for (const t of tasks) {
     const status = t.enabled ? '✓ enabled' : '✗ disabled';
-    lines.push(`  [${status}] ${t.name}`);
+    const isPrompt = !!(t.prompt && t.prompt.trim());
+    const kind = isPrompt ? 'prompt' : 'shell';
+    lines.push(`  [${status}] ${t.name}  (${kind})`);
     lines.push(`    Cron: ${t.cron_expression}`);
-    lines.push(`    Command: ${t.command}`);
+    if (isPrompt) {
+      lines.push(`    Prompt: ${t.prompt}`);
+    } else {
+      lines.push(`    Command: ${t.command}`);
+    }
     lines.push(`    Last run: ${t.last_run ?? 'never'}`);
     lines.push(`    Next run: ${t.next_run ?? 'unknown'}`);
     if (t.last_duration_ms != null) {
@@ -287,6 +363,37 @@ export function listTasksTool(): string {
     lines.push('');
   }
   return lines.join('\n');
+}
+
+/**
+ * Schedule a NEXUS natural-language prompt to run on a cron schedule.
+ * At each firing the prompt is processed through the orchestrator's
+ * message handler exactly as if the user had typed it; the response is
+ * delivered to chatId via Telegram. Example: "every day at 6am, check
+ * my calendar and tell me my schedule" — prompt = "Check my calendar
+ * and tell me my schedule for today", cron = "0 6 * * *", chatId =
+ * Lucas's chat ID.
+ */
+export function schedulePromptTool(args: Record<string, unknown>, contextChatId?: string): string {
+  const name = String(args.name ?? '');
+  const cron = String(args.cron ?? args.cron_expression ?? '');
+  const prompt = String(args.prompt ?? '');
+  const chatId = String(args.chat_id ?? args.chatId ?? contextChatId ?? '');
+
+  if (!name || !cron || !prompt) {
+    return 'Error: schedule_prompt requires name, cron, and prompt';
+  }
+  if (!chatId) {
+    return 'Error: schedule_prompt requires chat_id (the user\'s Telegram chat ID). The chat-mode tool context normally supplies it; if you see this error it means the tool was called outside a chat context.';
+  }
+
+  const existing = getTaskByName(name);
+  if (existing) {
+    return `Error: A task named "${name}" already exists (id: ${existing.id}). Use cancel_task first to replace it.`;
+  }
+
+  const task = createPromptTask(name, cron, prompt, chatId);
+  return `Prompt scheduled: "${task.name}" (${task.cron_expression})\nPrompt: ${task.prompt}\nNext run: ${task.next_run ?? 'unknown'}\nID: ${task.id}`;
 }
 
 export function cancelTaskTool(args: Record<string, unknown>): string {

@@ -45,6 +45,7 @@ import type { SelfAwareness } from '../brain/self-awareness.js';
 import type { InnerMonologue } from '../brain/inner-monologue.js';
 import {
   scheduleTaskTool,
+  schedulePromptTool,
   listTasksTool,
   cancelTaskTool,
 } from '../brain/scheduler.js';
@@ -578,6 +579,7 @@ export class ToolExecutor {
       case 'introspect':          return this.introspect();
       case 'toggle_think_mode':   return this.toggleThinkMode(args);
       case 'schedule_task':       return scheduleTaskTool(args);
+      case 'schedule_prompt':     return schedulePromptTool(args, context?.chatId);
       case 'list_tasks':          return listTasksTool();
       case 'cancel_task':         return cancelTaskTool(args);
       case 'start_task':          return this.startTask(args, false, context);

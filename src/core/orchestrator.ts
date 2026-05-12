@@ -61,6 +61,7 @@ import { runPipeline, makeContext, type NamedStage } from './pipeline.js';
 import { injectionGuardStage, frustrationStage, makeSessionLoadStage } from './stages/index.js';
 import {
   startScheduler,
+  setPromptRunner,
   stopScheduler,
   setTaskRunner,
 } from '../brain/scheduler.js';
@@ -673,11 +674,30 @@ export class Orchestrator {
       log.warn({ err }, 'Plugin load failed — continuing without plugins');
     }
 
-    // Start cron scheduler — wire it to run_terminal_command
+    // Start cron scheduler — two runners wired:
+    //   1. setTaskRunner: shell schedule_task tasks → run_terminal_command
+    //   2. setPromptRunner: schedule_prompt tasks → orchestrator.processMessage
+    //      which runs the prompt through the full chat-mode pipeline (tools,
+    //      memory, personality) and delivers the response via Telegram.
     try {
       setTaskRunner((cmd) =>
         this.toolExecutor.execute('run_terminal_command', { command: cmd, confirmed: true }),
       );
+      setPromptRunner(async (prompt, chatId) => {
+        log.info({ chatId, preview: prompt.slice(0, 80) }, 'Scheduler firing prompt task');
+        try {
+          const reply = await this.processMessage(prompt, chatId);
+          // processMessage normally returns a string that the caller routes
+          // to Telegram. For scheduled prompts the chat-mode tool loop has
+          // already streamed its reply via telegram.sendMessage (the same
+          // gateway path it always uses), so we don't double-send here —
+          // we just log the length for visibility.
+          log.info({ chatId, replyLen: reply.length }, 'Scheduled prompt completed');
+        } catch (err) {
+          log.error({ err, chatId }, 'Scheduled prompt failed');
+          this.telegram.sendMessage(chatId, '⚠️ Scheduled task failed to run. Check the logs.').catch(() => { /* tolerate */ });
+        }
+      });
       startScheduler();
     } catch (err) {
       log.warn({ err }, 'Scheduler start failed — continuing without scheduler');

@@ -293,6 +293,23 @@ const MIGRATIONS: Migration[] = [
         ON memories(layer, created_at DESC);
     `,
   },
+  {
+    version: 11,
+    description: 'Add prompt + chat_id to scheduled_tasks so we can schedule natural-language prompts that NEXUS processes (not just shell commands)',
+    run(db) {
+      // command is now allowed to be empty when prompt is set — but
+      // SQLite won't let us drop NOT NULL via ALTER, so existing
+      // command-only tasks keep working and new prompt-only tasks
+      // store an empty string in command.
+      const cols = (db.prepare("PRAGMA table_info(scheduled_tasks)").all() as Array<{ name: string }>).map((r) => r.name);
+      if (!cols.includes('prompt')) {
+        db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN prompt TEXT;`);
+      }
+      if (!cols.includes('chat_id')) {
+        db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN chat_id TEXT;`);
+      }
+    },
+  },
 ];
 
 function runMigrations(database: Database.Database): void {
