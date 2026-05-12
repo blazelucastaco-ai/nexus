@@ -58,7 +58,11 @@ const OVERLAY_HTML = String.raw`<!DOCTYPE html>
 
   #pill {
     position: fixed;
-    bottom: 36px;
+    /* Above the Dock + home indicator. The Dock varies in height
+       (~72–88px depending on size setting + magnification). 120px
+       gives clearance even when the Dock is at max size + leaves
+       a comfortable visual gap. */
+    bottom: 120px;
     left: 50%;
     transform: translateX(-50%) translateY(80px);
     background: #FFFFFF;
