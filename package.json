@@ -23,7 +23,11 @@
     "format": "biome format --write .",
     "lint": "biome lint .",
     "postinstall": "npm rebuild better-sqlite3",
-    "prepare": "husky"
+    "prepare": "husky",
+    "release": "./scripts/release.sh",
+    "release:patch": "./scripts/release.sh patch",
+    "release:minor": "./scripts/release.sh minor",
+    "release:major": "./scripts/release.sh major"
   },
   "engines": {
     "node": ">=22.0.0"

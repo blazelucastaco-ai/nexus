@@ -120,6 +120,54 @@ let dashboardWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let statusPollTimer: ReturnType<typeof setInterval> | null = null;
 
+// ── Update popup polling state (module-scope so tray menu can trigger) ──
+// `pollForUpdate` is the silent background poll: respects lastPromptedVersion
+// so we don't re-pop for a version the user already dismissed.
+// `forceCheckForUpdate` ignores that suppression — used by the "Check for
+// Updates Now" tray menu item, where the user explicitly wants to be told
+// again, and also surfaces an "you're up to date" toast if there's nothing.
+let lastPromptedVersion: string | null = null;
+async function pollForUpdate(): Promise<void> {
+  try {
+    const check = await checkForUpdates();
+    if (!check.updateAvailable) return;
+    if (lastPromptedVersion === check.latestVersion) return;
+    lastPromptedVersion = check.latestVersion;
+    showUpdatePopup({
+      phase: 'prompt',
+      installedVersion: check.installedVersion,
+      latestVersion: check.latestVersion,
+      downloadUrl: check.downloadUrl,
+    });
+  } catch { /* tolerated — try again on next interval */ }
+}
+async function forceCheckForUpdate(): Promise<void> {
+  try {
+    const check = await checkForUpdates();
+    if (check.updateAvailable) {
+      lastPromptedVersion = check.latestVersion;
+      showUpdatePopup({
+        phase: 'prompt',
+        installedVersion: check.installedVersion,
+        latestVersion: check.latestVersion,
+        downloadUrl: check.downloadUrl,
+      });
+    } else {
+      // Surface an "up to date" confirmation so the menu click doesn't
+      // feel like a dead button. Auto-dismisses after 4s like the success
+      // state of the update flow.
+      showUpdatePopup({
+        phase: 'done',
+        label: check.offline
+          ? 'Could not reach GitHub. Try again in a moment.'
+          : `You're on the latest — v${check.installedVersion}.`,
+      });
+    }
+  } catch {
+    showUpdatePopup({ phase: 'error', label: 'Could not check for updates.' });
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // WINDOWS
 // ─────────────────────────────────────────────────────────────────────
@@ -342,6 +390,10 @@ async function rebuildTrayMenu(): Promise<void> {
     },
     { type: 'separator' },
     {
+      label: 'Check for Updates Now',
+      click: () => { void forceCheckForUpdate(); },
+    },
+    {
       label: 'Reconfigure NEXUS…',
       click: () => { createWizardWindow('wizard'); },
     },
@@ -399,23 +451,6 @@ app.whenReady().then(() => {
   // top-right toast appears with [Update Now] / [Later]. Update Now runs
   // the full download → mount → swap → relaunch flow with the popup
   // walking through each state.
-  let lastPromptedVersion: string | null = null;
-  async function pollForUpdate(): Promise<void> {
-    try {
-      const check = await checkForUpdates();
-      if (!check.updateAvailable) return;
-      // Suppress duplicate prompts for the same version (eg the user
-      // clicked Later — don't re-pop every 4h for the same release).
-      if (lastPromptedVersion === check.latestVersion) return;
-      lastPromptedVersion = check.latestVersion;
-      showUpdatePopup({
-        phase: 'prompt',
-        installedVersion: check.installedVersion,
-        latestVersion: check.latestVersion,
-        downloadUrl: check.downloadUrl,
-      });
-    } catch { /* network error etc — silent, try again next interval */ }
-  }
   setTimeout(() => { void pollForUpdate(); }, 30_000);
   setInterval(() => { void pollForUpdate(); }, 4 * 60 * 60 * 1000);
 
