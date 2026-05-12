@@ -920,6 +920,7 @@ export const toolDefinitions: ToolDefinition[] = [
     description:
       'Kick off a multi-step task plan when the request requires multiple coordinated steps (research → analyze → write, scaffold → install → configure, build → test → deploy, etc.) or generates files that need verification. ' +
       'Use ONLY for genuinely multi-step work — for a single shell command (run git status, install ripgrep), just call run_terminal_command directly. ' +
+      'Also use this for browser-driven data harvesting on real-world sites — e.g. "go to LoopNet and list 25 cell-tower properties in NJ", "scrape every job on this board", "find all reviews on this product page and summarize". Chat-mode fires the next browser tool immediately, which loses to anti-bot fingerprinting that needs scroll, wait_for, and hydration pacing between extracts. The planner enforces that pacing; chat-mode does not. ' +
       'For destructive or production-impacting work (deploys, sending emails, dropping a database), use start_ultra_task instead so a plan-review gate fires first. ' +
       'Returns immediately; the task runs asynchronously and streams progress to Telegram.',
     parameters: {

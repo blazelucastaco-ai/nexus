@@ -1252,6 +1252,21 @@ export async function handleThinking(ctx: Context, orchestrator: Orchestrator): 
       }
     }
 
+    // Recent tool calls — covers chat-mode work that doesn't produce a task
+    // record (e.g. the model picked browser_navigate directly instead of
+    // calling start_task). Without this, "what just happened?" is invisible
+    // for the most common path. Last 8 keeps a typical 5–7-tool browse
+    // session legible without flooding the message.
+    if (snap.recentTools.length > 0) {
+      lines.push('');
+      lines.push('<b>Recent tools:</b>');
+      for (const t of snap.recentTools.slice(0, 8)) {
+        const ago = formatAge(Date.now() - t.at);
+        const mark = t.success === false ? '✗' : '·';
+        lines.push(`  ${mark} ${escapeHtml(t.name)} <i>(${ago} ago)</i>`);
+      }
+    }
+
     if (snap.recentErrors.length > 0) {
       lines.push('');
       lines.push('<b>Recent errors:</b>');

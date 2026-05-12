@@ -67,6 +67,17 @@ const SCREENSHOT_TOOLS = new Set([
   'browser_screenshot', 'take_screenshot', 'understand_image',
 ]);
 
+// Browser read tools whose result depends on the *current page*. After a
+// browser_navigate, prior calls to these no longer represent "the same
+// action" even if the args hash matches — the underlying state has changed.
+// Without this reset, navigate→extract→navigate→extract trips the 3-calls-
+// with-identical-args loop guard on the 3rd extract({}) even though it's
+// inspecting a different page.
+const BROWSER_STATEFUL_READS = new Set([
+  'browser_extract', 'browser_screenshot', 'browser_get_info',
+  'browser_get_tabs', 'browser_evaluate',
+]);
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface ToolCallLoopDeps {
@@ -300,6 +311,17 @@ export class ToolCallLoop {
           continue;
         }
 
+        // A successful navigate invalidates prior page-dependent reads —
+        // counting browser_extract({}) on page-A against the same call on
+        // page-B is a false positive. Reset those counters now so the model
+        // can legitimately re-inspect the new page.
+        if (toolName === 'browser_navigate') {
+          for (const key of Array.from(toolCallCounts.keys())) {
+            const keyTool = key.slice(0, key.indexOf(':'));
+            if (BROWSER_STATEFUL_READS.has(keyTool)) toolCallCounts.delete(key);
+          }
+        }
+
         // Tool+args combo-frequency counter (for loop detection)
         const argsHash = createHash('sha256').update(toolCall.function.arguments).digest('hex').slice(0, 8);
         const comboKey = `${toolName}:${argsHash}`;
@@ -413,21 +435,24 @@ export class ToolCallLoop {
         if (!finalContent) {
           if (screenshotWasSent) {
             finalContent = aiResponse.content?.trim() || 'Done — screenshot sent.';
-          } else if (aiResponse.content?.trim()) {
-            // The model produced text alongside the looping tool calls — use it.
-            finalContent = aiResponse.content.trim();
           } else {
-            // No usable assistant text. The model burned its budget on
-            // repeated tool calls and never typed an answer. Try ONE final
-            // completion with tools forbidden so the model is forced to
-            // answer the user's question directly from conversation history.
-            // This rescues the common case where a clarifying question
-            // ("what was the fix?", "why did you do X?") sends the model
-            // hunting for files instead of just summarising prior turns.
+            // Always run the no-tool recovery completion. The mid-loop
+            // assistant text is usually a forward-looking promise ("Let me
+            // extract the listings...") issued alongside the offending tool
+            // call — handing that to the user as a final reply leaves them
+            // staring at a broken promise. The recovery completion has the
+            // full loopMessages history and can write a real "here's what
+            // I tried, here's where it stuck" answer. We pass the mid-loop
+            // text as a hint so a genuinely complete answer ("Found 5 files:
+            // …") gets preserved rather than rewritten.
+            const lastMidLoopText = aiResponse.content?.trim() || '';
+            const hint = lastMidLoopText
+              ? `\n\nLast assistant text before the halt was: """${lastMidLoopText}""". If that was a complete answer, you may reuse it. If it was a forward-looking promise (e.g. starts with "Let me…", "I'll…", "Now I'll…"), write what was actually accomplished, where it got stuck, and a concrete next step — do NOT repeat the promise.`
+              : '';
             try {
               const recovery = await ai.complete({
                 messages: loopMessages,
-                systemPrompt: `${systemPrompt}\n\n[RECOVERY MODE: A previous tool-calling attempt produced repeated identical actions and was halted. Answer the user's most recent message directly from your conversation context. Do NOT call any tools. Do NOT mention the loop or this recovery — just give a concise, direct answer.]`,
+                systemPrompt: `${systemPrompt}\n\n[RECOVERY MODE: A previous tool-calling attempt produced repeated identical actions and was halted. Answer the user's most recent message directly from your conversation context. Do NOT call any tools. Do NOT mention the loop or this recovery — just give a concise, direct answer.${hint}]`,
                 model: config.ai.model,
                 maxTokens,
                 temperature: config.ai.chatTemperature,
@@ -439,14 +464,18 @@ export class ToolCallLoop {
               }
               const recovered = recovery.content?.trim();
               if (recovered) {
-                log.info({ contentLen: recovered.length }, 'Loop bail recovered via no-tool completion');
+                log.info({ contentLen: recovered.length, hadMidLoopText: lastMidLoopText.length > 0 }, 'Loop bail recovered via no-tool completion');
                 finalContent = recovered;
               }
             } catch (err) {
               log.warn({ err }, 'Loop bail recovery completion failed');
             }
             if (!finalContent) {
-              finalContent = 'I hit a repeated action and stopped to avoid a loop. Let me know how you\'d like me to proceed.';
+              // Recovery failed. Fall back to the mid-loop text if it
+              // exists (still better than a generic apology), otherwise
+              // the canned message.
+              finalContent = lastMidLoopText
+                || 'I hit a repeated action and stopped to avoid a loop. Let me know how you\'d like me to proceed.';
             }
           }
         }

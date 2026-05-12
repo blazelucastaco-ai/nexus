@@ -570,7 +570,33 @@ async function cmdExtract({ selector = null, attribute = null, all = false, mode
 }
 
 async function cmdScreenshot() {
-  const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'png' });
+  // captureVisibleTab can fail with "Failed to capture tab: image readback
+  // failed" when the target tab is in a background window, isn't fully
+  // painted yet, or just got navigated. Three-step defense:
+  //   1) Force the target tab + its window to active so Chrome will paint it.
+  //   2) Capture against the tab's window explicitly (not the focused one).
+  //   3) On transient failure, wait 250ms and try once more.
+  const tab = await getActiveTab();
+  try {
+    if (!tab.active) await chrome.tabs.update(tab.id, { active: true });
+    if (tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true });
+  } catch { /* best-effort — if we can't activate, capture will still try */ }
+
+  const capture = async () => {
+    const windowId = tab.windowId !== undefined ? tab.windowId : null;
+    return await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
+  };
+
+  let dataUrl;
+  try {
+    dataUrl = await capture();
+  } catch (e) {
+    const msg = String(e?.message || e);
+    if (!/readback|fail|not ready/i.test(msg)) throw e;
+    await new Promise((r) => setTimeout(r, 250));
+    dataUrl = await capture();
+  }
+
   const base64 = dataUrl.split(',')[1] ?? dataUrl;
   return ok({ base64, mimeType: 'image/png' });
 }

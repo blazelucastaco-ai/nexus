@@ -171,17 +171,24 @@ describe('ToolCallLoop.run', () => {
     expect(out.finalContent.toLowerCase()).toMatch(/repeated action/);
   });
 
-  it('uses the looping turn\'s own content when the LLM produced text alongside repeated tool calls', async () => {
+  it('still runs the no-tool recovery when the LLM produced text alongside repeated tool calls, passing the mid-loop text as a hint', async () => {
+    // Mid-loop text alongside the offending tool call is almost always a
+    // forward-looking promise ("Let me extract the listings…"). Using that
+    // verbatim as the final reply leaves the user staring at a broken
+    // promise. Recovery always runs; the mid-loop text is passed in as a
+    // hint so recovery can preserve a genuinely complete answer if that's
+    // what it was.
     const deps = makeDeps();
     (deps.ai.complete as any)
       .mockResolvedValueOnce(response('', [makeToolCall('tA', 'read_file', { path: '/tmp/a' })]))
       .mockResolvedValueOnce(response('', [makeToolCall('tB', 'read_file', { path: '/tmp/a' })]))
-      // Third call has BOTH tool calls AND content — content should win, no recovery call needed.
       .mockResolvedValueOnce(
-        response('I was about to summarise — that file holds the answer.', [
+        response('Let me read this once more to be sure.', [
           makeToolCall('tC', 'read_file', { path: '/tmp/a' }),
         ]),
-      );
+      )
+      // Recovery completion: model writes a real summary using the hint.
+      .mockResolvedValueOnce(response('I read /tmp/a — it contains "contents". That answers the question.'));
     (deps.toolExecutor.execute as any).mockResolvedValue('contents');
 
     const loop = new ToolCallLoop(deps);
@@ -192,8 +199,39 @@ describe('ToolCallLoop.run', () => {
       isTaskMessage: false,
     });
 
-    expect(out.finalContent).toBe('I was about to summarise — that file holds the answer.');
-    expect(deps.ai.complete).toHaveBeenCalledTimes(3); // no recovery call
+    expect(out.finalContent).toBe('I read /tmp/a — it contains "contents". That answers the question.');
+    expect(deps.ai.complete).toHaveBeenCalledTimes(4); // 3 loop turns + 1 recovery
+    // The recovery call must include the mid-loop text as a hint in its system prompt.
+    const recoveryCall = (deps.ai.complete as any).mock.calls[3][0];
+    expect(recoveryCall.systemPrompt).toContain('Let me read this once more to be sure.');
+    expect(recoveryCall.tool_choice).toBe('none');
+  });
+
+  it('falls back to the mid-loop text when recovery itself returns empty', async () => {
+    // If recovery dies or returns blank, we'd rather hand back the model's
+    // last words (even a promise) than the generic canned apology — at
+    // least it tells the user *something* about what was happening.
+    const deps = makeDeps();
+    (deps.ai.complete as any)
+      .mockResolvedValueOnce(response('', [makeToolCall('tA', 'read_file', { path: '/tmp/a' })]))
+      .mockResolvedValueOnce(response('', [makeToolCall('tB', 'read_file', { path: '/tmp/a' })]))
+      .mockResolvedValueOnce(
+        response('Reading the file again.', [
+          makeToolCall('tC', 'read_file', { path: '/tmp/a' }),
+        ]),
+      )
+      .mockResolvedValueOnce(response('')); // recovery returns nothing
+    (deps.toolExecutor.execute as any).mockResolvedValue('contents');
+
+    const loop = new ToolCallLoop(deps);
+    const out = await loop.run({
+      chatId: 'c1',
+      systemPrompt: 'sys',
+      startingHistory: [],
+      isTaskMessage: false,
+    });
+
+    expect(out.finalContent).toBe('Reading the file again.');
   });
 
   it('hands malformed-JSON tool args back to the LLM as a tool error', async () => {
