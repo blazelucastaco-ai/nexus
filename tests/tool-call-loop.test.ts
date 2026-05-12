@@ -150,13 +150,17 @@ describe('ToolCallLoop.run', () => {
     expect(deps.toolExecutor.execute).toHaveBeenCalledTimes(2); // executed on iterations 0 and 1; blocked on 2
   });
 
-  it('falls back to the canned message when even the recovery completion returns empty', async () => {
+  it('falls back to a transparent attempt-summary when recovery returns empty (instead of canned apology)', async () => {
+    // The 2026-05-12 AP×Swatch incident: model burned 3x web_search, recovery
+    // returned empty, user got a useless canned "I hit a loop" with no signal
+    // about what was tried. The new programmatic summarizer names the actual
+    // tool calls + args so the user can redirect.
     const deps = makeDeps();
     (deps.ai.complete as any)
       .mockResolvedValueOnce(response('', [makeToolCall('tA', 'read_file', { path: '/tmp/a' })]))
       .mockResolvedValueOnce(response('', [makeToolCall('tB', 'read_file', { path: '/tmp/a' })]))
       .mockResolvedValueOnce(response('', [makeToolCall('tC', 'read_file', { path: '/tmp/a' })]))
-      // Recovery call returns nothing — second-line of defense kicks in.
+      // Recovery call returns nothing — last-resort programmatic summary fires.
       .mockResolvedValueOnce(response(''));
     (deps.toolExecutor.execute as any).mockResolvedValue('contents');
 
@@ -168,7 +172,11 @@ describe('ToolCallLoop.run', () => {
       isTaskMessage: false,
     });
 
-    expect(out.finalContent.toLowerCase()).toMatch(/repeated action/);
+    // Should name the tool that was tried + the path it was called against,
+    // NOT just say "repeated action and stopped".
+    expect(out.finalContent).toMatch(/read_file/);
+    expect(out.finalContent).toMatch(/\/tmp\/a/);
+    expect(out.finalContent).toMatch(/got stuck|what.*tried|try differently/i);
   });
 
   it('still runs the no-tool recovery when the LLM produced text alongside repeated tool calls, passing the mid-loop text as a hint', async () => {

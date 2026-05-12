@@ -161,6 +161,57 @@ export function getToolStatus(toolName: string, args: Record<string, unknown>): 
   }
 }
 
+/**
+ * Build a transparent "here's what I actually tried" summary from a halted
+ * tool-call loop. Last-resort fallback when the recovery LLM call returns
+ * empty content. Names the distinct tools called and their first/most
+ * salient argument so the user can redirect ("oh you searched wrong term,
+ * try X") instead of getting a generic "I hit a loop" message.
+ *
+ * The 2026-05-12 AP×Swatch incident motivated this — the user asked for
+ * collab launch details, the model burned three web_search calls on
+ * variations of the query, recovery returned empty, and the user got a
+ * canned apology with zero information. Now they'll see the actual tools
+ * and queries instead, so they can guide the next step.
+ */
+export function summarizeAttempt(loopMessages: AIMessage[]): string {
+  const calls: Array<{ tool: string; hint: string }> = [];
+  for (const m of loopMessages) {
+    if (m.role !== 'assistant' || !m.tool_calls) continue;
+    for (const tc of m.tool_calls) {
+      const name = tc.function?.name ?? 'unknown';
+      let hint = '';
+      try {
+        const args = JSON.parse(tc.function?.arguments ?? '{}');
+        // Pick the most salient arg by tool — query for searches, path/url
+        // for navigation/reads, command for shells.
+        const candidate = args.query ?? args.url ?? args.path ?? args.command ?? args.text ?? '';
+        hint = typeof candidate === 'string' ? candidate.slice(0, 80) : '';
+      } catch { /* ignore malformed args */ }
+      calls.push({ tool: name, hint });
+    }
+  }
+  if (calls.length === 0) {
+    return 'I hit a repeated action and stopped to avoid a loop. Let me know how you\'d like me to proceed.';
+  }
+  // Group by tool so 3x web_search shows as one line with the queries listed.
+  const byTool = new Map<string, string[]>();
+  for (const c of calls) {
+    const list = byTool.get(c.tool) ?? [];
+    if (c.hint && !list.includes(c.hint)) list.push(c.hint);
+    byTool.set(c.tool, list);
+  }
+  const lines = ['I got stuck before reaching a complete answer. Here\'s what I actually tried:'];
+  for (const [tool, hints] of byTool) {
+    const count = calls.filter((c) => c.tool === tool).length;
+    const hintsStr = hints.length > 0 ? ` → ${hints.map((h) => `"${h}"`).join(', ')}` : '';
+    lines.push(`  • ${tool} ×${count}${hintsStr}`);
+  }
+  lines.push('');
+  lines.push('Let me know what to try differently — a more specific search term, a direct URL, or a different angle.');
+  return lines.join('\n');
+}
+
 /** Wrap a promise in a timeout; rejects with a labelled error if exceeded. */
 export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -447,12 +498,20 @@ export class ToolCallLoop {
             // …") gets preserved rather than rewritten.
             const lastMidLoopText = aiResponse.content?.trim() || '';
             const hint = lastMidLoopText
-              ? `\n\nLast assistant text before the halt was: """${lastMidLoopText}""". If that was a complete answer, you may reuse it. If it was a forward-looking promise (e.g. starts with "Let me…", "I'll…", "Now I'll…"), write what was actually accomplished, where it got stuck, and a concrete next step — do NOT repeat the promise.`
+              ? `\n\nYour last text before the halt was: """${lastMidLoopText}""". If that was a complete answer, you may reuse it. If it was a forward-looking promise (e.g. starts with "Let me…", "I'll…", "Now I'll…"), DO NOT repeat the promise — instead write what was actually accomplished, what was tried, and what's still needed.`
               : '';
+            // The 2026-05-12 AP×Swatch incident: the previous prompt told
+            // the model "do NOT mention the loop, just give a concise direct
+            // answer" — when the tool work had produced no usable info, the
+            // model couldn't honestly say "I tried but got stuck", couldn't
+            // fabricate an answer, and went silent (empty content) instead.
+            // The user got the canned "I hit a repeated action" fallback.
+            // New prompt: encourage honesty. Either deliver real findings
+            // OR name what was tried + the wall hit + a concrete next step.
             try {
               const recovery = await ai.complete({
                 messages: loopMessages,
-                systemPrompt: `${systemPrompt}\n\n[RECOVERY MODE: A previous tool-calling attempt produced repeated identical actions and was halted. Answer the user's most recent message directly from your conversation context. Do NOT call any tools. Do NOT mention the loop or this recovery — just give a concise, direct answer.${hint}]`,
+                systemPrompt: `${systemPrompt}\n\n[RECOVERY MODE: The previous tool-calling attempt was halted to prevent a loop. Write a real answer to the user from the conversation context — DO NOT call any tools.\n\nPick ONE of these two modes:\n  (a) USEFUL RESULTS — your tool calls did surface real information. Synthesize it into a direct answer to the user's question.\n  (b) DEAD END — your tool calls did not produce a usable answer. Be honest and specific: name what you tried (e.g. "I searched the web for X and Y but the results didn't include Z"), what the wall was (e.g. "the site is gated", "the search returned generic listicles", "the data isn't on this page"), and a concrete next step the user could take or you could try with their guidance.\n\nNever go silent. An honest "I tried X and Y, hit Z, here's what to try next" is always better than nothing. Avoid generic apologies like "I hit a loop" — name what was actually attempted.${hint}]`,
                 model: config.ai.model,
                 maxTokens,
                 temperature: config.ai.chatTemperature,
@@ -471,11 +530,13 @@ export class ToolCallLoop {
               log.warn({ err }, 'Loop bail recovery completion failed');
             }
             if (!finalContent) {
-              // Recovery failed. Fall back to the mid-loop text if it
-              // exists (still better than a generic apology), otherwise
-              // the canned message.
-              finalContent = lastMidLoopText
-                || 'I hit a repeated action and stopped to avoid a loop. Let me know how you\'d like me to proceed.';
+              // Recovery dropped out empty AND no mid-loop text. Synthesize
+              // a transparent "here's what I actually tried" summary from
+              // the loopMessages history so the user gets concrete signal
+              // instead of the generic canned apology. This is the final
+              // fallback — strictly better than "I hit a loop" because it
+              // names the actual tool calls so the user can redirect.
+              finalContent = lastMidLoopText || summarizeAttempt(loopMessages);
             }
           }
         }
