@@ -16,7 +16,7 @@
     "start": "pnpm run build && electron dist/main/main.js",
     "test:main": "pnpm run build:main && node --test dist/main/installer-core.test.js",
     "dist": "pnpm run build && electron-builder --mac dmg",
-    "dist:signed": "pnpm run build && electron-builder --mac dmg --config.mac.identity=\"$CSC_NAME\" --config.mac.hardenedRuntime=true --config.mac.gatekeeperAssess=true --config.mac.entitlements=build/entitlements.mac.plist --config.mac.entitlementsInherit=build/entitlements.mac.plist --config.mac.notarize=true"
+    "dist:signed": "bash build/sign-and-notarize.sh"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
