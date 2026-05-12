@@ -19,7 +19,7 @@
     "dist:signed": "bash build/sign-and-notarize.sh"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
+    "@types/node": "^25.7.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@types/ws": "^8.5.13",
