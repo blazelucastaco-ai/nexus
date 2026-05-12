@@ -17,7 +17,7 @@ import { rmSync } from 'node:fs';
 
 const execFileAsync = promisify(execFile);
 
-const VERSION = '0.2.0';
+const VERSION = '0.2.1';
 const HOME = homedir();
 const NEXUS_DIR = join(HOME, '.nexus');
 // NEXUS daemon reads ONLY from config.yaml (see src/config.ts). Detection
@@ -236,142 +236,167 @@ async function cloneOrUpdateRepo(onProgress: ProgressCb): Promise<void> {
 }
 
 /**
- * Install the system-level prerequisites NEXUS needs (Homebrew, Node 22+,
- * pnpm). Called from the wizard's Step 1 Install button when any of those
- * are missing.
+ * Install the system-level prerequisites NEXUS needs (Node 22+, pnpm).
+ * Called from the wizard's Step 1 Install button when those are missing.
  *
- * Strategy:
- *   - Homebrew install needs an initial sudo to chown /opt/homebrew. We
- *     can't reliably prompt for sudo from inside Electron, so we open
- *     Terminal.app with the official one-liner. NEXUS then polls for the
- *     `brew` binary to appear (up to 6 min) so the wizard's progress bar
- *     keeps moving and we auto-advance the moment the user finishes.
- *   - Node.js → `brew install node`. Once Homebrew is installed, its
- *     prefix is user-owned and this runs without sudo.
- *   - pnpm → `corepack enable && corepack prepare pnpm@latest --activate`.
- *     Pure-Node, no sudo.
+ * Strategy — pure background, single native macOS password dialog:
  *
- * Tolerates partial failure: each step reports its outcome separately so
- * the renderer can re-run `runSystemChecks` afterwards and surface whichever
- * tool(s) still need attention.
+ *   - Node.js → official `.pkg` from nodejs.org. Run with `/usr/sbin/installer`
+ *     under `osascript do shell script with administrator privileges`. This
+ *     pops the NATIVE macOS authorization dialog (the one with TouchID
+ *     support that says "NEXUS wants to make changes"). No Terminal window,
+ *     no AppleScript-app-control permission, no manual user intervention
+ *     beyond the password / TouchID prompt.
+ *
+ *   - pnpm → `corepack enable`. Ships with Node 22, writes shims to
+ *     /usr/local/bin (same elevated context). First `pnpm` invocation
+ *     auto-downloads the binary into the user's cache.
+ *
+ *   - Homebrew is intentionally NOT installed. The system check marks it
+ *     as `required: false` — NEXUS doesn't need brew, only Node + pnpm.
+ *     Trying to install Homebrew from inside Electron is the path that
+ *     forced a Terminal + AppleScript route in the previous attempt.
+ *     Dropping it lets the whole flow stay native and silent.
+ *
+ * Progress streaming: the elevated install script writes phase markers
+ * to a log file the main process polls every 400ms. Markers are
+ * `PHASE:<phase>:<label>` (one per line). When osascript exits, we run
+ * one final runSystemChecks to verify and emit 'done' or 'error'.
  */
 type PrereqProgressCb = (p: import('../shared/types').PrereqProgress) => void;
 
+// Pin the LTS we install. Node 22 ships corepack so we get pnpm for free
+// without a second install step.
+const NODE_LTS_VERSION = '22.11.0';
+const NODE_PKG_URL = `https://nodejs.org/dist/v${NODE_LTS_VERSION}/node-v${NODE_LTS_VERSION}.pkg`;
+
 export async function installPrereqs(onProgress: PrereqProgressCb): Promise<void> {
-  onProgress({ phase: 'starting', label: 'Checking which tools to install…', pct: 2 });
+  onProgress({ phase: 'starting', label: 'Checking what to install…', pct: 2 });
   const checks = await runSystemChecks();
   const byName = new Map(checks.map((c) => [c.name, c]));
 
-  const brewMissing = !byName.get('Homebrew')?.ok;
   const nodeMissing = !byName.get('Node.js')?.ok;
   const pnpmMissing = !byName.get('pnpm')?.ok;
 
-  // ── 1) Homebrew ────────────────────────────────────────────────────────
-  if (brewMissing) {
-    onProgress({
-      phase: 'installing-brew',
-      tool: 'Homebrew',
-      label: 'Opening Terminal to install Homebrew (enter your password when asked)…',
-      pct: 10,
-    });
-    // Apple's `osascript` lets us drive Terminal.app from Electron. The
-    // user sees a real shell window with the command running — they
-    // approve the sudo prompt there, and we poll /opt/homebrew/bin/brew
-    // for the result.
-    const brewInstallCmd =
-      '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"';
-    try {
-      await execFileAsync('osascript', [
-        '-e',
-        `tell application "Terminal"\n  activate\n  do script "${brewInstallCmd.replace(/"/g, '\\"')}"\nend tell`,
-      ]);
-    } catch (err) {
-      onProgress({
-        phase: 'error',
-        tool: 'Homebrew',
-        label: `Could not open Terminal: ${err instanceof Error ? err.message : String(err)}`,
-        pct: 10,
-      });
-      return;
-    }
-    // Poll up to 6 min for /opt/homebrew/bin/brew to appear.
-    const brewBin = '/opt/homebrew/bin/brew';
-    const usrLocalBrew = '/usr/local/bin/brew';
-    const deadline = Date.now() + 6 * 60 * 1000;
-    while (Date.now() < deadline) {
-      if (existsSync(brewBin) || existsSync(usrLocalBrew)) break;
-      await new Promise((r) => setTimeout(r, 3000));
-      const elapsedPct = 10 + ((Date.now() - (deadline - 6 * 60 * 1000)) / (6 * 60 * 1000)) * 30; // 10..40
-      onProgress({
-        phase: 'installing-brew',
-        tool: 'Homebrew',
-        label: 'Waiting for Homebrew install to finish in Terminal…',
-        pct: Math.min(40, elapsedPct),
-      });
-    }
-    if (!existsSync(brewBin) && !existsSync(usrLocalBrew)) {
-      onProgress({
-        phase: 'error',
-        tool: 'Homebrew',
-        label: 'Homebrew install timed out. Finish it in the Terminal window, then click Recheck.',
-        pct: 40,
-      });
-      return;
-    }
-    onProgress({ phase: 'installing-brew', tool: 'Homebrew', label: 'Homebrew installed.', pct: 42 });
+  if (!nodeMissing && !pnpmMissing) {
+    onProgress({ phase: 'done', label: 'Everything is already installed.', pct: 100 });
+    return;
   }
 
-  // ── 2) Node.js ─────────────────────────────────────────────────────────
-  if (nodeMissing) {
-    onProgress({ phase: 'installing-node', tool: 'Node.js', label: 'Installing Node.js via Homebrew…', pct: 50 });
-    const brew = (await resolveBinary('brew')) ?? (existsSync('/opt/homebrew/bin/brew') ? '/opt/homebrew/bin/brew' : '/usr/local/bin/brew');
-    try {
-      await runStreamed(brew, ['install', 'node'], HOME, (line) =>
-        onProgress({ phase: 'installing-node', tool: 'Node.js', label: 'Installing Node.js…', pct: 60, log: line }),
-      );
-    } catch (err) {
-      onProgress({
-        phase: 'error',
-        tool: 'Node.js',
-        label: `brew install node failed: ${err instanceof Error ? err.message : String(err)}`,
-        pct: 60,
-      });
-      return;
-    }
-  }
+  // ── Write the install script + log to /tmp ──────────────────────────────
+  const stamp = Date.now();
+  const scriptPath = `/tmp/nexus-prereq-${stamp}.sh`;
+  const logPath = `/tmp/nexus-prereq-${stamp}.log`;
+  const pkgPath = `/tmp/nexus-node-${stamp}.pkg`;
 
-  // ── 3) pnpm ────────────────────────────────────────────────────────────
-  if (pnpmMissing) {
-    onProgress({ phase: 'installing-pnpm', tool: 'pnpm', label: 'Enabling pnpm via corepack…', pct: 75 });
-    try {
-      // corepack ships with Node 16.10+. `enable` registers shims under
-      // Node's bin dir (no sudo needed for Homebrew Node). `prepare` then
-      // pins the active pnpm version.
-      await runStreamed('corepack', ['enable'], HOME, (line) =>
-        onProgress({ phase: 'installing-pnpm', tool: 'pnpm', label: 'Enabling corepack…', pct: 78, log: line }),
-      );
-      await runStreamed('corepack', ['prepare', 'pnpm@latest', '--activate'], HOME, (line) =>
-        onProgress({ phase: 'installing-pnpm', tool: 'pnpm', label: 'Activating pnpm…', pct: 85, log: line }),
-      );
-    } catch (err) {
-      onProgress({
-        phase: 'error',
-        tool: 'pnpm',
-        label: `pnpm install failed: ${err instanceof Error ? err.message : String(err)}`,
-        pct: 85,
-      });
-      return;
-    }
-  }
+  // The script runs as root (from osascript elevation). We log phase markers
+  // to a file the user can read (writable by anyone). Each phase line is
+  // `PHASE:<phase>:<label>`. The main process polls this file for progress.
+  const script = [
+    '#!/bin/bash',
+    'set -e',
+    `LOG="${logPath}"`,
+    'log() { echo "$@" >> "$LOG"; }',
+    '',
+    // Make the log world-readable so the (non-root) main process can tail it.
+    `touch "$LOG"`,
+    `chmod 666 "$LOG"`,
+    '',
+    nodeMissing ? [
+      'log "PHASE:downloading-node:Downloading Node.js (LTS)…"',
+      `if [ ! -f "${pkgPath}" ]; then`,
+      `  curl -fsSL "${NODE_PKG_URL}" -o "${pkgPath}" >> "$LOG" 2>&1`,
+      'fi',
+      'log "PHASE:installing-node:Installing Node.js…"',
+      `/usr/sbin/installer -pkg "${pkgPath}" -target / >> "$LOG" 2>&1`,
+      `rm -f "${pkgPath}"`,
+    ].join('\n') : '',
+    pnpmMissing || nodeMissing ? [
+      'log "PHASE:installing-pnpm:Setting up pnpm…"',
+      // corepack ships in Node 22; the .pkg installs it to /usr/local/bin.
+      // After `enable`, `pnpm` resolves on PATH for the user too.
+      '/usr/local/bin/corepack enable >> "$LOG" 2>&1 || true',
+    ].join('\n') : '',
+    '',
+    'log "PHASE:done:All prerequisites installed."',
+    'exit 0',
+  ].filter(Boolean).join('\n');
 
-  // ── 4) Verify ──────────────────────────────────────────────────────────
-  onProgress({ phase: 'verifying', label: 'Re-checking system…', pct: 95 });
+  writeFileSync(scriptPath, script, { mode: 0o755 });
+
+  // ── Spawn the elevated install (no Terminal, no Automation permission) ─
+  // `osascript do shell script ... with administrator privileges` shows the
+  // NATIVE macOS authorization dialog. The dialog includes the app's name
+  // (NEXUS) and a TouchID option. No Terminal window opens.
+  const osascriptCmd = [
+    `do shell script "/bin/bash '${scriptPath}'"`,
+    `with prompt "NEXUS needs your password to install Node.js."`,
+    `with administrator privileges`,
+  ].join(' ');
+
+  onProgress({
+    phase: 'starting',
+    label: 'Asking for your password…',
+    pct: 6,
+  });
+
+  // Fire-and-await — osascript blocks until the install script completes.
+  // In parallel, we poll the log file for phase markers.
+  const installPromise = execFileAsync('osascript', ['-e', osascriptCmd], { maxBuffer: 4 * 1024 * 1024 });
+
+  // ── Poll the log file every 400ms for new phase markers ────────────────
+  const phasePctMap: Record<string, number> = {
+    'starting': 8,
+    'downloading-node': 20,
+    'installing-node': 65,
+    'installing-pnpm': 88,
+    'done': 100,
+  };
+  let lastLineSeen = 0;
+  const poll = setInterval(() => {
+    try {
+      if (!existsSync(logPath)) return;
+      const content = readFileSync(logPath, 'utf-8');
+      const lines = content.split('\n');
+      for (let i = lastLineSeen; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line || !line.startsWith('PHASE:')) continue;
+        const [, phase, label] = line.split(':', 3);
+        const mappedPct = phasePctMap[phase as string] ?? 50;
+        onProgress({
+          phase: (phase as import('../shared/types').PrereqProgress['phase']) ?? 'verifying',
+          label: label ?? 'Working…',
+          pct: mappedPct,
+        });
+      }
+      lastLineSeen = lines.length;
+    } catch { /* tolerated — next tick */ }
+  }, 400);
+
+  try {
+    await installPromise;
+  } catch (err) {
+    clearInterval(poll);
+    const msg = err instanceof Error ? err.message : String(err);
+    // User clicked Cancel on the password dialog → osascript exits with
+    // "User canceled" — surface as a clean error instead of stack trace.
+    if (/User canceled|cancelled/i.test(msg)) {
+      onProgress({ phase: 'error', label: 'Install cancelled. Click Install Missing Tools to try again.', pct: 0 });
+    } else {
+      onProgress({ phase: 'error', label: `Install failed: ${msg.split('\n')[0]}`, pct: 0 });
+    }
+    return;
+  }
+  clearInterval(poll);
+
+  // ── Final verification ──────────────────────────────────────────────────
+  onProgress({ phase: 'verifying', label: 'Verifying…', pct: 96 });
   const finalChecks = await runSystemChecks();
   const stillMissing = finalChecks.filter((c) => c.required && !c.ok).map((c) => c.name);
   if (stillMissing.length > 0) {
     onProgress({
       phase: 'error',
-      label: `Still missing: ${stillMissing.join(', ')}. Open Terminal to fix manually, then Recheck.`,
+      label: `Still missing: ${stillMissing.join(', ')}. Try again or install manually.`,
       pct: 100,
     });
     return;

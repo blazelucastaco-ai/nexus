@@ -1,6 +1,6 @@
 {
   "name": "nexus-installer",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "NEXUS installer — native macOS app for installing NEXUS in a few clicks",
   "author": "Lucas Topinka",
   "license": "MIT",

@@ -294,16 +294,19 @@ export function SystemCheckStep(props: { onNext: () => void; onBack: () => void 
   };
 
   // Choose the primary button label/handler based on state.
+  // KEEP THE LABEL SHORT — the button is a fixed-width control, so we never
+  // pour the full phase description into it. Long status text goes in the
+  // status row below the checklist instead.
   let primaryLabel: string;
   let primaryDisabled = false;
   let primaryOnClick: () => void;
   if (installState.kind === 'installing') {
-    primaryLabel = `${installState.label} (${Math.round(installState.pct)}%)`;
+    primaryLabel = `Installing… ${Math.round(installState.pct)}%`;
     primaryDisabled = true;
     primaryOnClick = () => { /* no-op while running */ };
   } else if (installState.kind === 'error') {
-    primaryLabel = 'Recheck →';
-    primaryOnClick = recheck;
+    primaryLabel = 'Try Again →';
+    primaryOnClick = () => { void startInstall(); };
   } else if (!results) {
     primaryLabel = 'Continue →';
     primaryDisabled = true;
@@ -344,8 +347,31 @@ export function SystemCheckStep(props: { onNext: () => void; onBack: () => void 
           </div>
         ))}
       </div>
+      {/* Status row — long phase text + progress bar live HERE, not in the button. */}
+      {installState.kind === 'installing' && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: 'rgba(0,0,0,.72)' }}>
+            <span style={{
+              display: 'inline-block', width: 12, height: 12, borderRadius: '50%',
+              border: '2px solid rgba(0,0,0,.15)', borderTopColor: 'var(--td, #ff8a3d)',
+              animation: 'spin 0.9s linear infinite',
+            }} />
+            <span>{installState.label}</span>
+          </div>
+          <div style={{ marginTop: 8, height: 4, width: '100%', background: 'rgba(0,0,0,.08)', borderRadius: 4, overflow: 'hidden' }}>
+            <div style={{
+              height: '100%',
+              width: `${Math.max(2, installState.pct)}%`,
+              background: 'linear-gradient(90deg, #ff8a3d, #ffd166)',
+              borderRadius: 4,
+              transition: 'width 280ms ease-out',
+            }} />
+          </div>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      )}
       {installState.kind === 'error' && (
-        <p className="step-lead" style={{ color: '#c43328', marginTop: 8 }}>
+        <p className="step-lead" style={{ color: '#c43328', marginTop: 14 }}>
           {installState.label}
         </p>
       )}

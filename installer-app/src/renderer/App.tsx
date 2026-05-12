@@ -127,7 +127,7 @@ export function App(): JSX.Element {
             );
           })}
         </div>
-        <div className="sidebar-footer">v0.2.0 · INSTALLER</div>
+        <div className="sidebar-footer">v0.2.1 · INSTALLER</div>
       </aside>
       <main className="main">
         {currentKey === 'detect' && (
