@@ -186,6 +186,16 @@ const OVERLAY_HTML = String.raw`<!DOCTYPE html>
       requestAnimationFrame(tickConfetti);
     }, 280);
   }
+  // Hide instantly with no confetti — used on WS disconnect so a daemon
+  // restart (or a SIGTERM-killed message) doesn't leave the overlay
+  // stuck "show" forever. The daemon may have died mid-task without
+  // ever firing message.completed, and the renderer can't tell. Safer
+  // to clear and let the next event re-show.
+  function hideNow() {
+    pill.classList.remove('show');
+    pill.classList.add('hide');
+    glow.classList.remove('show');
+  }
 
   // WebSocket connection to daemon's task-overlay-bridge.
   let ws = null;
@@ -200,7 +210,14 @@ const OVERLAY_HTML = String.raw`<!DOCTYPE html>
       if (evt.kind === 'task.planned' || evt.kind === 'task.step') showActive(evt.text);
       else if (evt.kind === 'task.completed') showDone(evt.text);
     };
-    ws.onclose = () => { ws = null; scheduleReconnect(); };
+    ws.onclose = () => {
+      ws = null;
+      // Daemon may have died mid-message — clear the visual state so
+      // we don't leave a stuck pill forever. Reconnect catches the
+      // next event.
+      hideNow();
+      scheduleReconnect();
+    };
     ws.onerror = () => { /* close handler covers reconnect */ };
   }
   function scheduleReconnect() {
