@@ -1259,6 +1259,37 @@ export async function runAutoUpdate(
     // inside Frameworks/. -p keeps mtime so Gatekeeper's translocation
     // heuristics don't flag this as a "new download from unknown origin."
     await execFileAsync('cp', ['-Rp', newApp, installRoot]);
+
+    // ── Gatekeeper sanitation ─────────────────────────────────────────
+    // 1) Strip the quarantine xattr that DMG-mounted files inherit. Without
+    //    this, macOS pops "NEXUS was blocked to protect your Mac" on next
+    //    launch and the user has to dig into System Settings → Privacy &
+    //    Security → Open Anyway. `xattr -cr` clears *all* xattrs recursively;
+    //    this is what every macOS self-updater does (Sparkle, Homebrew Cask,
+    //    etc.). Tolerate failure — worst case the user sees the dialog once.
+    onProgress({ phase: 'installing', label: 'Clearing quarantine…', pct: 91 });
+    try { await execFileAsync('xattr', ['-cr', installRoot]); } catch { /* tolerated */ }
+
+    // 2) Re-sign ad-hoc. The DMG ships with a signature that was valid in
+    //    the build environment; after cp -Rp the bundle's signature can
+    //    fail Gatekeeper's stricter checks on the destination filesystem.
+    //    `codesign --force --deep --sign -` re-applies a fresh ad-hoc
+    //    signature in-place. This is exactly what installer-app's own
+    //    after-sign.js hook does at build time.
+    onProgress({ phase: 'installing', label: 'Re-signing…', pct: 95 });
+    try {
+      await execFileAsync('codesign', [
+        '--force', '--deep', '--sign', '-',
+        '--timestamp=none',
+        installRoot,
+      ], { maxBuffer: 4 * 1024 * 1024 });
+    } catch (err) {
+      // Re-sign failure isn't fatal for app behavior, just for Gatekeeper
+      // first-launch UX. Log and continue — the user can still "Open Anyway".
+      // eslint-disable-next-line no-console
+      console.warn('[runAutoUpdate] codesign failed:', err instanceof Error ? err.message : String(err));
+    }
+
     // Clean up the backup. If this fails it's not fatal — the install
     // succeeded, the user just has a .bak directory they can rm later.
     try { rmSync(bakPath, { recursive: true, force: true }); } catch { /* ignore */ }
