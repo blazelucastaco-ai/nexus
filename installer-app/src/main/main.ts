@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, shell, Tray } from 'electron';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import {
   runSystemChecks,
   checkRepo,
@@ -126,7 +127,25 @@ let statusPollTimer: ReturnType<typeof setInterval> | null = null;
 // `forceCheckForUpdate` ignores that suppression — used by the "Check for
 // Updates Now" tray menu item, where the user explicitly wants to be told
 // again, and also surfaces an "you're up to date" toast if there's nothing.
-let lastPromptedVersion: string | null = null;
+// `lastPromptedVersion` is persisted to disk so that clicking "Later" on
+// the popup suppresses the same-version prompt across menubar restarts.
+// Lives at ~/.nexus/last-prompted-update.txt — single line, the version
+// string. Best-effort: read on startup, write on prompt. Disk failures
+// fall back to in-memory state.
+const LAST_PROMPTED_PATH = join(homedir(), '.nexus', 'last-prompted-update.txt');
+let lastPromptedVersion: string | null = (() => {
+  try {
+    return readFileSync(LAST_PROMPTED_PATH, 'utf-8').trim() || null;
+  } catch { return null; }
+})();
+function setLastPromptedVersion(v: string): void {
+  lastPromptedVersion = v;
+  try {
+    mkdirSync(dirname(LAST_PROMPTED_PATH), { recursive: true });
+    writeFileSync(LAST_PROMPTED_PATH, v + '\n');
+  } catch { /* tolerated — in-memory state still works */ }
+}
+
 // Cache the most recent releasePageUrl so the "View release notes →" link
 // in the popup knows where to open. Refreshed whenever a poll prompts.
 let lastReleasePageUrl: string | null = null;
@@ -135,7 +154,7 @@ async function pollForUpdate(): Promise<void> {
     const check = await checkForUpdates();
     if (!check.updateAvailable) return;
     if (lastPromptedVersion === check.latestVersion) return;
-    lastPromptedVersion = check.latestVersion;
+    setLastPromptedVersion(check.latestVersion);
     lastReleasePageUrl = check.releasePageUrl;
     showUpdatePopup({
       phase: 'prompt',
@@ -150,7 +169,7 @@ async function forceCheckForUpdate(): Promise<void> {
   try {
     const check = await checkForUpdates();
     if (check.updateAvailable) {
-      lastPromptedVersion = check.latestVersion;
+      setLastPromptedVersion(check.latestVersion);
       lastReleasePageUrl = check.releasePageUrl;
       showUpdatePopup({
         phase: 'prompt',
@@ -349,15 +368,16 @@ async function rebuildTrayMenu(): Promise<void> {
   lastServiceRunning = status.running;
 
   tray.setImage(makeTrayIcon(status.running));
-  tray.setToolTip(`NEXUS · ${status.running ? 'Running' : status.registered ? 'Stopped' : 'Not installed'}`);
+  const installedVersion = app.getVersion();
+  tray.setToolTip(`NEXUS v${installedVersion} · ${status.running ? 'Running' : status.registered ? 'Stopped' : 'Not installed'}`);
 
   const template: Electron.MenuItemConstructorOptions[] = [
     {
       label: status.running
-        ? `● NEXUS running${status.pid ? ` (pid ${status.pid})` : ''}`
+        ? `● NEXUS v${installedVersion} running${status.pid ? ` (pid ${status.pid})` : ''}`
         : status.registered
-          ? '○ NEXUS stopped'
-          : '○ NEXUS not installed',
+          ? `○ NEXUS v${installedVersion} stopped`
+          : `○ NEXUS v${installedVersion} not installed`,
       enabled: false,
     },
     {
@@ -453,13 +473,13 @@ app.whenReady().then(() => {
   startTaskOverlay();
 
   // ── Update notification popup ──────────────────────────────────────
-  // First check fires 30s after launch (let menubar settle); then every
-  // 4h thereafter. When a new version is on GitHub Releases, a small
-  // top-right toast appears with [Update Now] / [Later]. Update Now runs
-  // the full download → mount → swap → relaunch flow with the popup
-  // walking through each state.
+  // ONE-SHOT poll 30s after launch. No background interval — Lucas's
+  // 2026-05-12 directive: nothing fires autonomously on a wall-clock
+  // cadence. Subsequent checks happen via the tray menu's
+  // "Check for Updates Now" item, which is user-initiated.
+  // The 30s startup poll is fine because launching the app IS a user
+  // action — the user just deliberately started this menubar.
   setTimeout(() => { void pollForUpdate(); }, 30_000);
-  setInterval(() => { void pollForUpdate(); }, 4 * 60 * 60 * 1000);
 
   registerUpdatePopupIpc({
     onUpdate: async (sendState) => {
