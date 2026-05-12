@@ -25,6 +25,7 @@ import {
   checkForUpdates,
   runUpdate,
   runAutoUpdate,
+  installPrereqs,
   listMemories,
   deleteMemory,
   takeScreenshot,
@@ -34,7 +35,7 @@ import {
   runMemoryImport,
   getAboutInfo,
 } from './installer-core';
-import type { ConfigInput, InstallProgress, UpdateProgress } from '../shared/types';
+import type { ConfigInput, InstallProgress, PrereqProgress, UpdateProgress } from '../shared/types';
 import { startTaskOverlay, stopTaskOverlay } from './overlay-window';
 import {
   showUpdatePopup,
@@ -455,6 +456,15 @@ app.whenReady().then(() => {
 
   // Wizard IPC
   ipcMain.handle('system:checks', async () => runSystemChecks());
+  ipcMain.handle('system:install-prereqs', async (event) => {
+    const send = (p: PrereqProgress): void => { event.sender.send('system:prereq-progress', p); };
+    try {
+      await installPrereqs(send);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
   ipcMain.handle('repo:status', async () => checkRepo());
   ipcMain.handle('permissions:check', async () => checkPermissions());
   ipcMain.handle('permissions:open', async (_e, url: string) => {

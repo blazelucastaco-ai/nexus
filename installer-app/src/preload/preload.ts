@@ -13,11 +13,19 @@ import type {
   MemoryEntry,
   UpdateProgress,
   QuickActionResult,
+  PrereqProgress,
 } from '../shared/types';
 
 const api = {
   system: {
     check: (): Promise<SystemCheckResult[]> => ipcRenderer.invoke('system:checks'),
+    installPrereqs: (): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('system:install-prereqs'),
+    onPrereqProgress: (cb: (p: PrereqProgress) => void): (() => void) => {
+      const listener = (_e: unknown, p: PrereqProgress): void => cb(p);
+      ipcRenderer.on('system:prereq-progress', listener);
+      return () => ipcRenderer.removeListener('system:prereq-progress', listener);
+    },
   },
   repo: {
     status: (): Promise<RepoStatus> => ipcRenderer.invoke('repo:status'),

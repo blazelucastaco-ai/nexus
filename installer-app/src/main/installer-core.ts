@@ -235,6 +235,150 @@ async function cloneOrUpdateRepo(onProgress: ProgressCb): Promise<void> {
   );
 }
 
+/**
+ * Install the system-level prerequisites NEXUS needs (Homebrew, Node 22+,
+ * pnpm). Called from the wizard's Step 1 Install button when any of those
+ * are missing.
+ *
+ * Strategy:
+ *   - Homebrew install needs an initial sudo to chown /opt/homebrew. We
+ *     can't reliably prompt for sudo from inside Electron, so we open
+ *     Terminal.app with the official one-liner. NEXUS then polls for the
+ *     `brew` binary to appear (up to 6 min) so the wizard's progress bar
+ *     keeps moving and we auto-advance the moment the user finishes.
+ *   - Node.js → `brew install node`. Once Homebrew is installed, its
+ *     prefix is user-owned and this runs without sudo.
+ *   - pnpm → `corepack enable && corepack prepare pnpm@latest --activate`.
+ *     Pure-Node, no sudo.
+ *
+ * Tolerates partial failure: each step reports its outcome separately so
+ * the renderer can re-run `runSystemChecks` afterwards and surface whichever
+ * tool(s) still need attention.
+ */
+type PrereqProgressCb = (p: import('../shared/types').PrereqProgress) => void;
+
+export async function installPrereqs(onProgress: PrereqProgressCb): Promise<void> {
+  onProgress({ phase: 'starting', label: 'Checking which tools to install…', pct: 2 });
+  const checks = await runSystemChecks();
+  const byName = new Map(checks.map((c) => [c.name, c]));
+
+  const brewMissing = !byName.get('Homebrew')?.ok;
+  const nodeMissing = !byName.get('Node.js')?.ok;
+  const pnpmMissing = !byName.get('pnpm')?.ok;
+
+  // ── 1) Homebrew ────────────────────────────────────────────────────────
+  if (brewMissing) {
+    onProgress({
+      phase: 'installing-brew',
+      tool: 'Homebrew',
+      label: 'Opening Terminal to install Homebrew (enter your password when asked)…',
+      pct: 10,
+    });
+    // Apple's `osascript` lets us drive Terminal.app from Electron. The
+    // user sees a real shell window with the command running — they
+    // approve the sudo prompt there, and we poll /opt/homebrew/bin/brew
+    // for the result.
+    const brewInstallCmd =
+      '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"';
+    try {
+      await execFileAsync('osascript', [
+        '-e',
+        `tell application "Terminal"\n  activate\n  do script "${brewInstallCmd.replace(/"/g, '\\"')}"\nend tell`,
+      ]);
+    } catch (err) {
+      onProgress({
+        phase: 'error',
+        tool: 'Homebrew',
+        label: `Could not open Terminal: ${err instanceof Error ? err.message : String(err)}`,
+        pct: 10,
+      });
+      return;
+    }
+    // Poll up to 6 min for /opt/homebrew/bin/brew to appear.
+    const brewBin = '/opt/homebrew/bin/brew';
+    const usrLocalBrew = '/usr/local/bin/brew';
+    const deadline = Date.now() + 6 * 60 * 1000;
+    while (Date.now() < deadline) {
+      if (existsSync(brewBin) || existsSync(usrLocalBrew)) break;
+      await new Promise((r) => setTimeout(r, 3000));
+      const elapsedPct = 10 + ((Date.now() - (deadline - 6 * 60 * 1000)) / (6 * 60 * 1000)) * 30; // 10..40
+      onProgress({
+        phase: 'installing-brew',
+        tool: 'Homebrew',
+        label: 'Waiting for Homebrew install to finish in Terminal…',
+        pct: Math.min(40, elapsedPct),
+      });
+    }
+    if (!existsSync(brewBin) && !existsSync(usrLocalBrew)) {
+      onProgress({
+        phase: 'error',
+        tool: 'Homebrew',
+        label: 'Homebrew install timed out. Finish it in the Terminal window, then click Recheck.',
+        pct: 40,
+      });
+      return;
+    }
+    onProgress({ phase: 'installing-brew', tool: 'Homebrew', label: 'Homebrew installed.', pct: 42 });
+  }
+
+  // ── 2) Node.js ─────────────────────────────────────────────────────────
+  if (nodeMissing) {
+    onProgress({ phase: 'installing-node', tool: 'Node.js', label: 'Installing Node.js via Homebrew…', pct: 50 });
+    const brew = (await resolveBinary('brew')) ?? (existsSync('/opt/homebrew/bin/brew') ? '/opt/homebrew/bin/brew' : '/usr/local/bin/brew');
+    try {
+      await runStreamed(brew, ['install', 'node'], HOME, (line) =>
+        onProgress({ phase: 'installing-node', tool: 'Node.js', label: 'Installing Node.js…', pct: 60, log: line }),
+      );
+    } catch (err) {
+      onProgress({
+        phase: 'error',
+        tool: 'Node.js',
+        label: `brew install node failed: ${err instanceof Error ? err.message : String(err)}`,
+        pct: 60,
+      });
+      return;
+    }
+  }
+
+  // ── 3) pnpm ────────────────────────────────────────────────────────────
+  if (pnpmMissing) {
+    onProgress({ phase: 'installing-pnpm', tool: 'pnpm', label: 'Enabling pnpm via corepack…', pct: 75 });
+    try {
+      // corepack ships with Node 16.10+. `enable` registers shims under
+      // Node's bin dir (no sudo needed for Homebrew Node). `prepare` then
+      // pins the active pnpm version.
+      await runStreamed('corepack', ['enable'], HOME, (line) =>
+        onProgress({ phase: 'installing-pnpm', tool: 'pnpm', label: 'Enabling corepack…', pct: 78, log: line }),
+      );
+      await runStreamed('corepack', ['prepare', 'pnpm@latest', '--activate'], HOME, (line) =>
+        onProgress({ phase: 'installing-pnpm', tool: 'pnpm', label: 'Activating pnpm…', pct: 85, log: line }),
+      );
+    } catch (err) {
+      onProgress({
+        phase: 'error',
+        tool: 'pnpm',
+        label: `pnpm install failed: ${err instanceof Error ? err.message : String(err)}`,
+        pct: 85,
+      });
+      return;
+    }
+  }
+
+  // ── 4) Verify ──────────────────────────────────────────────────────────
+  onProgress({ phase: 'verifying', label: 'Re-checking system…', pct: 95 });
+  const finalChecks = await runSystemChecks();
+  const stillMissing = finalChecks.filter((c) => c.required && !c.ok).map((c) => c.name);
+  if (stillMissing.length > 0) {
+    onProgress({
+      phase: 'error',
+      label: `Still missing: ${stillMissing.join(', ')}. Open Terminal to fix manually, then Recheck.`,
+      pct: 100,
+    });
+    return;
+  }
+  onProgress({ phase: 'done', label: 'All prerequisites installed.', pct: 100 });
+}
+
 async function installDeps(onProgress: ProgressCb): Promise<void> {
   const pnpm = (await resolveBinary('pnpm')) ?? 'pnpm';
   await runStreamed(pnpm, ['install'], REPO_DIR, (line) =>

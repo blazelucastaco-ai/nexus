@@ -51,6 +51,26 @@ export interface SystemCheckResult {
   required: boolean;
 }
 
+/**
+ * Progress event from the system-prereq installer. Streamed to the
+ * renderer so the wizard's Step 1 can show what's being installed
+ * (Homebrew → Node.js → pnpm) without leaving the page.
+ */
+export interface PrereqProgress {
+  phase:
+    | 'starting'
+    | 'installing-brew'
+    | 'installing-node'
+    | 'installing-pnpm'
+    | 'verifying'
+    | 'done'
+    | 'error';
+  tool?: string;
+  label: string;
+  pct: number; // 0..100
+  log?: string;
+}
+
 export interface RepoStatus {
   installed: boolean;
   path: string;

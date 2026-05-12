@@ -228,18 +228,97 @@ export function WelcomeStep(props: { onNext: () => void }): JSX.Element {
 ────────────────────────────────────────────────────────────────── */
 export function SystemCheckStep(props: { onNext: () => void; onBack: () => void }): JSX.Element {
   const [results, setResults] = useState<SystemCheckResult[] | null>(null);
+  // Install-state machine for the right-hand button. When any required
+  // check fails the button morphs from "Continue" → "Install Missing Tools";
+  // clicking starts the prereq install and the button reflects progress
+  // until either everything passes (auto-advance) or an error surfaces
+  // (button becomes "Recheck" so the user can re-run after fixing manually).
+  const [installState, setInstallState] = useState<
+    | { kind: 'idle' }
+    | { kind: 'installing'; label: string; pct: number }
+    | { kind: 'error'; label: string }
+  >({ kind: 'idle' });
+
+  const recheck = (): void => {
+    setResults(null);
+    void window.nexus.system.check().then(setResults);
+  };
 
   useEffect(() => {
     let cancelled = false;
     void window.nexus.system.check().then((r) => {
       if (!cancelled) setResults(r);
     });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
   const allRequiredOk = results?.every((r) => !r.required || r.ok) ?? false;
+  const hasMissingRequired = (results?.some((r) => r.required && !r.ok)) ?? false;
+
+  // Auto-advance the moment all required checks pass (after an Install run).
+  // Guard with installState so we don't auto-advance on the first render
+  // when the system is already healthy — the user should explicitly hit
+  // Continue in that case (avoids a surprise step-skip).
+  useEffect(() => {
+    if (installState.kind === 'idle') return;
+    if (allRequiredOk && installState.kind === 'installing') {
+      // Brief pause so the user sees the green checkmarks before we jump.
+      const t = setTimeout(() => props.onNext(), 700);
+      return () => clearTimeout(t);
+    }
+    return undefined;
+  }, [allRequiredOk, installState, props]);
+
+  const startInstall = async (): Promise<void> => {
+    setInstallState({ kind: 'installing', label: 'Starting installer…', pct: 0 });
+    const off = window.nexus.system.onPrereqProgress((p) => {
+      if (p.phase === 'error') {
+        setInstallState({ kind: 'error', label: p.label });
+      } else if (p.phase === 'done') {
+        // Final recheck will flip allRequiredOk → auto-advance fires above.
+        setInstallState({ kind: 'installing', label: p.label, pct: 100 });
+        recheck();
+      } else {
+        setInstallState({ kind: 'installing', label: p.label, pct: p.pct });
+      }
+    });
+    try {
+      const res = await window.nexus.system.installPrereqs();
+      if (!res.ok) setInstallState({ kind: 'error', label: res.error ?? 'Install failed.' });
+    } finally {
+      off();
+      // Always refresh the checklist after an install attempt so the
+      // tick marks reflect reality even if the install bailed partway.
+      recheck();
+    }
+  };
+
+  // Choose the primary button label/handler based on state.
+  let primaryLabel: string;
+  let primaryDisabled = false;
+  let primaryOnClick: () => void;
+  if (installState.kind === 'installing') {
+    primaryLabel = `${installState.label} (${Math.round(installState.pct)}%)`;
+    primaryDisabled = true;
+    primaryOnClick = () => { /* no-op while running */ };
+  } else if (installState.kind === 'error') {
+    primaryLabel = 'Recheck →';
+    primaryOnClick = recheck;
+  } else if (!results) {
+    primaryLabel = 'Continue →';
+    primaryDisabled = true;
+    primaryOnClick = props.onNext;
+  } else if (hasMissingRequired) {
+    primaryLabel = 'Install Missing Tools →';
+    primaryOnClick = () => { void startInstall(); };
+  } else if (allRequiredOk) {
+    primaryLabel = 'Continue →';
+    primaryOnClick = props.onNext;
+  } else {
+    primaryLabel = 'Continue →';
+    primaryDisabled = true;
+    primaryOnClick = props.onNext;
+  }
 
   return (
     <div className="step">
@@ -265,12 +344,17 @@ export function SystemCheckStep(props: { onNext: () => void; onBack: () => void 
           </div>
         ))}
       </div>
+      {installState.kind === 'error' && (
+        <p className="step-lead" style={{ color: '#c43328', marginTop: 8 }}>
+          {installState.label}
+        </p>
+      )}
       <div className="btn-row">
-        <button type="button" className="btn-g" onClick={props.onBack}>
+        <button type="button" className="btn-g" onClick={props.onBack} disabled={installState.kind === 'installing'}>
           ← Back
         </button>
-        <button type="button" className="btn-p" onClick={props.onNext} disabled={!results || !allRequiredOk}>
-          Continue →
+        <button type="button" className="btn-p" onClick={primaryOnClick} disabled={primaryDisabled}>
+          {primaryLabel}
         </button>
       </div>
     </div>
