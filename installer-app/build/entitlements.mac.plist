@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Entitlements for a notarized Developer-ID-signed NEXUS build.
+       hardenedRuntime: true requires that we declare every capability the
+       app uses, including ones Electron needs to function under restrictive
+       runtimes (JIT for V8, dyld for native deps). Drop these only after
+       confirming the resulting build still launches. -->
+
+  <!-- Electron / V8 -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+
+  <!-- NEXUS needs network for the daemon bridges + GitHub Releases API +
+       Anthropic API + Telegram + Chrome extension WS. -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+  <key>com.apple.security.network.server</key>
+  <true/>
+
+  <!-- Auto-update writes the .app in place. -->
+  <key>com.apple.security.files.user-selected.read-write</key>
+  <true/>
+
+  <!-- Privacy strings live in Info.plist via extendInfo (see package.json).
+       Microphone / camera / Apple Events / Contacts / Calendars are
+       requested at runtime; entitlements are not required for hardened
+       runtime unless you call resourceAccess APIs explicitly. -->
+</dict>
+</plist>

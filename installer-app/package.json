@@ -1,6 +1,6 @@
 {
   "name": "nexus-installer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "NEXUS installer — native macOS app for installing NEXUS in a few clicks",
   "author": "Lucas Topinka",
   "license": "MIT",
@@ -14,7 +14,8 @@
     "build": "pnpm run build:renderer && pnpm run build:main",
     "dev": "pnpm run build:main && concurrently -k \"pnpm run dev:renderer\" \"wait-on http://127.0.0.1:5173 && cross-env NEXUS_INSTALLER_DEV=1 electron dist/main/main.js\"",
     "start": "pnpm run build && electron dist/main/main.js",
-    "dist": "pnpm run build && electron-builder --mac dmg"
+    "dist": "pnpm run build && electron-builder --mac dmg",
+    "dist:signed": "pnpm run build && electron-builder --mac dmg --config.mac.identity=\"$CSC_NAME\" --config.mac.hardenedRuntime=true --config.mac.gatekeeperAssess=true --config.mac.entitlements=build/entitlements.mac.plist --config.mac.entitlementsInherit=build/entitlements.mac.plist --config.mac.notarize=true"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
