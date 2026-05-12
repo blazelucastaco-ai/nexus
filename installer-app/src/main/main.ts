@@ -151,11 +151,17 @@ function setLastPromptedVersion(v: string): void {
 let lastReleasePageUrl: string | null = null;
 async function pollForUpdate(): Promise<void> {
   try {
+    console.log('[update] pollForUpdate fired');
     const check = await checkForUpdates();
+    console.log(`[update] poll: installed=${check.installedVersion} latest=${check.latestVersion} updateAvailable=${check.updateAvailable} offline=${check.offline ?? false}`);
     if (!check.updateAvailable) return;
-    if (lastPromptedVersion === check.latestVersion) return;
+    if (lastPromptedVersion === check.latestVersion) {
+      console.log(`[update] suppressed (lastPromptedVersion=${lastPromptedVersion})`);
+      return;
+    }
     setLastPromptedVersion(check.latestVersion);
     lastReleasePageUrl = check.releasePageUrl;
+    console.log(`[update] showing prompt popup for v${check.latestVersion}`);
     showUpdatePopup({
       phase: 'prompt',
       installedVersion: check.installedVersion,
@@ -163,11 +169,15 @@ async function pollForUpdate(): Promise<void> {
       downloadUrl: check.downloadUrl,
       releasePageUrl: check.releasePageUrl,
     });
-  } catch { /* tolerated — try again on next interval */ }
+  } catch (err) {
+    console.log('[update] pollForUpdate error:', err instanceof Error ? err.message : String(err));
+  }
 }
 async function forceCheckForUpdate(): Promise<void> {
   try {
+    console.log('[update] forceCheckForUpdate fired');
     const check = await checkForUpdates();
+    console.log(`[update] force: installed=${check.installedVersion} latest=${check.latestVersion} updateAvailable=${check.updateAvailable} offline=${check.offline ?? false}`);
     if (check.updateAvailable) {
       setLastPromptedVersion(check.latestVersion);
       lastReleasePageUrl = check.releasePageUrl;
@@ -189,7 +199,8 @@ async function forceCheckForUpdate(): Promise<void> {
           : `You're on the latest — v${check.installedVersion}.`,
       });
     }
-  } catch {
+  } catch (err) {
+    console.log('[update] forceCheckForUpdate error:', err instanceof Error ? err.message : String(err));
     showUpdatePopup({ phase: 'error', label: 'Could not check for updates.' });
   }
 }
