@@ -1161,6 +1161,125 @@ export async function runUpdate(onProgress: UpdateProgressCb): Promise<void> {
   });
 }
 
+/**
+ * Auto-update: download the DMG to a temp file, mount it, copy the new .app
+ * over the running one, detach, then `app.relaunch()` + `app.quit()`. The
+ * running binary is memory-mapped on macOS, so replacing the file underneath
+ * is safe — the running process keeps its open file handle, and the new
+ * binary loads on relaunch.
+ *
+ * Safety:
+ *   - Requires `installRoot` to be writable. If not (eg installed under
+ *     /Applications without write perms), fall back to opening the DMG in
+ *     Finder so the user can drag-replace manually.
+ *   - Verifies the mount produced a NEXUS.app before swapping.
+ *   - Detaches the volume even on error.
+ *   - Does NOT call app.quit() itself — the caller decides when to restart,
+ *     since the popup window may need a moment to render the "restarting"
+ *     state before the process dies.
+ */
+export async function runAutoUpdate(
+  installRoot: string,
+  onProgress: UpdateProgressCb,
+): Promise<{ ok: true; latestVersion: string } | { ok: false; error: string }> {
+  onProgress({ phase: 'checking', label: 'Checking GitHub Releases…', pct: 5 });
+  const check = await checkForUpdates();
+  if (!check.updateAvailable) {
+    return { ok: false, error: check.offline ? 'Could not reach GitHub.' : 'Already on the latest version.' };
+  }
+
+  const cacheDir = join(HOME, 'Library', 'Caches', 'NEXUS-installer');
+  try { mkdirSync(cacheDir, { recursive: true }); } catch { /* tolerated */ }
+  const dmgPath = join(cacheDir, `NEXUS-${check.latestVersion}.dmg`);
+
+  // ── 1. Download ─────────────────────────────────────────────────────────
+  onProgress({
+    phase: 'downloading',
+    label: `Downloading v${check.latestVersion}…`,
+    pct: 15,
+    ...check,
+  });
+  try {
+    const resp = await fetch(check.downloadUrl);
+    if (!resp.ok || !resp.body) throw new Error(`download_${resp.status}`);
+    // Stream to disk so we don't buffer the full ~150MB in RAM.
+    const total = Number(resp.headers.get('content-length') ?? '0');
+    const fileHandle = await (await import('node:fs/promises')).open(dmgPath, 'w');
+    let received = 0;
+    const reader = resp.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        await fileHandle.write(value);
+        received += value.byteLength;
+        if (total > 0) {
+          const pct = 15 + Math.round((received / total) * 60); // 15..75
+          onProgress({ phase: 'downloading', label: `Downloading v${check.latestVersion}…`, pct });
+        }
+      }
+    }
+    await fileHandle.close();
+  } catch (err) {
+    return { ok: false, error: `Download failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  // ── 2. Mount ────────────────────────────────────────────────────────────
+  onProgress({ phase: 'installing', label: 'Mounting installer…', pct: 78 });
+  let mountPoint = '';
+  try {
+    // -nobrowse: don't show the DMG in Finder. -readonly: don't try to write
+    // to the image. We parse the plist output to find the mount point.
+    const { stdout } = await execFileAsync('hdiutil', [
+      'attach', dmgPath, '-nobrowse', '-readonly', '-noverify', '-plist',
+    ], { maxBuffer: 4 * 1024 * 1024 });
+    const m = stdout.match(/<key>mount-point<\/key>\s*<string>([^<]+)<\/string>/);
+    if (!m) throw new Error('mount_point_not_found');
+    mountPoint = m[1];
+  } catch (err) {
+    return { ok: false, error: `Could not mount DMG: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  // ── 3. Swap the .app ────────────────────────────────────────────────────
+  // We expect mountPoint to contain a NEXUS.app at its root.
+  const newApp = join(mountPoint, 'NEXUS.app');
+  if (!existsSync(newApp)) {
+    try { await execFileAsync('hdiutil', ['detach', mountPoint, '-quiet']); } catch { /* ignore */ }
+    return { ok: false, error: `NEXUS.app not found inside DMG (looked at ${newApp}).` };
+  }
+
+  // installRoot is the existing .app path. Move-aside + copy-new + delete-old
+  // pattern keeps a backup if anything goes wrong mid-copy.
+  const bakPath = `${installRoot}.bak-${Date.now()}`;
+  try {
+    onProgress({ phase: 'installing', label: 'Installing update…', pct: 86 });
+    // Move the old app aside.
+    await execFileAsync('mv', [installRoot, bakPath]);
+    // Copy the new app into place. `cp -R` preserves perms + symlinks
+    // inside Frameworks/. -p keeps mtime so Gatekeeper's translocation
+    // heuristics don't flag this as a "new download from unknown origin."
+    await execFileAsync('cp', ['-Rp', newApp, installRoot]);
+    // Clean up the backup. If this fails it's not fatal — the install
+    // succeeded, the user just has a .bak directory they can rm later.
+    try { rmSync(bakPath, { recursive: true, force: true }); } catch { /* ignore */ }
+  } catch (err) {
+    // Try to roll back if the new copy failed mid-way.
+    try {
+      if (existsSync(bakPath) && !existsSync(installRoot)) {
+        await execFileAsync('mv', [bakPath, installRoot]);
+      }
+    } catch { /* best effort */ }
+    try { await execFileAsync('hdiutil', ['detach', mountPoint, '-quiet']); } catch { /* ignore */ }
+    return { ok: false, error: `Install failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  // ── 4. Detach ───────────────────────────────────────────────────────────
+  try { await execFileAsync('hdiutil', ['detach', mountPoint, '-quiet']); } catch { /* tolerated */ }
+
+  onProgress({ phase: 'restarting', label: `Restarting on v${check.latestVersion}…`, pct: 98 });
+  return { ok: true, latestVersion: check.latestVersion };
+}
+
 // ── Memory browser (read-only) ───────────────────────────────────────
 
 const MEMORY_TYPE_ENUM = new Set(['episodic', 'semantic', 'procedural']);

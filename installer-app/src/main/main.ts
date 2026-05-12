@@ -24,6 +24,7 @@ import {
   tailLog,
   checkForUpdates,
   runUpdate,
+  runAutoUpdate,
   listMemories,
   deleteMemory,
   takeScreenshot,
@@ -35,6 +36,13 @@ import {
 } from './installer-core';
 import type { ConfigInput, InstallProgress, UpdateProgress } from '../shared/types';
 import { startTaskOverlay, stopTaskOverlay } from './overlay-window';
+import {
+  showUpdatePopup,
+  hideUpdatePopup,
+  registerUpdatePopupIpc,
+  getInstallRoot,
+  type UpdatePopupState,
+} from './update-popup';
 
 const isDev = process.env.NEXUS_INSTALLER_DEV === '1';
 const isMenubarMode = process.argv.includes('--menubar');
@@ -383,6 +391,67 @@ app.whenReady().then(() => {
   // bridge on ws://127.0.0.1:9339 and reconnects on disconnect. Cheap to
   // run when idle (one suspended Electron window + a WebSocket).
   startTaskOverlay();
+
+  // ── Update notification popup ──────────────────────────────────────
+  // First check fires 30s after launch (let menubar settle); then every
+  // 4h thereafter. When a new version is on GitHub Releases, a small
+  // top-right toast appears with [Update Now] / [Later]. Update Now runs
+  // the full download → mount → swap → relaunch flow with the popup
+  // walking through each state.
+  let lastPromptedVersion: string | null = null;
+  async function pollForUpdate(): Promise<void> {
+    try {
+      const check = await checkForUpdates();
+      if (!check.updateAvailable) return;
+      // Suppress duplicate prompts for the same version (eg the user
+      // clicked Later — don't re-pop every 4h for the same release).
+      if (lastPromptedVersion === check.latestVersion) return;
+      lastPromptedVersion = check.latestVersion;
+      showUpdatePopup({
+        phase: 'prompt',
+        installedVersion: check.installedVersion,
+        latestVersion: check.latestVersion,
+        downloadUrl: check.downloadUrl,
+      });
+    } catch { /* network error etc — silent, try again next interval */ }
+  }
+  setTimeout(() => { void pollForUpdate(); }, 30_000);
+  setInterval(() => { void pollForUpdate(); }, 4 * 60 * 60 * 1000);
+
+  registerUpdatePopupIpc({
+    onUpdate: async (sendState) => {
+      const installRoot = getInstallRoot();
+      if (!installRoot) {
+        sendState({ phase: 'error', label: 'Could not resolve install location.' });
+        return;
+      }
+      const result = await runAutoUpdate(installRoot, (p: UpdateProgress) => {
+        // Map daemon UpdateProgress phases → popup states.
+        if (p.phase === 'downloading') {
+          sendState({ phase: 'downloading', pct: p.pct, label: p.label });
+        } else if (p.phase === 'installing') {
+          sendState({ phase: 'installing', label: p.label });
+        } else if (p.phase === 'restarting') {
+          sendState({ phase: 'restarting', label: p.label });
+        } else if (p.phase === 'checking') {
+          sendState({ phase: 'downloading', pct: p.pct, label: p.label });
+        }
+      });
+      if (!result.ok) {
+        sendState({ phase: 'error', label: result.error });
+        return;
+      }
+      sendState({ phase: 'restarting', label: `Re-launching on v${result.latestVersion}…` });
+      // Give the popup a moment to render the "restarting" frame before
+      // the process dies, otherwise the user just sees the app vanish
+      // without confirmation that the install succeeded.
+      setTimeout(() => {
+        app.relaunch();
+        app.exit(0);
+      }, 800);
+    },
+    onDismiss: () => { hideUpdatePopup(); },
+  });
 
   // Wizard IPC
   ipcMain.handle('system:checks', async () => runSystemChecks());
