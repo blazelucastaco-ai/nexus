@@ -17,7 +17,7 @@ import { rmSync } from 'node:fs';
 
 const execFileAsync = promisify(execFile);
 
-const VERSION = '0.2.1';
+const VERSION = '0.2.2';
 const HOME = homedir();
 const NEXUS_DIR = join(HOME, '.nexus');
 // NEXUS daemon reads ONLY from config.yaml (see src/config.ts). Detection
@@ -265,10 +265,96 @@ async function cloneOrUpdateRepo(onProgress: ProgressCb): Promise<void> {
  */
 type PrereqProgressCb = (p: import('../shared/types').PrereqProgress) => void;
 
-// Pin the LTS we install. Node 22 ships corepack so we get pnpm for free
-// without a second install step.
-const NODE_LTS_VERSION = '22.11.0';
-const NODE_PKG_URL = `https://nodejs.org/dist/v${NODE_LTS_VERSION}/node-v${NODE_LTS_VERSION}.pkg`;
+// Fallback LTS if nodejs.org's index.json can't be reached at install time.
+// Bump occasionally so a permanently-offline install still ends with a
+// reasonably-recent Node. Resolution is dynamic by default — this is just
+// the safety net.
+const NODE_LTS_FALLBACK = '22.11.0';
+
+/**
+ * Resolve the latest LTS Node.js version from nodejs.org's dist index.
+ * Returns the bare semver string ("22.11.0"). On network error / parse
+ * failure / 10s timeout, returns NODE_LTS_FALLBACK so installs still
+ * succeed in offline-ish conditions.
+ *
+ * `lts: "Jod"` is Node 22's codename — we filter to that line so future
+ * Node 24/26 LTS versions don't accidentally land here without a code
+ * change that confirms they're compatible.
+ */
+export async function resolveLatestNodeLts(): Promise<string> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10_000);
+    const resp = await fetch('https://nodejs.org/dist/index.json', {
+      headers: { accept: 'application/json' },
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!resp.ok) return NODE_LTS_FALLBACK;
+    const releases = (await resp.json()) as Array<{ version: string; lts: string | false }>;
+    // releases are ordered newest-first. Find the newest entry with the
+    // Node 22 LTS codename "Jod".
+    const latest = releases.find((r) => r.lts === 'Jod');
+    if (!latest?.version) return NODE_LTS_FALLBACK;
+    return latest.version.replace(/^v/, '');
+  } catch {
+    return NODE_LTS_FALLBACK;
+  }
+}
+
+// PHASE: marker format the install script writes to its log. Pure parser
+// extracted so it can be unit-tested without spawning a real install.
+//
+//   "PHASE:downloading-node:Downloading Node.js (LTS)…"
+//   "PHASE:done:All prerequisites installed."
+//
+// Anything not matching this shape returns null and is ignored — that
+// covers blank lines, stdout from curl/installer, and any future log
+// noise we haven't anticipated.
+export function parsePhaseLine(line: string): import('../shared/types').PrereqProgress | null {
+  if (!line || !line.startsWith('PHASE:')) return null;
+  // Use slice rather than split(':', 3) — labels often contain colons
+  // ("Installing… 60%") which split would chop.
+  const afterPrefix = line.slice('PHASE:'.length);
+  const sep = afterPrefix.indexOf(':');
+  if (sep < 0) return null;
+  const phase = afterPrefix.slice(0, sep);
+  const label = afterPrefix.slice(sep + 1);
+  if (!phase) return null;
+  const pctMap: Record<string, number> = {
+    'starting': 8,
+    'downloading-node': 20,
+    'installing-node': 65,
+    'installing-pnpm': 88,
+    'done': 100,
+  };
+  const pct = pctMap[phase] ?? 50;
+  return {
+    phase: (phase as import('../shared/types').PrereqProgress['phase']) ?? 'verifying',
+    label: label || 'Working…',
+    pct,
+  };
+}
+
+/**
+ * Robust user-cancel detection for the osascript authorization dialog.
+ * The error surface has several shapes depending on macOS version + locale:
+ *   - "User canceled."           (English, common)
+ *   - "User cancelled."          (some locales)
+ *   - "The operation was canceled by the user."
+ *   - Exit code 1 with no stderr on some versions
+ *   - errAuthorizationCanceled (-60006)
+ * We check the union — any one matching wins. Plus a guard for cases
+ * where osascript exits non-zero but we haven't seen a 'done' phase in
+ * the log (i.e. install was halted partway).
+ */
+export function isOsascriptCancel(err: unknown): boolean {
+  if (!err) return false;
+  const msg = err instanceof Error ? `${err.message} ${(err as { stderr?: string }).stderr ?? ''}` : String(err);
+  if (/user\s+cancel{1,2}ed|operation\s+was\s+cancel{1,2}ed/i.test(msg)) return true;
+  if (/-60006|errAuthorizationCanceled/.test(msg)) return true;
+  return false;
+}
 
 export async function installPrereqs(onProgress: PrereqProgressCb): Promise<void> {
   onProgress({ phase: 'starting', label: 'Checking what to install…', pct: 2 });
@@ -282,6 +368,11 @@ export async function installPrereqs(onProgress: PrereqProgressCb): Promise<void
     onProgress({ phase: 'done', label: 'Everything is already installed.', pct: 100 });
     return;
   }
+
+  // ── Resolve the latest Node 22 LTS dynamically (with offline fallback) ──
+  onProgress({ phase: 'starting', label: 'Looking up the latest Node.js LTS…', pct: 4 });
+  const nodeVersion = await resolveLatestNodeLts();
+  const nodePkgUrl = `https://nodejs.org/dist/v${nodeVersion}/node-v${nodeVersion}.pkg`;
 
   // ── Write the install script + log to /tmp ──────────────────────────────
   const stamp = Date.now();
@@ -303,9 +394,9 @@ export async function installPrereqs(onProgress: PrereqProgressCb): Promise<void
     `chmod 666 "$LOG"`,
     '',
     nodeMissing ? [
-      'log "PHASE:downloading-node:Downloading Node.js (LTS)…"',
+      `log "PHASE:downloading-node:Downloading Node.js v${nodeVersion}…"`,
       `if [ ! -f "${pkgPath}" ]; then`,
-      `  curl -fsSL "${NODE_PKG_URL}" -o "${pkgPath}" >> "$LOG" 2>&1`,
+      `  curl -fsSL "${nodePkgUrl}" -o "${pkgPath}" >> "$LOG" 2>&1`,
       'fi',
       'log "PHASE:installing-node:Installing Node.js…"',
       `/usr/sbin/installer -pkg "${pkgPath}" -target / >> "$LOG" 2>&1`,
@@ -345,29 +436,18 @@ export async function installPrereqs(onProgress: PrereqProgressCb): Promise<void
   const installPromise = execFileAsync('osascript', ['-e', osascriptCmd], { maxBuffer: 4 * 1024 * 1024 });
 
   // ── Poll the log file every 400ms for new phase markers ────────────────
-  const phasePctMap: Record<string, number> = {
-    'starting': 8,
-    'downloading-node': 20,
-    'installing-node': 65,
-    'installing-pnpm': 88,
-    'done': 100,
-  };
   let lastLineSeen = 0;
+  let sawDoneMarker = false;
   const poll = setInterval(() => {
     try {
       if (!existsSync(logPath)) return;
       const content = readFileSync(logPath, 'utf-8');
       const lines = content.split('\n');
       for (let i = lastLineSeen; i < lines.length; i++) {
-        const line = lines[i];
-        if (!line || !line.startsWith('PHASE:')) continue;
-        const [, phase, label] = line.split(':', 3);
-        const mappedPct = phasePctMap[phase as string] ?? 50;
-        onProgress({
-          phase: (phase as import('../shared/types').PrereqProgress['phase']) ?? 'verifying',
-          label: label ?? 'Working…',
-          pct: mappedPct,
-        });
+        const parsed = parsePhaseLine(lines[i]);
+        if (!parsed) continue;
+        if (parsed.phase === 'done') sawDoneMarker = true;
+        onProgress(parsed);
       }
       lastLineSeen = lines.length;
     } catch { /* tolerated — next tick */ }
@@ -377,12 +457,20 @@ export async function installPrereqs(onProgress: PrereqProgressCb): Promise<void
     await installPromise;
   } catch (err) {
     clearInterval(poll);
-    const msg = err instanceof Error ? err.message : String(err);
-    // User clicked Cancel on the password dialog → osascript exits with
-    // "User canceled" — surface as a clean error instead of stack trace.
-    if (/User canceled|cancelled/i.test(msg)) {
-      onProgress({ phase: 'error', label: 'Install cancelled. Click Install Missing Tools to try again.', pct: 0 });
+    if (isOsascriptCancel(err) || !sawDoneMarker) {
+      // Either we got an explicit cancel signal, or osascript exited
+      // non-zero without ever reaching the 'done' phase — both are
+      // user-cancel-equivalent from a UX perspective.
+      const isExplicitCancel = isOsascriptCancel(err);
+      onProgress({
+        phase: 'error',
+        label: isExplicitCancel
+          ? 'Install cancelled. Click Try Again to retry.'
+          : `Install stopped early. ${err instanceof Error ? err.message.split('\n')[0] : ''}`.trim(),
+        pct: 0,
+      });
     } else {
+      const msg = err instanceof Error ? err.message : String(err);
       onProgress({ phase: 'error', label: `Install failed: ${msg.split('\n')[0]}`, pct: 0 });
     }
     return;
