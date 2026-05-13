@@ -39,6 +39,10 @@ const POPUP_RIGHT_MARGIN = 16;
 const POPUP_TOP_MARGIN = 44;
 
 let popupWindow: BrowserWindow | null = null;
+// Cache the latest state we sent so a freshly-loaded renderer can pull it
+// via `update-popup:get-state` instead of relying on a `webContents.send`
+// race with the renderer's listener registration.
+let lastSentState: UpdatePopupState | null = null;
 
 export type UpdatePopupState =
   | { phase: 'prompt';      installedVersion: string; latestVersion: string; downloadUrl: string; releasePageUrl?: string }
@@ -262,9 +266,20 @@ const POPUP_HTML = String.raw`<!DOCTYPE html>
     }[c]));
   }
 
-  // Bridge from preload: window.updatePopup.{onState, update, dismiss}.
+  // Bridge from preload: window.updatePopup.{onState, update, dismiss, getState}.
   if (window.updatePopup && typeof window.updatePopup.onState === 'function') {
+    // Future state changes come via push.
     window.updatePopup.onState(render);
+  }
+  // PULL the current state on mount. Fixes a race where main fires
+  // webContents.send('update-popup:state', ...) before this inline
+  // script has finished registering the onState listener — observed on
+  // 2026-05-12 where the popup window existed at the right coords but
+  // stayed fully transparent because no state ever reached the renderer.
+  if (window.updatePopup && typeof window.updatePopup.getState === 'function') {
+    window.updatePopup.getState().then((state) => {
+      if (state) render(state);
+    });
   }
 })();
 </script>
@@ -326,6 +341,8 @@ function createPopupWindow(): BrowserWindow {
  * on first call. Subsequent calls reuse the window and just push new state.
  */
 export function showUpdatePopup(state: UpdatePopupState): void {
+  // Cache so the renderer can pull on mount if the push races it.
+  lastSentState = state;
   if (!popupWindow || popupWindow.isDestroyed()) {
     popupWindow = createPopupWindow();
     popupWindow.once('ready-to-show', () => {
@@ -381,6 +398,10 @@ export function registerUpdatePopupIpc(handlers: {
   ipcMain.handle('update-popup:open-release-notes', async () => {
     handlers.onOpenReleaseNotes();
   });
+  // Renderer pulls the most recent state on mount to defeat a push/listener
+  // race. Returns null if nothing has been sent yet (popup shouldn't exist
+  // in that state, but the handler is safe).
+  ipcMain.handle('update-popup:get-state', async () => lastSentState);
 }
 
 /** Resolve the install root for in-place upgrades. */

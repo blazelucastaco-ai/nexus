@@ -31,4 +31,7 @@ contextBridge.exposeInMainWorld('updatePopup', {
   openReleaseNotes(): void {
     void ipcRenderer.invoke('update-popup:open-release-notes');
   },
+  getState(): Promise<UpdatePopupState | null> {
+    return ipcRenderer.invoke('update-popup:get-state');
+  },
 });
