@@ -1,6 +1,6 @@
 {
   "name": "nexus-installer",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "description": "NEXUS installer — native macOS app for installing NEXUS in a few clicks",
   "author": "Lucas Topinka",
   "license": "MIT",
@@ -10,7 +10,7 @@
   "scripts": {
     "dev:renderer": "vite",
     "build:renderer": "vite build",
-    "build:main": "tsc -p tsconfig.main.json",
+    "build:main": "tsc -p tsconfig.main.json && cp src/main/popup.html dist/main/popup.html",
     "build": "pnpm run build:renderer && pnpm run build:main",
     "dev": "pnpm run build:main && concurrently -k \"pnpm run dev:renderer\" \"wait-on http://127.0.0.1:5173 && cross-env NEXUS_INSTALLER_DEV=1 electron dist/main/main.js\"",
     "start": "pnpm run build && electron dist/main/main.js",
