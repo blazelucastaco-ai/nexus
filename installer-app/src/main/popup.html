@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>NEXUS Update</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; width: 100%; background: transparent; overflow: hidden; -webkit-font-smoothing: antialiased; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif; user-select: none; -webkit-user-select: none; }
+  body { display: flex; align-items: center; justify-content: center; }
+
+  #card {
+    width: calc(100% - 16px);
+    height: calc(100% - 16px);
+    margin: 8px;
+    /* Subtle warm tint inside the dark — pulls toward NEXUS orange instead of neutral gray. */
+    background:
+      radial-gradient(120% 80% at 0% 0%, rgba(255, 138, 61, 0.08) 0%, rgba(28, 28, 30, 0) 60%),
+      rgba(20, 20, 22, 0.97);
+    color: #fff;
+    border-radius: 14px;
+    box-shadow:
+      0 18px 50px -8px rgba(0, 0, 0, 0.6),
+      0 0 0 1px rgba(255, 138, 61, 0.18),       /* Orange-tinted hairline outline */
+      0 0 0 1px rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    padding: 12px 16px 14px;
+    box-sizing: border-box;
+    display: flex; flex-direction: column; gap: 8px;
+    transform: translateX(120%);
+    opacity: 0;
+    transition: transform 360ms cubic-bezier(.34,1.56,.64,1), opacity 260ms ease-out;
+    position: relative;
+  }
+  #card.show { transform: translateX(0); opacity: 1; }
+  #card.error { box-shadow: 0 18px 50px -8px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 84, 84, 0.55); }
+
+  /* NEXUS wordmark header — small, subtle brand anchor at the top edge. */
+  .brand {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+    color: rgba(255, 255, 255, 0.42);
+    text-transform: uppercase;
+  }
+  .brand-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: linear-gradient(140deg, #ff8a3d 0%, #ff5e3a 100%);
+    box-shadow: 0 0 6px rgba(255, 138, 61, 0.7);
+  }
+
+  .row { display: flex; align-items: center; gap: 10px; }
+  .icon {
+    width: 30px; height: 30px; flex: 0 0 30px;
+    border-radius: 9px;
+    background: linear-gradient(140deg, #ffa05a 0%, #ff6a3a 60%, #ff3d28 100%);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px;
+    font-weight: 600;
+    color: #fff;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.25),
+      0 4px 10px -2px rgba(255, 92, 50, 0.4);
+  }
+  .title { font-size: 13px; font-weight: 600; flex: 1; letter-spacing: -0.1px; }
+  .subtitle { font-size: 12px; color: rgba(255,255,255,0.62); margin-top: -2px; font-variant-numeric: tabular-nums; }
+  .actions { display: flex; gap: 8px; margin-top: 6px; }
+  button {
+    flex: 1;
+    appearance: none;
+    border: none;
+    border-radius: 9px;
+    padding: 9px 12px;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 120ms ease, transform 80ms ease, box-shadow 120ms ease;
+    font-family: inherit;
+    letter-spacing: -0.1px;
+  }
+  button:active { transform: scale(0.97); }
+  .btn-primary {
+    background: linear-gradient(140deg, #ff8a3d 0%, #ff6a3a 100%);
+    color: #fff;
+    box-shadow: 0 4px 12px -2px rgba(255, 92, 50, 0.45),
+                inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  }
+  .btn-primary:hover {
+    background: linear-gradient(140deg, #ff9650 0%, #ff7644 100%);
+    box-shadow: 0 6px 14px -2px rgba(255, 92, 50, 0.55),
+                inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  }
+  .btn-secondary { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.85); }
+  .btn-secondary:hover { background: rgba(255,255,255,0.14); color: #fff; }
+
+  #progress {
+    width: 100%; height: 4px;
+    background: rgba(255,255,255,0.10);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-top: 4px;
+  }
+  #progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #ff8a3d 0%, #ffd166 100%);
+    width: 0%;
+    transition: width 280ms ease-out;
+    border-radius: 4px;
+  }
+
+  .spinner {
+    width: 12px; height: 12px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.18);
+    border-top-color: #ff8a3d;
+    animation: spin 0.9s linear infinite;
+    display: inline-block;
+    flex: 0 0 12px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .status-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: rgba(255,255,255,0.84); }
+
+  .release-link {
+    display: inline-block;
+    font-size: 11px;
+    color: rgba(255, 138, 61, 0.78);
+    text-decoration: none;
+    margin-top: 2px;
+    margin-left: 40px; /* aligns under the title, past the icon column */
+    transition: color 120ms ease, transform 120ms ease;
+    cursor: pointer;
+    font-weight: 500;
+  }
+  .release-link:hover { color: #ff9a55; transform: translateX(1px); }
+</style>
+</head>
+<body>
+<div id="card">
+  <!-- Filled in dynamically by render() -->
+</div>
+<script>
+(function() {
+  const card = document.getElementById('card');
+
+  function render(state) {
+    if (!state) return;
+    card.classList.remove('error');
+
+    if (state.phase === 'prompt') {
+      const notesLink = state.releasePageUrl
+        ? `<a class="release-link" id="release-link" href="#">View release notes →</a>`
+        : '';
+      card.innerHTML = `
+        <div class="brand"><div class="brand-dot"></div>NEXUS</div>
+        <div class="row">
+          <div class="icon">↑</div>
+          <div>
+            <div class="title">Update available</div>
+            <div class="subtitle">v${escape(state.installedVersion)} → v${escape(state.latestVersion)}</div>
+          </div>
+        </div>
+        ${notesLink}
+        <div class="actions">
+          <button class="btn-secondary" id="later">Later</button>
+          <button class="btn-primary" id="update">Update Now</button>
+        </div>`;
+      document.getElementById('update').onclick = () => window.updatePopup.update();
+      document.getElementById('later').onclick = () => window.updatePopup.dismiss();
+      const linkEl = document.getElementById('release-link');
+      if (linkEl) {
+        linkEl.onclick = (e) => {
+          e.preventDefault();
+          window.updatePopup.openReleaseNotes();
+        };
+      }
+    }
+    else if (state.phase === 'downloading') {
+      card.innerHTML = `
+        <div class="brand"><div class="brand-dot"></div>NEXUS</div>
+        <div class="row">
+          <div class="icon">↓</div>
+          <div>
+            <div class="title">Downloading update</div>
+            <div class="subtitle">${escape(state.label || '')}</div>
+          </div>
+        </div>
+        <div id="progress"><div id="progress-fill" style="width:${Math.max(2, Math.min(100, state.pct ?? 0))}%"></div></div>`;
+    }
+    else if (state.phase === 'installing') {
+      card.innerHTML = `
+        <div class="brand"><div class="brand-dot"></div>NEXUS</div>
+        <div class="row">
+          <div class="icon">⚙</div>
+          <div>
+            <div class="title">Installing update</div>
+            <div class="subtitle">${escape(state.label || 'Replacing app…')}</div>
+          </div>
+        </div>
+        <div class="status-row"><span class="spinner"></span><span>Hold tight</span></div>`;
+    }
+    else if (state.phase === 'restarting') {
+      card.innerHTML = `
+        <div class="brand"><div class="brand-dot"></div>NEXUS</div>
+        <div class="row">
+          <div class="icon">↻</div>
+          <div>
+            <div class="title">Restarting NEXUS</div>
+            <div class="subtitle">${escape(state.label || 'Relaunching on the new version…')}</div>
+          </div>
+        </div>
+        <div class="status-row"><span class="spinner"></span><span>Back in a moment</span></div>`;
+    }
+    else if (state.phase === 'done') {
+      card.innerHTML = `
+        <div class="brand"><div class="brand-dot"></div>NEXUS</div>
+        <div class="row">
+          <div class="icon" style="background:linear-gradient(140deg,#3aff8d 0%,#1eb854 100%); box-shadow: inset 0 1px 0 rgba(255,255,255,0.25), 0 4px 10px -2px rgba(30, 184, 84, 0.45);">✓</div>
+          <div>
+            <div class="title">Update complete</div>
+            <div class="subtitle">${escape(state.label || 'Running latest version.')}</div>
+          </div>
+        </div>`;
+      // Auto-dismiss after 4s on success.
+      setTimeout(() => window.updatePopup.dismiss(), 4000);
+    }
+    else if (state.phase === 'error') {
+      card.classList.add('error');
+      card.innerHTML = `
+        <div class="brand"><div class="brand-dot"></div>NEXUS</div>
+        <div class="row">
+          <div class="icon" style="background:linear-gradient(140deg,#ff5e3a 0%,#c43328 100%)">!</div>
+          <div>
+            <div class="title">Update failed</div>
+            <div class="subtitle">${escape(state.label || 'Something went wrong.')}</div>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn-secondary" id="dismiss">Dismiss</button>
+          <button class="btn-primary" id="retry">Try Again</button>
+        </div>`;
+      document.getElementById('retry').onclick = () => window.updatePopup.update();
+      document.getElementById('dismiss').onclick = () => window.updatePopup.dismiss();
+    }
+
+    // Slide in on first render.
+    requestAnimationFrame(() => card.classList.add('show'));
+  }
+
+  function escape(s) {
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+  }
+
+  // Bridge from preload: window.updatePopup.{onState, update, dismiss, getState}.
+  if (window.updatePopup && typeof window.updatePopup.onState === 'function') {
+    // Future state changes come via push.
+    window.updatePopup.onState(render);
+  }
+  // PULL the current state on mount. Fixes a race where main fires
+  // webContents.send('update-popup:state', ...) before this inline
+  // script has finished registering the onState listener — observed on
+  // 2026-05-12 where the popup window existed at the right coords but
+  // stayed fully transparent because no state ever reached the renderer.
+  if (window.updatePopup && typeof window.updatePopup.getState === 'function') {
+    window.updatePopup.getState().then((state) => {
+      if (state) render(state);
+    });
+  }
+})();
+</script>
+</body>
+</html>
