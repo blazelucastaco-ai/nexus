@@ -10,6 +10,10 @@
 
 import { orbSignal, speechSignal } from './signals';
 
+/** Per-character audio alignment from ElevenLabs: the spoken text + `times[i]` =
+ *  the start time (s) of char `text[i]`. */
+type Align = { text: string; times: number[] };
+
 type RecognitionCtor = new () => SpeechRecognitionLike;
 
 interface SpeechRecognitionLike {
@@ -54,7 +58,7 @@ export class VoiceController {
   private mediaSrc: MediaElementAudioSourceNode | null = null;
   private analyser: AnalyserNode | null = null;
   private audioRAF = 0;
-  private audioQueue: Array<{ url: string; text: string }> = [];
+  private audioQueue: Array<{ url: string; text: string; align?: Align }> = [];
 
   // ── live mic meter (drives the orb while the USER is speaking) ──
   private micStream: MediaStream | null = null;
@@ -78,22 +82,25 @@ export class VoiceController {
   /** Play a synthesized clip. With {queue:true}, waits for the current clip to
    * finish (the real answer after the instant "on it" ack) instead of cutting it
    * off. A non-queued clip supersedes anything pending. */
-  playUrl(url: string, text: string, opts?: { queue?: boolean }): void {
+  playUrl(url: string, text: string, opts?: { queue?: boolean; align?: Align }): void {
     if (opts?.queue && (this.audioEl || this.audioQueue.length > 0)) {
-      this.audioQueue.push({ url, text });
+      this.audioQueue.push({ url, text, align: opts.align });
       return;
     }
     this.audioQueue = [];
     this.stopAudio();
-    this.playNow(url, text);
+    this.playNow(url, text, opts?.align);
   }
 
   /** Play one clip now and drive the orb from its REAL waveform. */
-  private playNow(url: string, text: string): void {
+  private playNow(url: string, text: string, align?: Align): void {
     const clean = text.replace(/```[\s\S]*?```/g, ' code ').replace(/[*_`#>]/g, '').trim();
     speechSignal.id += 1;
     speechSignal.text = clean;
     speechSignal.charIndex = 0;
+    speechSignal.currentTime = 0;
+    speechSignal.duration = 0;
+    speechSignal.align = align ?? null; // word-locked reveal source for this clip
     speechSignal.active = true;
     orbSignal.speaking = true;
 
@@ -119,6 +126,8 @@ export class VoiceController {
           const ratio = el.duration > 0 && Number.isFinite(el.duration) ? Math.min(1, el.currentTime / el.duration) : 0;
           speechSignal.charIndex = clean.length * ratio;
           speechSignal.progress = ratio; // drives the Stage's build-as-it-speaks reveal
+          speechSignal.currentTime = el.currentTime; // REAL audio time → word-locked reveals
+          if (Number.isFinite(el.duration)) speechSignal.duration = el.duration;
           // Sample the amplitude analyser on alternate frames only — the orb's level
           // easing smooths the gap invisibly, and this halves analyser CPU during
           // speech, exactly when widgets are also animating.
@@ -151,12 +160,13 @@ export class VoiceController {
     // this, a clip enqueued with {queue:true} would never play.
     const next = this.audioQueue.shift();
     if (next) {
-      this.playNow(next.url, next.text);
+      this.playNow(next.url, next.text, next.align);
       return;
     }
     orbSignal.speaking = false;
     orbSignal.target = 0;
     speechSignal.charIndex = speechSignal.text.length;
+    speechSignal.align = null;
     window.setTimeout(() => { speechSignal.active = false; }, 800);
   }
 

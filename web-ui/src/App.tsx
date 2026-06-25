@@ -153,7 +153,7 @@ export function App() {
         if (audioFallback.current) { window.clearTimeout(audioFallback.current); audioFallback.current = null; }
         ui.setStatus(''); // NEXUS is speaking now — clear "thinking…"
         voiceRef.current?.stopMicMeter();
-        voiceRef.current?.playUrl(f.url, f.text, { queue: f.queue });
+        voiceRef.current?.playUrl(f.url, f.text, { queue: f.queue, align: f.align });
         break;
       case 'activity': ui.addFeed({ kind: f.kind, label: f.label, detail: f.detail, ok: f.ok }); break;
       case 'ui': handleUi(f.kind, f.payload); break;

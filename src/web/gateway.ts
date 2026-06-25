@@ -76,6 +76,9 @@ export function getToolAck(toolName?: string): string {
 export class WebGateway {
   private sub: Subscription | null = null;
   private lastMood = 0; // -1..+1, from heartbeat; tilts the spoken voice style
+  /** Set when this turn put a visual on the Stage → synth the reply WITH word
+   *  timestamps so the diagram reveals lock to the voice. Reset each turn. */
+  private sawVisual = false;
 
   constructor(
     private readonly brain: WebBrain,
@@ -120,6 +123,7 @@ export class WebGateway {
 
   private async handleUserMessage(text: string): Promise<void> {
     if (!text) return;
+    this.sawVisual = false; // reset; set if this turn puts a visual on the Stage
     this.server.broadcast({ t: 'orb', state: 'thinking' });
     this.server.broadcast({ t: 'status', text: 'thinking…' });
 
@@ -186,6 +190,18 @@ export class WebGateway {
   private async speakReply(text: string): Promise<void> {
     if (!this.tts) return;
     try {
+      // When this turn put a visual on the Stage, synth WITH per-character timestamps
+      // so the diagram reveals lock to the voice. Any failure → plain synth below.
+      if (this.sawVisual) {
+        const r = await this.tts.synthesizeWithAlignment(text, this.moodStyle());
+        if (r?.buffer) {
+          const id = this.server.putTts(r.buffer, this.tts.outputMime);
+          this.server.broadcast({
+            t: 'audio', url: `/tts/${id}.${this.tts.outputExt}`, text, queue: true, align: r.align ?? undefined,
+          });
+          return;
+        }
+      }
       const buffer = await this.tts.synthesize(text, this.moodStyle());
       if (buffer) {
         const id = this.server.putTts(buffer, this.tts.outputMime);
@@ -210,6 +226,7 @@ export class WebGateway {
 
     switch (e.type) {
       case 'ui.directive':
+        if (e.kind === 'visual') this.sawVisual = true; // → reply synth carries word timestamps
         this.server.broadcast({ t: 'ui', kind: e.kind, payload: e.payload });
         return;
 

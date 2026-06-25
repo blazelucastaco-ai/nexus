@@ -220,6 +220,66 @@ export class TtsService {
     }
   }
 
+  /** Like synthesize(), but via the `/with-timestamps` endpoint so the reply comes
+   * back with per-CHARACTER audio alignment. The Stage uses it to reveal each diagram
+   * node exactly when its name is spoken. Same cost as a normal synth; serialized too.
+   * Returns null on failure (caller falls back to plain synthesize). `align` may be
+   * null even on success if the API omits alignment. */
+  async synthesizeWithAlignment(
+    text: string,
+    style: TtsStyle = 'neutral',
+  ): Promise<{ buffer: Buffer; align: { text: string; times: number[] } | null } | null> {
+    const run = this.chain.then(() => this.doSynthesizeWithAlignment(text, style));
+    this.chain = run.catch(() => undefined);
+    return run;
+  }
+
+  private async doSynthesizeWithAlignment(
+    text: string,
+    style: TtsStyle,
+  ): Promise<{ buffer: Buffer; align: { text: string; times: number[] } | null } | null> {
+    const clean = cleanForSpeech(text);
+    if (!clean || !this.available || this.stopped) return null;
+    if (clean.length > 1200) return null;
+
+    const voiceId = await this.resolveVoiceId();
+    const url =
+      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/with-timestamps` +
+      `?output_format=${encodeURIComponent(this.outputFormat)}`;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15_000);
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'xi-api-key': this.apiKey, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ text: clean, model_id: this.modelId, voice_settings: settingsFor(style) }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        log.warn({ status: res.status, detail: detail.slice(0, 300) }, 'ElevenLabs TTS (timestamps) request failed');
+        return null;
+      }
+      const data = (await res.json()) as {
+        audio_base64?: string;
+        alignment?: { characters?: string[]; character_start_times_seconds?: number[] };
+      };
+      if (!data.audio_base64) return null;
+      const buffer = Buffer.from(data.audio_base64, 'base64');
+      const a = data.alignment;
+      const align =
+        a?.characters && a.character_start_times_seconds
+          ? { text: a.characters.join(''), times: a.character_start_times_seconds }
+          : null;
+      return { buffer, align };
+    } catch (err) {
+      log.warn({ err }, 'ElevenLabs TTS (timestamps) error');
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   stop(): void {
     this.stopped = true;
   }

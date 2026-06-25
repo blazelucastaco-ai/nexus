@@ -45,7 +45,7 @@ export type ServerFrame =
   | { t: 'assistant'; text: string; final: boolean }
   /** A synthesized voice clip (ElevenLabs TTS) — the orb pulses to it. `queue:true`
    * means play it after the current clip finishes (the answer after the "on it" ack). */
-  | { t: 'audio'; url: string; text: string; queue?: boolean }
+  | { t: 'audio'; url: string; text: string; queue?: boolean; align?: { text: string; times: number[] } }
   /** A line for the live activity feed (a tool ran, a task step finished…). */
   | { t: 'activity'; kind: string; label: string; detail?: string; ok?: boolean }
   /** A model-driven UI directive (render a chart / diagram / panel / projects…). */

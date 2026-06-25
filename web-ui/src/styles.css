@@ -521,19 +521,20 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 
 .diagram-svg { width: 100%; height: auto; display: block; overflow: visible; }
 .dg-node rect {
-  fill: rgba(255, 122, 28, 0.1);
-  stroke: rgba(255, 160, 90, 0.6);
-  stroke-width: 1.4;
+  fill: rgba(255, 138, 70, 0.07);
+  stroke: rgba(255, 178, 120, 0.55);
+  stroke-width: 1.1;
 }
-.dg-node text { fill: var(--text); font: 600 12px var(--font); }
-.dg-edge { fill: none; stroke: rgba(255, 138, 60, 0.5); stroke-width: 1.6; }
+.dg-node text { fill: var(--text); font: 600 12px var(--font); letter-spacing: 0.01em; }
+/* thin, smooth, consistent connectors — quiet by default */
+.dg-edge { fill: none; stroke: rgba(255, 152, 96, 0.28); stroke-width: 1; stroke-linecap: round; }
 .dg-edge-label { fill: var(--text-faint); font: 500 10px var(--mono); }
-/* the node NEXUS is currently narrating glows + scales up (voice↔visual sync) */
+/* the node NEXUS is narrating lifts with a SUBTLE, clean glow — never a lens flare */
 .dg-node-active rect {
-  fill: rgba(255, 150, 60, 0.22);
-  stroke: rgba(255, 190, 120, 0.95);
-  stroke-width: 2;
-  filter: drop-shadow(0 0 10px rgba(255, 140, 50, 0.55));
+  fill: rgba(255, 158, 80, 0.13);
+  stroke: rgba(255, 198, 145, 0.82);
+  stroke-width: 1.5;
+  filter: drop-shadow(0 0 4px rgba(255, 158, 85, 0.26));
 }
 
 /* ── Stage: the center-stage visual surface NEXUS conjures ─────────────────── */

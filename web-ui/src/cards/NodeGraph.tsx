@@ -67,7 +67,7 @@ function build(payload: Record<string, unknown>) {
     const coreIdx = Math.max(0, nodes.findIndex((n) => n.group === 'core'));
     const core = nodes[coreIdx] ?? nodes[0]!;
     const spokes = nodes.filter((n) => n.id !== core.id);
-    const r = Math.max(120, spokes.length * 26);
+    const r = Math.max(150, spokes.length * 30); // more breathing room so nodes don't crowd
     const cx = r + NODE_W / 2 + MARGIN;
     const cy = r + NODE_H / 2 + MARGIN;
     placed.push({ ...core, layer: 0, x: cx - NODE_W / 2, y: cy - NODE_H / 2 });
@@ -109,7 +109,8 @@ function build(payload: Record<string, unknown>) {
   }
 
   const pos = new Map(placed.map((p) => [p.id, p]));
-  return { placed, edges, pos, width: Math.max(width, 200), height: Math.max(height, 120) };
+  const radial = layout === 'hub' || layout === 'radial';
+  return { placed, edges, pos, radial, width: Math.max(width, 200), height: Math.max(height, 120) };
 }
 
 function edgePath(a: Placed, b: Placed): string {
@@ -121,11 +122,17 @@ function edgePath(a: Placed, b: Placed): string {
   return `M ${ax} ${ay} C ${mx} ${ay}, ${mx} ${by}, ${bx} ${by}`;
 }
 
+// For a hub/radial layout, spokes read cleanest as straight lines from the core —
+// consistent and uncluttered (the nodes drawn on top hide the ends).
+function straightPath(a: Placed, b: Placed): string {
+  return `M ${a.x + NODE_W / 2} ${a.y + NODE_H / 2} L ${b.x + NODE_W / 2} ${b.y + NODE_H / 2}`;
+}
+
 export function NodeGraph(
   { payload, revealUpTo = 999, highlight = -1 }:
   { payload: Record<string, unknown>; revealUpTo?: number; highlight?: number },
 ) {
-  const { placed, edges, pos, width, height } = useMemo(() => build(payload), [payload]);
+  const { placed, edges, pos, radial, width, height } = useMemo(() => build(payload), [payload]);
   if (!placed.length) return <div className="md">No diagram data.</div>;
 
   return (
@@ -147,8 +154,8 @@ export function NodeGraph(
           <g key={`e${i}`}>
             <motion.path
               className="dg-edge"
-              d={edgePath(a, b)}
-              markerEnd="url(#ng-arrow)"
+              d={radial ? straightPath(a, b) : edgePath(a, b)}
+              markerEnd={radial ? undefined : 'url(#ng-arrow)'}
               initial={{ pathLength: 0, opacity: 0 }}
               animate={{ pathLength: 1, opacity: 1 }}
               transition={{ duration: 0.6, ease: EASE }}
@@ -170,7 +177,7 @@ export function NodeGraph(
             key={n.id}
             className={`dg-node${active ? ' dg-node-active' : ''}`}
             initial={{ opacity: 0, scale: 0.55 }}
-            animate={{ opacity: 1, scale: active ? 1.08 : 1 }}
+            animate={{ opacity: 1, scale: active ? 1.05 : 1 }}
             transition={{ duration: 0.5, ease: EASE }}
             style={{ transformOrigin: `${n.x + NODE_W / 2}px ${n.y + NODE_H / 2}px` }}
           >

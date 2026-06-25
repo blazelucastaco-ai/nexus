@@ -19,7 +19,7 @@ export type ServerFrame =
   | { t: 'status'; text: string }
   | { t: 'token'; delta: string }
   | { t: 'assistant'; text: string; final: boolean }
-  | { t: 'audio'; url: string; text: string; queue?: boolean }
+  | { t: 'audio'; url: string; text: string; queue?: boolean; align?: { text: string; times: number[] } }
   | { t: 'activity'; kind: string; label: string; detail?: string; ok?: boolean }
   | { t: 'ui'; kind: string; payload: Record<string, unknown> }
   | { t: 'notice'; level: 'info' | 'warn' | 'idea' | 'dream'; text: string }

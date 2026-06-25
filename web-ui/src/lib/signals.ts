@@ -45,19 +45,27 @@ export function effectiveOrbState(now: number): OrbState {
   return 'idle';
 }
 
-// Expose the signals on window for headless render verification / debugging. Harmless
-// read-only handle; the signals are plain mutable objects driving the RAF loops.
-if (typeof window !== 'undefined') {
-  (window as unknown as { __sig?: unknown }).__sig = { orb: orbSignal };
-}
-
 /** Drives the big caption's character-by-character reveal, synced to TTS. */
 export const speechSignal = {
   id: 0,
   text: '',
   charIndex: 0,
   active: false,
-  /** 0..1 progress through the current spoken clip (currentTime/duration). The
-   *  Stage uses this to build a visual piece-by-piece as NEXUS narrates. */
+  /** 0..1 progress through the current spoken clip (currentTime/duration). */
   progress: 0,
+  /** Current playback time of the spoken clip, in seconds — the source of truth for
+   *  word-locked visual reveals (the Stage reveals a piece when its word is reached). */
+  currentTime: 0,
+  /** Duration of the current clip, in seconds (0 until known). */
+  duration: 0,
+  /** Per-character alignment from ElevenLabs for the current clip: the spoken text
+   *  and `times[i]` = the audio time (s) char `text[i]` starts. null when unavailable
+   *  (text-only reply or timestamps off) → the Stage falls back to proportional. */
+  align: null as { text: string; times: number[] } | null,
 };
+
+// Expose the signals on window for headless render verification / debugging. Harmless
+// read-only handle; the signals are plain mutable objects driving the RAF loops.
+if (typeof window !== 'undefined') {
+  (window as unknown as { __sig?: unknown }).__sig = { orb: orbSignal, speech: speechSignal };
+}

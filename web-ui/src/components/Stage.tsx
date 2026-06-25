@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useUI } from '../lib/store';
 import { orbSignal, speechSignal } from '../lib/signals';
+import { pieceLabels, computeRevealTimes, revealedCount } from '../lib/reveal';
 import { NodeGraph } from '../cards/NodeGraph';
 import { Chart } from '../cards/Chart';
 import { Panel } from '../cards/Panel';
@@ -15,14 +16,6 @@ import { Custom } from '../cards/Custom';
 // spoken clip's progress). The side Rail stays for ambient/secondary cards.
 
 const EASE = [0.16, 1, 0.3, 1] as const;
-
-/** How many ordered pieces the visual has (drives the reveal). */
-function pieceCount(spec: Record<string, unknown>): number {
-  for (const k of ['nodes', 'steps', 'items', 'events', 'stats', 'rows', 'data']) {
-    if (Array.isArray(spec[k])) return Math.max(1, (spec[k] as unknown[]).length);
-  }
-  return 1;
-}
 
 function renderWidget(type: string, spec: Record<string, unknown>, revealUpTo: number, highlight: number) {
   switch (type) {
@@ -62,16 +55,34 @@ export function Stage() {
     if (!visual) { setReveal(999); setHl(-1); return; }
     startedRef.current = false;
     appearedRef.current = performance.now();
-    const total = pieceCount(visual);
+    const labels = pieceLabels(visual);
+    const total = Math.max(1, labels.length);
+    let revealTimes: number[] | null = null;
+    let computedFor = -1; // the speechSignal.id revealTimes were computed for
     let raf = 0;
     const tick = () => {
       raf = requestAnimationFrame(tick);
       const now = performance.now();
       if (speechSignal.active) {
         startedRef.current = true;
-        const p = speechSignal.progress;
-        const upTo = Math.max(0, Math.ceil(p * total) - 1);
-        const active = Math.min(total - 1, Math.floor(p * total));
+        let upTo: number;
+        let active: number;
+        if (speechSignal.align) {
+          // WORD-LOCKED: reveal each piece the moment its label is spoken — driven by
+          // the REAL audio time + ElevenLabs' per-character alignment, not a timer.
+          if (computedFor !== speechSignal.id) {
+            computedFor = speechSignal.id;
+            revealTimes = computeRevealTimes(labels, speechSignal.align);
+          }
+          const count = revealedCount(revealTimes ?? [], speechSignal.currentTime);
+          upTo = Math.max(0, count - 1); // keep the core anchor shown (no flicker)
+          active = Math.min(total - 1, Math.max(0, count - 1));
+        } else {
+          // No alignment (timestamps off / text-only reply) → proportional fallback.
+          const p = speechSignal.progress;
+          upTo = Math.max(0, Math.ceil(p * total) - 1);
+          active = Math.min(total - 1, Math.floor(p * total));
+        }
         setReveal((v) => (v === upTo ? v : upTo));
         setHl((v) => (v === active ? v : active));
       } else if (startedRef.current || now - appearedRef.current > 3500) {

@@ -18,3 +18,7 @@ NEXUS-Installer.dmg
 # Drift prevention — pnpm-lock.yaml is the source of truth.
 package-lock.json
 
+
+# Python bytecode cache
+__pycache__/
+*.pyc
