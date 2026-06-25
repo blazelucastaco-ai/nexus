@@ -34,7 +34,7 @@ def main() -> None:
             provider=os.environ.get("NEXUS_KWS_PROVIDER", "cpu"),
             max_active_paths=4,
             keywords_score=float(os.environ.get("NEXUS_KWS_SCORE", "2.5")),
-            keywords_threshold=float(os.environ.get("NEXUS_KWS_THRESHOLD", "0.12")),
+            keywords_threshold=float(os.environ.get("NEXUS_KWS_THRESHOLD", "0.08")),
             num_trailing_blanks=1,
         )
     except Exception as exc:  # noqa: BLE001
@@ -47,11 +47,25 @@ def main() -> None:
     sys.stderr.flush()
 
     chunk_bytes = 3200  # 0.1 s @ 16 kHz, int16 (1600 samples * 2 bytes)
+    # Optional audio-level readout (set NEXUS_KWS_DEBUG=1 to enable). Off by default so
+    # it doesn't spam the log. rms ~0 every time = no audio reaching the KWS (Swift
+    # mic→pipe issue); a level with no WAKE = a detection/threshold problem.
+    debug = os.environ.get("NEXUS_KWS_DEBUG") not in (None, "", "0")
+    n = 0
+    peak = 0.0
     while True:
         data = sys.stdin.buffer.read(chunk_bytes)
         if not data:
             break
         samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+        if debug:
+            if samples.size:
+                peak = max(peak, float(np.sqrt(np.mean(samples**2))))
+            n += 1
+            if n % 30 == 0:  # ~every 3 s
+                sys.stderr.write(f"level peakRms={peak:.4f}\n")
+                sys.stderr.flush()
+                peak = 0.0
         stream.accept_waveform(SAMPLE_RATE, samples)
         while spotter.is_ready(stream):
             spotter.decode_stream(stream)
