@@ -5,7 +5,6 @@ import { orbSignal, speechSignal } from './lib/signals';
 import { ui, useUI } from './lib/store';
 import type { OrbState, ServerFrame } from './lib/protocol';
 import { Orb } from './orb/Orb';
-import { Embers } from './orb/Embers';
 import { StatusLine } from './components/StatusLine';
 import { Caption } from './components/Caption';
 import { Feed } from './components/Feed';
@@ -119,7 +118,14 @@ export function App() {
 
   function handleFrame(f: ServerFrame): void {
     switch (f.t) {
-      case 'hello': if (f.wakeWord) setWakeArmed(true); break;
+      case 'hello': {
+        if (f.wakeWord) setWakeArmed(true);
+        // The daemon redeployed/restarted since this page loaded (different bootId) →
+        // this page is a stale cached bundle; reload to fetch the fresh build.
+        const loaded = (window as unknown as { __NEXUS_CFG__?: { bootId?: string } }).__NEXUS_CFG__?.bootId;
+        if (loaded && f.bootId && loaded !== f.bootId) window.location.reload();
+        break;
+      }
       case 'wake': wake(); break;
       case 'user_echo':
         // The command was transcribed — stop the user-voice orb meter. No echo bubble.
@@ -204,7 +210,6 @@ export function App() {
 
   return (
     <div className="stage boot">
-      <Embers />
       <Orb onActivate={canListen ? toggleMic : undefined} />
       {/* Center-stage visual surface — diagrams/charts/widgets NEXUS conjures, which
           dock the orb aside and build in as it narrates. */}

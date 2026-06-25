@@ -32,9 +32,45 @@ export interface WebBrain {
     chatId: string,
     text: string,
     onToken?: (chunk: string) => void,
-    onStatus?: (status: string) => void,
+    onStatus?: (status: string, toolName?: string) => void,
     opts?: { voice?: boolean },
   ): Promise<string>;
+}
+
+// ── Contextual acknowledgments ───────────────────────────────────────────────
+// Spoken ONLY when NEXUS is actually about to go do something, and matched to the
+// KIND of work — pulling something up vs. checking something vs. a real task —
+// rather than one canned phrase. Dry, composed, in the moment; a little variety so
+// repeats don't feel scripted. Categorized by the first tool the brain reaches for.
+const FETCH_TOOLS = new Set([
+  'web_search', 'web_fetch', 'crawl_url', 'get_weather', 'read_calendar', 'check_email', 'check_updates',
+]);
+const CHECK_TOOLS = new Set([
+  'read_file', 'list_directory', 'recall', 'get_system_info', 'introspect', 'read_pdf',
+  'understand_image', 'take_screenshot', 'browser_screenshot', 'transcribe_audio',
+]);
+const TASK_TOOLS = new Set([
+  'write_file', 'run_terminal_command', 'run_background_command', 'remember', 'generate_image', 'export_session',
+]);
+const FETCH_ACKS = ['One moment, Sir — pulling that up.', 'Let me pull that up.', 'Fetching that now, Sir.'];
+const CHECK_ACKS = ['Let me take a look.', 'One moment — let me check.', 'Let me have a look, Sir.'];
+const TASK_ACKS = ['On it.', 'Right away, Sir.', 'Consider it done, Sir.'];
+const GENERIC_ACKS = ['One moment, Sir.', 'Give me a second, Sir.', 'Just a moment, Sir.'];
+
+function pickAck(list: readonly string[]): string {
+  return list[Math.floor(Math.random() * list.length)] ?? list[0]!;
+}
+
+/** A brief, in-the-moment Jarvis acknowledgment that fits the kind of work the brain
+ * is about to do (identified by the first tool it runs). `undefined` → a neutral
+ * "one moment"; the silent `speak` tool → no ack at all. Exported for tests. */
+export function getToolAck(toolName?: string): string {
+  if (!toolName || toolName === 'speak') return toolName === 'speak' ? '' : pickAck(GENERIC_ACKS);
+  if (FETCH_TOOLS.has(toolName)) return pickAck(FETCH_ACKS);
+  if (CHECK_TOOLS.has(toolName)) return pickAck(CHECK_ACKS);
+  if (TASK_TOOLS.has(toolName)) return pickAck(TASK_ACKS);
+  if (toolName.startsWith('browser_')) return pickAck(TASK_ACKS); // a browser action = doing something
+  return pickAck(GENERIC_ACKS);
 }
 
 export class WebGateway {
@@ -86,12 +122,21 @@ export class WebGateway {
     if (!text) return;
     this.server.broadcast({ t: 'orb', state: 'thinking' });
     this.server.broadcast({ t: 'status', text: 'thinking…' });
-    // Speak an instant "on it" the moment the request lands — never dead air
-    // while the brain (and any tools) do the real work. The answer queues behind it.
-    void this.speakAck();
 
     const onToken = (chunk: string) => this.server.broadcast({ t: 'token', delta: chunk });
-    const onStatus = (status: string) => this.server.broadcast({ t: 'status', text: status });
+    // Acknowledge OUT LOUD only when the brain actually goes off to DO something. The
+    // first tool status is that signal — the brain reports status only while using
+    // tools, never for an answer it can give straight away. So simple / conversational
+    // turns get ONE clean reply with no preamble and nothing a beat later; only real
+    // lookups/tasks get the "one moment…" + answer, and the ack is matched to the work.
+    let acked = false;
+    const onStatus = (status: string, toolName?: string) => {
+      this.server.broadcast({ t: 'status', text: status });
+      if (!acked) {
+        acked = true;
+        void this.speakAck(toolName);
+      }
+    };
 
     try {
       const raw = await this.brain.handleMessage(this.chatId, text, onToken, onStatus, { voice: true });
@@ -119,24 +164,13 @@ export class WebGateway {
     return 'neutral';
   }
 
-  // Jarvis-register instant acknowledgments (web channel only) — the immediate
-  // "I heard you, Sir" before the brain has the answer. Refined, composed, brief.
-  private static readonly ACK_PHRASES = [
-    'Right away, Sir.',
-    'Of course, Sir.',
-    'One moment, Sir.',
-    'At once, Sir.',
-    'Certainly, Sir.',
-    'Consider it done, Sir.',
-    'Let me see to that, Sir.',
-  ];
-
-  /** Speak an immediate, varied acknowledgment so the user always knows they were
-   * heard the instant they ask — before the brain has even started working. */
-  private async speakAck(): Promise<void> {
+  /** Speak a brief acknowledgment — ONLY when NEXUS is actually about to go do
+   * something (a lookup / check / task), and matched to the kind of work via
+   * `getToolAck`, never the same canned line. Best-effort. */
+  private async speakAck(toolName?: string): Promise<void> {
     if (!this.tts) return;
-    const phrase =
-      WebGateway.ACK_PHRASES[Math.floor(Math.random() * WebGateway.ACK_PHRASES.length)] ?? 'one sec.';
+    const phrase = getToolAck(toolName);
+    if (!phrase) return; // e.g. the `speak` tool — don't acknowledge speaking
     try {
       const buffer = await this.tts.synthesize(phrase, 'bright');
       if (buffer) {

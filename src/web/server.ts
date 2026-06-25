@@ -90,6 +90,10 @@ export class WebServer {
   readonly chatId: string;
   /** Per-boot token; only injected into the same-origin index.html we serve. */
   readonly token = randomBytes(18).toString('hex');
+  /** Per-boot id. Injected into the page + sent in `hello`; if a reconnecting page
+   *  sees a different bootId than it loaded with, the daemon redeployed/restarted —
+   *  the page reloads to pick up the fresh build (no more stale cached UI). */
+  readonly bootId = randomBytes(8).toString('hex');
   private staticDir: string | null = null;
   /** Set true by the daemon when the wake-word listener is active (for the UI hint). */
   wakeWordEnabled = false;
@@ -232,7 +236,7 @@ export class WebServer {
         try { ws.send(JSON.stringify(f)); } catch { /* ignore */ }
       }
     };
-    reply({ t: 'hello', chatId: this.chatId, version: this.version, serverTime: Date.now(), wakeWord: this.wakeWordEnabled });
+    reply({ t: 'hello', chatId: this.chatId, version: this.version, serverTime: Date.now(), wakeWord: this.wakeWordEnabled, bootId: this.bootId });
     // If "Hey Nexus" fired moments ago, this page may be the one the daemon just
     // opened — deliver the wake now so it starts listening.
     if (Date.now() - this.lastWakeAt < 8000) reply({ t: 'wake' });
@@ -356,7 +360,7 @@ export class WebServer {
       // Inject the per-boot token so the same-origin app can open the WS.
       const html = (await readFile(filePath, 'utf-8')).replace(
         '</head>',
-        `<script>window.__NEXUS_CFG__=${JSON.stringify({ token: this.token, port: this.port, version: this.version })};</script></head>`,
+        `<script>window.__NEXUS_CFG__=${JSON.stringify({ token: this.token, port: this.port, version: this.version, bootId: this.bootId })};</script></head>`,
       );
       res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
       res.end(req.method === 'HEAD' ? undefined : html);

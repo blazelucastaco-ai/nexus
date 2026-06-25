@@ -506,8 +506,13 @@ function showJarvis(): void {
   createJarvisWindow();
   const w = jarvisWindow;
   if (!w || w.isDestroyed()) return;
-  if (!w.isVisible()) w.show();
+  w.show();
   if (!w.isSimpleFullScreen()) w.setSimpleFullScreen(true);
+  w.moveTop();
+  // A menu-bar/accessory app must explicitly steal focus — otherwise show()+focus()
+  // leaves the window BEHIND the active app, so saying "Hey Nexus" looks like nothing
+  // happened. app.focus({steal:true}) brings NEXUS to the foreground for real.
+  app.focus({ steal: true });
   w.focus();
 }
 

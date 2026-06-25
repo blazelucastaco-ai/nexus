@@ -33,8 +33,8 @@ def main() -> None:
             num_threads=1,
             provider=os.environ.get("NEXUS_KWS_PROVIDER", "cpu"),
             max_active_paths=4,
-            keywords_score=float(os.environ.get("NEXUS_KWS_SCORE", "2.0")),
-            keywords_threshold=float(os.environ.get("NEXUS_KWS_THRESHOLD", "0.20")),
+            keywords_score=float(os.environ.get("NEXUS_KWS_SCORE", "2.5")),
+            keywords_threshold=float(os.environ.get("NEXUS_KWS_THRESHOLD", "0.12")),
             num_trailing_blanks=1,
         )
     except Exception as exc:  # noqa: BLE001

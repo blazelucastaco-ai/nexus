@@ -111,7 +111,9 @@ export interface ToolCallLoopInput {
   /** Task-mode messages use a different temperature profile. */
   isTaskMessage: boolean;
   onToken?: (chunk: string) => void;
-  onStatus?: (status: string) => void;
+  /** `toolName` (when present) marks that the status is for a tool about to run —
+   * the voice channel uses it to speak a fitting acknowledgment. */
+  onStatus?: (status: string, toolName?: string) => void;
 }
 
 export interface ToolCallLoopOutput {
@@ -441,9 +443,9 @@ export class ToolCallLoop {
 
         if (parallelJobs.length > 0) {
           if (parallelJobs.length === 1) {
-            onStatus?.(getToolStatus(parallelJobs[0]!.toolName, parallelJobs[0]!.toolArgs));
+            onStatus?.(getToolStatus(parallelJobs[0]!.toolName, parallelJobs[0]!.toolArgs), parallelJobs[0]!.toolName);
           } else {
-            onStatus?.(`okay, working through it…`);
+            onStatus?.(`okay, working through it…`, parallelJobs[0]!.toolName);
           }
           const parallelResults = await Promise.all(
             parallelJobs.map(async (job) => {
@@ -469,7 +471,7 @@ export class ToolCallLoop {
             resultMap.set(job.toolCall.id, '[Loop detected: this exact action was already tried twice. Try a different approach.]');
             continue;
           }
-          onStatus?.(getToolStatus(job.toolName, job.toolArgs));
+          onStatus?.(getToolStatus(job.toolName, job.toolArgs), job.toolName);
           log.info({ toolName: job.toolName, toolCallId: job.toolCall.id, iteration }, 'Executing tool call (sequential)');
           let result = await withTimeout(toolExecutor.execute(job.toolName, job.toolArgs, { chatId }), getToolTimeout(job.toolName), job.toolName);
           result = repairToolResult(result);

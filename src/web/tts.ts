@@ -104,6 +104,8 @@ export class TtsService {
   private stopped = false;
   private resolvedVoiceId: string | null = null;
   private resolving: Promise<string> | null = null;
+  /** Serializes synth calls so the ack + reply never hit ElevenLabs concurrently. */
+  private chain: Promise<unknown> = Promise.resolve();
 
   /** Content-type + URL extension the synthesized clips should be served with. */
   readonly outputMime: string;
@@ -173,8 +175,16 @@ export class TtsService {
   }
 
   /** Synthesize speech for `text`; resolves to an audio buffer, or null on failure.
-   * `style` ('bright' | 'measured' | 'neutral') tilts the overall pace/energy. */
+   * `style` ('bright' | 'measured' | 'neutral') tilts the overall pace/energy.
+   * Calls are SERIALIZED so the ack + reply never hit ElevenLabs concurrently —
+   * low tiers reject concurrent requests with a 429 (the reply would go silent). */
   async synthesize(text: string, style: TtsStyle = 'neutral'): Promise<Buffer | null> {
+    const run = this.chain.then(() => this.doSynthesize(text, style));
+    this.chain = run.catch(() => undefined);
+    return run;
+  }
+
+  private async doSynthesize(text: string, style: TtsStyle = 'neutral'): Promise<Buffer | null> {
     const clean = cleanForSpeech(text);
     if (!clean || !this.available || this.stopped) return null;
     if (clean.length > 1200) return null; // skip huge replies — they'd be slow + costly

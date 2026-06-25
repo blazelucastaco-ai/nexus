@@ -30,7 +30,7 @@ export type OrbState =
 
 export type ServerFrame =
   /** Sent once on connect. `wakeWord` tells the UI whether "Hey Nexus" is armed. */
-  | { t: 'hello'; chatId: string; version: string; serverTime: number; wakeWord?: boolean }
+  | { t: 'hello'; chatId: string; version: string; serverTime: number; wakeWord?: boolean; bootId?: string }
   /** "Hey Nexus" was heard — wake the orb and start listening. */
   | { t: 'wake' }
   /** Echo a user utterance (from native on-device voice STT) so the UI shows it. */

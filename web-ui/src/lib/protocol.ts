@@ -12,7 +12,7 @@ export type OrbState =
   | 'alert';
 
 export type ServerFrame =
-  | { t: 'hello'; chatId: string; version: string; serverTime: number; wakeWord?: boolean }
+  | { t: 'hello'; chatId: string; version: string; serverTime: number; wakeWord?: boolean; bootId?: string }
   | { t: 'wake' }
   | { t: 'user_echo'; text: string }
   | { t: 'orb'; state: OrbState; intensity?: number; hue?: number; ttlMs?: number }
