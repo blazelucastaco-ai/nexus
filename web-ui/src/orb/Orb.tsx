@@ -141,8 +141,8 @@ export function Orb({ onActivate }: { onActivate?: () => void }) {
       curScale = lerp(curScale, orbSignal.dock ? 0.42 : 1.0, 0.09);
 
       const [r, g, b] = colorFor(effectiveOrbState(now));
-      // small radius → lots of empty black space around it
-      const R = Math.min(W, H) * 0.13 * curScale * (1 + level * 0.05);
+      // small radius at rest (lots of empty black space) — EXPANDS as it talks/listens
+      const R = Math.min(W, H) * 0.13 * curScale * (1 + level * 0.2);
       const spin = t * 0.16; // slow
       const sSpin = Math.sin(spin);
       const cSpin = Math.cos(spin);
@@ -153,16 +153,16 @@ export function Orb({ onActivate }: { onActivate?: () => void }) {
       ctx.lineJoin = 'round';
       ctx.lineCap = 'round';
       ctx.lineWidth = Math.max(1, DPR * 0.8); // thin, delicate
-      ctx.shadowBlur = 3 * DPR; // a faint halo, not bloom
-      ctx.shadowColor = `rgba(${r},${g},${b},0.4)`;
+      ctx.shadowBlur = (3 + level * 4) * DPR; // faint halo at rest, ILLUMINATES as it talks
+      ctx.shadowColor = `rgba(${r},${g},${b},${0.35 + level * 0.3})`;
 
-      const a = 0.24 + level * 0.18; // dim at rest, a touch brighter while speaking
-      ctx.strokeStyle = `rgba(${r},${g},${b},${Math.min(0.55, a)})`;
+      const a = 0.24 + level * 0.36; // dim at rest, clearly brighter (illuminated) while speaking
+      ctx.strokeStyle = `rgba(${r},${g},${b},${Math.min(0.72, a)})`;
       for (const ring of parallels) strokeRing(ring, R, curCx, curCy, sSpin, cSpin, sTilt, cTilt);
       for (const ring of meridians) strokeRing(ring, R, curCx, curCy, sSpin, cSpin, sTilt, cTilt);
 
       // silhouette rim — only a hair brighter, to seat the sphere
-      ctx.strokeStyle = `rgba(${r},${g},${b},${Math.min(0.62, a + 0.1)})`;
+      ctx.strokeStyle = `rgba(${r},${g},${b},${Math.min(0.82, a + 0.12)})`;
       ctx.beginPath();
       ctx.arc(curCx, curCy, R, 0, Math.PI * 2);
       ctx.stroke();
