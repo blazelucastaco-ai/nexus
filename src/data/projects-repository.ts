@@ -176,7 +176,7 @@ export function inferProjectFromPath(path: string): { name: string; dir: string 
  * Scan known on-disk locations for project directories and upsert them
  * into the projects table. Without this the table only got populated
  * after a tool.executed / task.completed event with a path matching
- * the workspace pattern — meaning real projects Lucas had on disk but
+ * the workspace pattern — meaning real projects the user had on disk but
  * hadn't recently worked on via NEXUS were invisible to list_projects /
  * read_project. Backfill is idempotent (upsertProject keeps existing
  * fields), cheap (synchronous fs reads, <10 dirs), and safe (only

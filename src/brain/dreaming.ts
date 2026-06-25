@@ -753,7 +753,7 @@ export class DreamingEngine {
         messages: [{ role: 'user', content: prompt }],
         // Use Opus here — synthesis is the most nuanced step and it only
         // runs once per day, so the cost is negligible.
-        model: 'claude-opus-4-7',
+        model: 'claude-opus-4-8',
         maxTokens: 2000,
       });
       const parsed = this.parseSynthesisJson(response.content);
@@ -1031,7 +1031,7 @@ export class DreamingEngine {
       `Quality bar:\n` +
       `- Atomic. One concrete fact per line, no compound statements.\n` +
       `- Durable. Things still true in a month — preferences, decisions, working patterns. NOT ephemeral status ("user is debugging today").\n` +
-      `- Specific. "Lucas prefers TypeScript over JavaScript for backend work" beats "Lucas works in TypeScript".\n` +
+      `- Specific. "the user prefers TypeScript over JavaScript for backend work" beats "the user works in TypeScript".\n` +
       `- Conservative. If an episode is genuinely ambiguous, output exactly "(uncertain)" on that line. A hallucinated fact pollutes memory permanently — silence beats invention.\n\n` +
       `Reply with EXACTLY ${batch.length} lines, numbered [1] through [${batch.length}]. One sentence per line. No preamble, no extra lines.\n\n` +
       numbered.join('\n');

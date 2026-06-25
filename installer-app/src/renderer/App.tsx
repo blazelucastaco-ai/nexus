@@ -8,6 +8,8 @@ import {
   SystemCheckStep,
   TelegramStep,
   AIKeyStep,
+  ElevenLabsKeyStep,
+  LearnAboutYouStep,
   AgentsStep,
   PersonalityStep,
   PermissionsStep,
@@ -22,6 +24,8 @@ const FULL_STEPS: Array<{ key: StepKey; label: string }> = [
   { key: 'system-check', label: 'System' },
   { key: 'telegram', label: 'Telegram' },
   { key: 'ai', label: 'Anthropic' },
+  { key: 'voice', label: 'Voice' },
+  { key: 'learn-about-you', label: 'About You' },
   { key: 'agents', label: 'Agents' },
   { key: 'personality', label: 'Personality' },
   { key: 'permissions', label: 'Permissions' },
@@ -38,6 +42,7 @@ export function App(): JSX.Element {
   const [config, setConfig] = useState<ConfigInput>({
     telegram: { botToken: '', chatId: '' },
     anthropicKey: '',
+    elevenLabsKey: '',
     agents: ['vision', 'file', 'browser', 'terminal', 'code', 'research', 'system', 'creative', 'comms', 'scheduler'],
     personality: {
       preset: 'friendly',
@@ -76,6 +81,7 @@ export function App(): JSX.Element {
     setConfig((c) => ({
       telegram: detection.existingTelegram ?? c.telegram,
       anthropicKey: detection.existingAnthropicKey ?? c.anthropicKey,
+      elevenLabsKey: detection.existingElevenLabsKey ?? c.elevenLabsKey,
       agents: detection.existingAgents ?? c.agents,
       personality: detection.existingPersonality ?? c.personality,
     }));
@@ -158,6 +164,22 @@ export function App(): JSX.Element {
             onBack={back}
           />
         )}
+        {currentKey === 'voice' && (
+          <ElevenLabsKeyStep
+            value={{ apiKey: config.elevenLabsKey, voiceId: config.elevenLabsVoiceId, modelId: config.elevenLabsModelId }}
+            onChange={(v) => updateConfig({ elevenLabsKey: v.apiKey, elevenLabsVoiceId: v.voiceId, elevenLabsModelId: v.modelId })}
+            onNext={next}
+            onBack={back}
+          />
+        )}
+        {currentKey === 'learn-about-you' && (
+          <LearnAboutYouStep
+            value={config.learnAboutMe ?? false}
+            onChange={(learnAboutMe) => updateConfig({ learnAboutMe })}
+            onNext={next}
+            onBack={back}
+          />
+        )}
         {currentKey === 'agents' && (
           <AgentsStep
             value={config.agents}
@@ -180,7 +202,7 @@ export function App(): JSX.Element {
         )}
         {currentKey === 'chrome' && <ChromeStep onNext={next} />}
         {currentKey === 'memory-import' && <MemoryImportStep onNext={next} onBack={back} />}
-        {currentKey === 'done' && <DoneStep mode={mode} />}
+        {currentKey === 'done' && <DoneStep mode={mode} learnAboutMe={config.learnAboutMe} />}
       </main>
     </div>
   );

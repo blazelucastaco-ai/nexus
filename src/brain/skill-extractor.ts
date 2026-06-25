@@ -41,7 +41,7 @@ const MIN_TITLE_LENGTH = 8;
  */
 const NEW_SKILL_COOLDOWN_MS = 60 * 60 * 1000;
 /**
- * Successes count at which we fire a Telegram nudge inviting Lucas to
+ * Successes count at which we fire a Telegram nudge inviting the user to
  * promote the draft. Three repeats of the same slug is "this is a real
  * pattern, not a one-off" — high enough to earn the nudge, low enough that
  * the user gets it before forgetting the work it came from.
@@ -64,7 +64,7 @@ export interface SkillExtractorOptions {
   /**
    * Optional notifier — called fire-and-forget when a slug first reaches
    * `PROMOTION_NUDGE_THRESHOLD` successes. The orchestrator wires this to
-   * Telegram so Lucas sees a "promote this draft?" prompt at the right
+   * Telegram so the user sees a "promote this draft?" prompt at the right
    * moment. Errors are swallowed; a notify failure never blocks extraction.
    */
   notify?: (message: string) => Promise<void>;

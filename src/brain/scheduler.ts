@@ -146,7 +146,7 @@ export function createTask(
  * processes the prompt as if the user had typed it, and the response is
  * sent back via Telegram to chatId. Example: "every day at 6am, check my
  * calendar and tell me my schedule" — prompt="Check my calendar and tell
- * me my schedule for today", cron="0 6 * * *", chatId=Lucas's chat.
+ * me my schedule for today", cron="0 6 * * *", chatId=the user's chat.
  */
 export function createPromptTask(
   name: string,
@@ -372,7 +372,7 @@ export function listTasksTool(): string {
  * delivered to chatId via Telegram. Example: "every day at 6am, check
  * my calendar and tell me my schedule" — prompt = "Check my calendar
  * and tell me my schedule for today", cron = "0 6 * * *", chatId =
- * Lucas's chat ID.
+ * the user's chat ID.
  */
 export function schedulePromptTool(args: Record<string, unknown>, contextChatId?: string): string {
   const name = String(args.name ?? '');

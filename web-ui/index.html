@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#050404" />
+    <title>NEXUS</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- Instant boot splash: paints before the JS bundle loads, fades over the live orb. -->
+    <div id="boot-splash"><div class="boot-orb"></div></div>
+    <style>
+      #boot-splash { position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center; background: #050405; }
+      #boot-splash .boot-orb {
+        width: 120px; height: 120px; border-radius: 50%;
+        background: radial-gradient(circle at 42% 36%, #ffd29a, #ff7a1c 52%, #7a2c00 100%);
+        box-shadow: 0 0 80px 24px rgba(255,122,28,.45), 0 0 180px 70px rgba(255,122,28,.16);
+        animation: bootpulse 2.2s ease-in-out infinite;
+      }
+      @keyframes bootpulse {
+        0%, 100% { transform: scale(.9); opacity: .65; filter: brightness(.9); }
+        50% { transform: scale(1.08); opacity: 1; filter: brightness(1.15); }
+      }
+    </style>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

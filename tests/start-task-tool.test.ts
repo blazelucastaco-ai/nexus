@@ -6,7 +6,7 @@ import type { MemoryManager } from '../src/memory/index.js';
 // New 2026-05-07: start_task and start_ultra_task are tools the chat-mode
 // model can call to escalate from a one-shot tool call into a full
 // multi-step plan. Replaces the regex classifier so the model itself
-// judges when planning is warranted (Lucas's "intelligence over keyword
+// judges when planning is warranted (the user's "intelligence over keyword
 // triggers" directive).
 //
 // The dispatch logic lives in ToolExecutor.startTask (private). These

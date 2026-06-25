@@ -189,6 +189,15 @@ export interface AICompletionOptions {
   onToken?: (chunk: string) => void;
 }
 
+/**
+ * Marker inside a system prompt separating the STABLE cached prefix (identity,
+ * security, capabilities, tool discipline, skills) from the per-turn VOLATILE
+ * tail (current time, mood, memory synthesis, reasoning trace). The Anthropic
+ * provider splits on this and puts `cache_control` only on the prefix, so the
+ * prompt cache actually hits across turns. Stripped before the model sees it.
+ */
+export const SYSTEM_CACHE_SPLIT = '\n<<<NEXUS_CACHE_BREAK>>>\n';
+
 // ─── Context ───────────────────────────────────────────────────────
 export interface NexusContext {
   personality: PersonalityState;
@@ -210,6 +219,9 @@ export const NexusConfigSchema = z.object({
   // Missing / legacy configs default to 'terminal' so older installs aren't
   // suddenly locked out.
   installMethod: z.enum(['app', 'terminal']).default('terminal'),
+  // The human NEXUS belongs to — used to address them by name in prompts. Set at
+  // install (or auto-detected from the macOS account); never hardcoded in source.
+  userName: z.string().default(''),
   personality: z
     .object({
       name: z.string().default('NEXUS'),
@@ -247,7 +259,7 @@ export const NexusConfigSchema = z.object({
       // - opusModel:  heavy reasoning (task planning, CoWork, Ultra mode review)
       // - model:      workhorse (chat, task execution, vision, self-eval)
       // - fastModel:  lightweight classification (synthesis, reasoning trace, inner monologue, summaries)
-      opusModel: z.string().default('claude-opus-4-7'),
+      opusModel: z.string().default('claude-opus-4-8'),
       model: z.string().default('claude-sonnet-4-6'),
       fastModel: z.string().default('claude-haiku-4-5-20251001'),
       fallbackModel: z.string().default('claude-haiku-4-5-20251001'),
@@ -261,6 +273,20 @@ export const NexusConfigSchema = z.object({
       botToken: z.string().default(''),
       chatId: z.string().default(''),
       allowedUsers: z.array(z.string()).default([]),
+    })
+    .default({}),
+  // Voice / text-to-speech. Cloud TTS via ElevenLabs (the local Piper engine was
+  // removed). Empty voice/model/format fall back to the TtsService defaults.
+  tts: z
+    .object({
+      provider: z.enum(['elevenlabs', 'none']).default('none'),
+      apiKey: z.string().default(''),
+      voiceId: z.string().default(''),
+      // A premade default voice (works on every ElevenLabs tier incl. free).
+      // Premium/library voices like "Alexander Kensington" need a paid plan.
+      voiceName: z.string().default('George'),
+      modelId: z.string().default(''),
+      outputFormat: z.string().default(''),
     })
     .default({}),
   macos: z

@@ -1,6 +1,6 @@
 // Task Overlay Bridge — broadcasts task lifecycle events over a local
 // WebSocket so the installer-app's overlay window can render orange-tint
-// + pill-bar + confetti during tasks. Lucas asked for this on 2026-05-11.
+// + pill-bar + confetti during tasks. the user asked for this on 2026-05-11.
 //
 // Subscribes to: task.planned, task.step.started, task.step.completed,
 // task.completed. Pushes a thin JSON event to every connected client.
@@ -47,7 +47,7 @@ const OVERLAY_WORK_TOOLS = new Set([
   'start_task', 'start_ultra_task', 'remember',
 ]);
 
-// Human-readable label for a tool the overlay shows in the pill. Lucas
+// Human-readable label for a tool the overlay shows in the pill. the user
 // asked for friendly phrases like "checking downloads folder" instead
 // of the raw shell command. So for run_terminal_command we infer intent
 // from the command verb + path/target rather than dumping the literal
@@ -283,7 +283,7 @@ export class TaskOverlayBridge {
 
       // ── Chat-mode tool lifecycle (covers the much more common path
       //    where the model handles work via direct tool calls instead
-      //    of escalating to start_task — Lucas's desktop reorg case) ──
+      //    of escalating to start_task — the user's desktop reorg case) ──
       events.on('tool.executed', (e) => {
         if (!OVERLAY_WORK_TOOLS.has(e.toolName)) return;
         this.publish({

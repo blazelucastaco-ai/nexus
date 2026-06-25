@@ -10,7 +10,9 @@
     "nexus": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsup && cp dist/index.cjs ~/.nexus/app/index.cjs",
+    "build": "tsup && cp dist/index.cjs ~/.nexus/app/index.cjs && (pnpm run build:web || echo '⚠ web-ui build skipped — run: pnpm --dir web-ui install') && (pnpm run build:wake || echo '⚠ wake-word helper skipped — needs Swift toolchain')",
+    "build:web": "pnpm --dir web-ui build && rm -rf \"$HOME/.nexus/app/web-ui\" && mkdir -p \"$HOME/.nexus/app/web-ui\" && cp -R web-ui/dist/. \"$HOME/.nexus/app/web-ui/\"",
+    "build:wake": "mkdir -p \"$HOME/.nexus/app\" && swiftc -O -swift-version 5 macos/nexus-wake/main.swift -o \"$HOME/.nexus/app/nexus-wake\" -framework Speech -framework AVFoundation -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker macos/nexus-wake/Info.plist && codesign --force --sign - --identifier com.nexus.wake \"$HOME/.nexus/app/nexus-wake\"",
     "deploy": "pnpm build && launchctl kickstart -k gui/$(id -u)/com.nexus.ai",
     "restart": "launchctl kickstart -k gui/$(id -u)/com.nexus.ai",
     "dev": "tsx watch src/index.ts",

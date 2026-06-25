@@ -5,6 +5,7 @@
 // responses are prefixed with a 💭 thought bubble section.
 
 import { createLogger } from '../utils/logger.js';
+import { userName } from '../core/user-name.js';
 import type { AIManager } from '../ai/index.js';
 
 const log = createLogger('InnerMonologue');
@@ -73,14 +74,14 @@ ${memorySummary}
 Recent conversation: ${historySnippet}
 
 Write a short, authentic inner monologue (2-4 sentences, first person) that shows what you're specifically noticing about THIS exchange — the surface and the substance, the user's framing AND its gaps. Like an actor finding their motivation, not a checklist:
-- What is Lucas actually asking, beneath the literal request?
+- What is ${userName()} actually asking, beneath the literal request?
 - What's coming up from memory that bears on this?
-- Where might his framing be wrong, where would I push back?
+- Where might their framing be wrong, where would I push back?
 - What's my emotional read — am I tired, frustrated, curious?
 
 Be genuine, not performative. If a premise is shaky, name it to yourself even if the public reply will be diplomatic. Do NOT write the actual response — only the internal thought.
 
-Example style: "Hmm, Lucas is asking about TypeScript again. Last time we talked about this he was frustrated with the type system. I should be careful not to be preachy about types — meet him where he is. But also: he might be asking the wrong question; the issue isn't TS, it's the schema he keeps fighting."`,
+Example style: "Hmm, ${userName()} is asking about TypeScript again. Last time we talked about this they were frustrated with the type system. I should be careful not to be preachy about types — meet them where they are. But also: they might be asking the wrong question; the issue isn't TS, it's the schema they keep fighting."`,
         maxTokens: 180,
         temperature: 0.85,
       });

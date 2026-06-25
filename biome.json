@@ -62,5 +62,24 @@
       "quoteStyle": "single",
       "semicolons": "always"
     }
-  }
+  },
+  "overrides": [
+    {
+      "include": ["web-ui/**", "installer-app/src/renderer/**"],
+      "linter": {
+        "rules": {
+          "suspicious": { "noArrayIndexKey": "off" },
+          "a11y": {
+            "useButtonType": "off",
+            "noSvgWithoutTitle": "off",
+            "useKeyWithClickEvents": "off"
+          }
+        }
+      }
+    },
+    {
+      "include": ["web-ui/**"],
+      "linter": { "rules": { "correctness": { "useExhaustiveDependencies": "off" } } }
+    }
+  ]
 }

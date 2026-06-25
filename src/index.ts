@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { loadConfig } from './config.js';
+import { setUserName } from './core/user-name.js';
 import { createLogger } from './utils/logger.js';
 import { Orchestrator } from './core/orchestrator.js';
 import { MemoryManager } from './memory/index.js';
@@ -15,6 +16,14 @@ import { checkPermissions, warnMissingPermissions } from './macos/permissions.js
 import { browserBridge } from './browser/bridge.js';
 import { taskOverlayBridge } from './core/task-overlay-bridge.js';
 import { setMcpToolExecutor } from './mcp/server.js';
+import { WebServer } from './web/server.js';
+import { WebGateway } from './web/gateway.js';
+import { PhoneGateway } from './phone/gateway.js';
+import { loadPhoneConfig } from './phone/types.js';
+import { createTelephonyProvider } from './phone/provider.js';
+import { WEB_FALLBACK_CHAT_ID } from './web/protocol.js';
+import { WakeListener } from './web/wake.js';
+import { TtsService } from './web/tts.js';
 
 const log = createLogger('Main');
 
@@ -23,6 +32,7 @@ async function main() {
 
   // Load configuration
   const config = loadConfig();
+  setUserName(config.userName); // so prompts address the user by name (never hardcoded)
 
   // Initialize subsystems
   log.info('Initializing memory system...');
@@ -101,9 +111,21 @@ async function main() {
   // Wire MCP server so tools/call requests can dispatch to the tool executor
   setMcpToolExecutor(orchestrator.toolExecutor);
 
+  // Jarvis web interface — declared here so graceful shutdown can stop it.
+  let webServer: WebServer | undefined;
+  let webGateway: WebGateway | undefined;
+  let wakeListener: WakeListener | undefined;
+  let tts: TtsService | undefined;
+  let phoneGateway: PhoneGateway | undefined;
+
   // Handle graceful shutdown
   const shutdown = async () => {
     log.info('Received shutdown signal');
+    wakeListener?.stop();
+    tts?.stop();
+    void phoneGateway?.stop();
+    webGateway?.stop();
+    webServer?.stop();
     browserBridge.stop();
     taskOverlayBridge.stop();
     await orchestrator.stop();
@@ -141,6 +163,106 @@ async function main() {
 
   // Start everything
   await orchestrator.start();
+
+  // Jarvis web interface — a second door into the SAME brain. By reusing the
+  // primary Telegram chatId it shares memory and the live conversation thread
+  // (the orchestrator's history is one shared array). Non-fatal: the daemon and
+  // Telegram keep running even if the port is busy or the frontend isn't built.
+  try {
+    const webChatId = config.telegram.chatId || WEB_FALLBACK_CHAT_ID;
+    webServer = new WebServer({ chatId: webChatId, version: '0.2.13' });
+    tts = new TtsService(config.tts);
+    webGateway = new WebGateway(orchestrator, webServer, webChatId, tts);
+    webServer.start();
+    webGateway.start();
+    void tts.start();
+
+    // Loopback control hook for the installer's launch-choice + "learn about you"
+    // buttons — each command drives the ONE brain (no parallel path). The two intros
+    // are genuine self-introductions through the orchestrator; the research is a
+    // bounded, READ-ONLY scan that remembers a few durable facts about the user.
+    const INTRO_TELEGRAM =
+      "Introduce yourself to me — this is the very first thing you're saying to me, I just finished setting you up. " +
+      'First person, warm and concise: who you are, that you live on this Mac with persistent memory and real control of it, ' +
+      'and the main things you can do for me. A few natural sentences, not a manual.';
+    const INTRO_VOICE =
+      "Greet me out loud — I've just brought you online for the very first time. Briefly introduce yourself: who you are, " +
+      'and that I can simply talk to you. Calm and composed.';
+    const DEEP_RESEARCH =
+      'Build a profile of me by inspecting THIS Mac, read-only, then remember what you learn. ' +
+      'You MAY: list installed apps and call get_system_info; list non-hidden folders under my home ' +
+      '(Desktop, Documents, Downloads, Projects); read README / package.json / obvious project descriptors to learn what I build; ' +
+      'note my dev stack and the tools I use a lot. ' +
+      'You MUST NOT: read or open any secret, key, token, .env, .ssh, Keychain, password store, browser profile, or git credentials; ' +
+      'never write, move, or delete any file; never run a destructive or network-exfiltrating command. ' +
+      'Keep the scan bounded — a quick pass over those folders, not the whole disk. ' +
+      'When done, store 5 to 15 durable facts about me with the remember tool (high importance), each a single clear sentence.';
+    webServer.onControl(async (cmd) => {
+      try {
+        if (cmd === 'telegram-intro') {
+          const tgChat = config.telegram.chatId;
+          if (!tgChat) return { ok: false };
+          const reply = await orchestrator.handleMessage(tgChat, INTRO_TELEGRAM);
+          if (reply.trim()) await telegram.sendMessage(tgChat, reply);
+          return { ok: true };
+        }
+        if (cmd === 'voice-intro') {
+          webGateway?.submitUserText(INTRO_VOICE);
+          return { ok: true };
+        }
+        if (cmd === 'deep-research') {
+          // Long-running task — fire and forget so the HTTP response is instant;
+          // progress surfaces on Telegram + the activity feed.
+          void orchestrator.handleMessage(webChatId, DEEP_RESEARCH).catch((err) => log.warn({ err }, 'deep-research job failed'));
+          return { ok: true };
+        }
+      } catch (err) {
+        log.warn({ err, cmd }, 'control command failed');
+      }
+      return { ok: false };
+    });
+
+    // Wake word — "Hey Nexus" opens/focuses the Jarvis UI and starts it
+    // listening. On-device speech (local, no keys, no network); only the literal
+    // token "WAKE" ever reaches the daemon. Non-fatal: everything else keeps
+    // running even if it can't arm (no Swift, denied permission, no mic).
+    const wsRef = webServer;
+    const wgRef = webGateway;
+    // Wake word → wake the native Jarvis window (it shows itself on the wake
+    // frame). The helper also transcribes the spoken command on-device; route
+    // that straight through the same brain as a typed message.
+    wakeListener = new WakeListener(
+      () => wsRef.broadcastWake(),
+      (cmd) => wgRef.submitUserText(cmd),
+    );
+    wsRef.wakeWordEnabled = await wakeListener.start();
+  } catch (err) {
+    log.warn({ err }, 'Jarvis web interface failed to start — continuing without it');
+  }
+
+  // Phone — a THIRD door into the same brain (see PHONE_SETUP.md). Provisioning a
+  // real number needs a telephony account + carrier registration (yours to set up).
+  // Once NEXUS_PHONE_* + the provider creds are in the env and the provider is
+  // built, calls bridge through the same orchestrator + ElevenLabs voice with per-caller
+  // memory isolation and barge-in. Fully dormant + non-fatal when unconfigured.
+  try {
+    const phoneConfig = loadPhoneConfig();
+    if (phoneConfig) {
+      try {
+        const provider = await createTelephonyProvider(phoneConfig);
+        if (!tts) { tts = new TtsService(config.tts); void tts.start(); }
+        const phoneChatId = config.telegram.chatId || WEB_FALLBACK_CHAT_ID;
+        phoneGateway = new PhoneGateway(orchestrator, tts, provider, phoneConfig, phoneChatId);
+        await phoneGateway.start();
+      } catch (err) {
+        log.warn({ err: err instanceof Error ? err.message : err }, 'Phone configured but the telephony provider is not built yet — see PHONE_SETUP.md');
+      }
+    } else {
+      log.debug('Phone not configured (set NEXUS_PHONE_* + provider creds to enable) — running without it');
+    }
+  } catch (err) {
+    log.warn({ err }, 'Phone init skipped');
+  }
 
   log.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   log.info('  NEXUS is alive. Waiting for messages...');

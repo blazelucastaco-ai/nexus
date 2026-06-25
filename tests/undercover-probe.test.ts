@@ -4,7 +4,7 @@ import { isUndercoverProbe } from '../src/core/task-classifier.js';
 describe('isUndercoverProbe', () => {
   describe('should detect code/architecture probes', () => {
     const positive = [
-      // The exact phrasing Lucas reported
+      // The exact phrasing the user reported
       'how does your code work?',
       'how does nexus code work',
       'how does your codebase work',

@@ -8,7 +8,7 @@ import {
 } from '../src/core/task-runner.js';
 import type { TaskRunResult } from '../src/core/task-runner.js';
 
-// Bug Lucas reported on 2026-05-06: NEXUS replied to a task with just
+// Bug the user reported on 2026-05-06: NEXUS replied to a task with just
 // "task finished" + a step checklist, never including the actual answer.
 // Root cause was that the per-step rawOutput existed in memory but the
 // final-summary formatter never surfaced it. pickFinalAnswer is the helper
@@ -62,7 +62,7 @@ describe('pickFinalAnswer', () => {
   });
 
   it('strips Markdown from rawOutput so Telegram does not show literal `##` / `---` / pipes', () => {
-    // Lucas's screenshot bug from 2026-05-06: model produced a Markdown
+    // the user's screenshot bug from 2026-05-06: model produced a Markdown
     // report that Telegram rendered as raw text.
     const md = [
       '## ✅ Step 2 Complete — Verified',
@@ -158,7 +158,7 @@ describe('cleanMarkdownForTelegram', () => {
 });
 
 describe('summarizeTaskForHistory', () => {
-  // Bug Lucas reported on 2026-05-06: NEXUS shipped a Chrome extension at
+  // Bug the user reported on 2026-05-06: NEXUS shipped a Chrome extension at
   // 8:48 PM, then refused at 8:58 PM as if it had never built it, then
   // denied building it at 9:00 PM ("no record of building it"). Root
   // cause: task-runner sent the completion message via Telegram but

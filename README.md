@@ -32,6 +32,7 @@ Unlike a chatbot, NEXUS has a multi-layer memory system so it remembers your pre
 - 🧠 **Multi-layer memory** — Episodic, semantic, procedural, and working memory with dream-cycle consolidation
 - 🎭 **Personality engine** — Real emotional states, circadian rhythm, formed opinions, relationship progression
 - 💬 **Telegram-native** — Control NEXUS from anywhere, zero browser required
+- 🟠 **Jarvis voice interface** — A local, on-device voice + a black-screen orb that breathes, reacts, and speaks. Wake it with "Hey Nexus", talk to it, and the orb pulses with the reply. Same brain as Telegram — one mind, two doors in.
 - 🖥️ **Full macOS control** — Screenshots, mouse/keyboard automation, AppleScript, app management
 - 🤖 **10 specialized sub-agents** — Vision, File, Browser, Terminal, Code, Research, System, Creative, Comms, Scheduler
 - 📚 **Learning system** — Tracks your preferences, corrects repeated mistakes, recognizes behavioral patterns
@@ -127,6 +128,20 @@ NEXUS scores relevance per-request and injects matching skills into the task con
 
 When a step in a task fails, NEXUS automatically consults a parallel Claude Opus agent ("Co Work") for advice. The Opus agent analyzes what went wrong and suggests a specific fix. NEXUS gets a maximum of 3 Co Work consultations per task so it doesn't become a crutch. Co Work events are reported in the Telegram summary with "I phoned a friend" language.
 
+## Voice & the Jarvis Interface
+
+NEXUS has a voice and a Jarvis-style screen — a black field with a single molten-orange orb that breathes, reacts while it listens and thinks, and pulses in time with its voice as it speaks. It runs as a frameless full-screen window in the NEXUS menubar app and is **the same brain as Telegram** — same memory, same history, same personality. One core, two doors in.
+
+**Voice is cloud TTS (ElevenLabs); the wake word and the screen are local:**
+
+- **Speech (TTS):** [ElevenLabs](https://elevenlabs.io) — a refined British voice by default (configurable with any Voice ID from your account). Each reply is normalized for natural speech (no spelled-out digits, spoken emoji, or markdown) and the orb pulses in time with it. Requires an ElevenLabs API key; without one, voice replies stay silent (the text still shows).
+- **Wake word:** say **"Hey Nexus"** and the screen wakes. An on-device keyword spotter (sherpa-onnx) listens locally; only the wake event ever leaves the helper. First launch prompts for **Microphone** + **Speech Recognition** permission (a one-time macOS grant).
+- **The screen:** served on `http://127.0.0.1:4242`, opened automatically in the menubar app. NEXUS drives it itself — the orb, a first-person "thinking" bubble, and charts/diagrams/projects it conjures via its `ui_*` tools.
+
+**Setup.** Add your ElevenLabs API key during install (the **Voice** step) or to `.env` as `ELEVENLABS_API_KEY` — no Python venv or model download is needed, TTS is a cloud API. The installer also builds the local "Hey Nexus" wake helper. Get a key at [elevenlabs.io](https://elevenlabs.io/app/settings/api-keys).
+
+**Env (optional):** `ELEVENLABS_API_KEY` (enables voice), `ELEVENLABS_VOICE_ID` (a Voice ID from your ElevenLabs Voice Lab), `ELEVENLABS_MODEL_ID`, `ELEVENLABS_OUTPUT_FORMAT`, `NEXUS_WAKE_KWS=0` (use the dictation-based wake fallback), `NEXUS_TTS=0` (disable voice). Open the screen directly at `http://127.0.0.1:4242`.
+
 ## Configuration
 
 All persistent data lives in `~/.nexus/`:
@@ -138,6 +153,8 @@ All persistent data lives in `~/.nexus/`:
 | `memory/` | File-based memory layers |
 | `skills/` | User-defined skill files |
 | `brain.json` | Personality and emotional state persistence |
+| `wake/` | On-device "Hey Nexus" keyword-spotter model + worker |
+| `app/web-ui/` | Built Jarvis interface (served on `:4242`) |
 
 Environment variables in `.env` at project root. See `.env.example` for all options.
 
@@ -169,7 +186,7 @@ nexus uninstall    # Remove NEXUS from this system
 ```bash
 pnpm dev           # Development mode with hot reload
 pnpm build         # Production build
-pnpm test          # Run test suite (792 tests)
+pnpm test          # Run test suite (1048 tests)
 pnpm lint          # Lint and format
 ```
 
@@ -179,7 +196,8 @@ pnpm lint          # Lint and format
 - **Node.js 22+**
 - **pnpm**
 - **Telegram account** with a bot token from [@BotFather](https://t.me/BotFather)
-- **Anthropic API key** (required — NEXUS runs on Claude 4.X with tiered routing: Opus 4.7 for planning, Sonnet 4.6 for execution, Haiku 4.5 for fast checks)
+- **Anthropic API key** (required — NEXUS runs on Claude with tiered routing: **Opus 4.8** for heavy reasoning/planning, **Sonnet 4.6** for chat/execution, **Haiku 4.5** for fast high-volume work)
+- **For the Jarvis voice interface (optional):** an [ElevenLabs](https://elevenlabs.io) API key for cloud TTS (add it during install — see *Voice & the Jarvis Interface* below). Without one, voice replies stay silent (the text still shows).
 
 ## License
 

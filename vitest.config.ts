@@ -22,6 +22,7 @@ export default defineConfig({
       'dist',
       'hub/**',
       'installer-app/**',
+      'web-ui/**',
       'chrome-extension/**',
       '**/*.d.ts',
     ],

@@ -92,7 +92,7 @@ function createPopupWindow(): BrowserWindow {
     maximizable: false,
     closable: false,
     fullscreenable: false,
-    focusable: false,        // don't steal focus from whatever Lucas is doing
+    focusable: false,        // don't steal focus from whatever the user is doing
     hasShadow: true,
     show: false,
     backgroundColor: '#00000000',

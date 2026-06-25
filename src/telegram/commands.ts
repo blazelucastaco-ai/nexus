@@ -1627,7 +1627,7 @@ export async function handleSkillPromote(
       return;
     }
 
-    // Refuse to overwrite an existing active skill — Lucas should resolve
+    // Refuse to overwrite an existing active skill — the user should resolve
     // the conflict manually rather than let promotion silently clobber.
     try {
       await fs.access(targetPath);

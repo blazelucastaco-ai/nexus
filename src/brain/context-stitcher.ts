@@ -5,7 +5,7 @@
 // the same topic and formats them as a compact context block that the main
 // LLM sees in its system prompt.
 //
-// This is the "continuation awareness" layer: Lucas asks "how's the auth work
+// This is the "continuation awareness" layer: the user asks "how's the auth work
 // going?" and NEXUS automatically knows that 5 days ago we set up the JWT
 // middleware, because those memories surface through stitching — no manual
 // recall or question-routing required.

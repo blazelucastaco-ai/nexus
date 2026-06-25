@@ -522,6 +522,120 @@ export function AIKeyStep(props: {
 }
 
 /* ──────────────────────────────────────────────────────────────────
+   3b. VOICE — ElevenLabs API key (optional)
+────────────────────────────────────────────────────────────────── */
+export function ElevenLabsKeyStep(props: {
+  value: { apiKey: string; voiceId?: string; modelId?: string };
+  onChange: (v: { apiKey: string; voiceId?: string; modelId?: string }) => void;
+  onNext: () => void;
+  onBack: () => void;
+}): JSX.Element {
+  const { apiKey, voiceId, modelId } = props.value;
+  // Optional step — a blank key is valid (NEXUS falls back to the browser voice).
+  const valid = !apiKey || apiKey.length > 20;
+
+  return (
+    <div className="step">
+      <span className="eyebrow">Voice · optional</span>
+      <h1 className="step-title">
+        Give NEXUS a <em>voice</em>.
+      </h1>
+      <p className="step-lead">
+        In voice / live-chat mode NEXUS speaks through ElevenLabs. Paste an ElevenLabs API key
+        to give it a real voice — or leave this blank to skip (voice replies stay silent and the
+        text still shows; you can add a key later).
+      </p>
+
+      <div className="field">
+        <label htmlFor="eleven-key" className="field-label">ElevenLabs API key</label>
+        <input
+          id="eleven-key"
+          type="password"
+          className="field-input mono"
+          placeholder="sk_…  (optional)"
+          value={apiKey}
+          onChange={(e) => props.onChange({ apiKey: e.target.value, voiceId, modelId })}
+        />
+        <p className="field-hint">
+          Get one at{' '}
+          <button type="button" className="link" onClick={() => window.nexus.external.open('https://elevenlabs.io/app/settings/api-keys')}>
+            elevenlabs.io
+          </button>
+          . Without a key, voice replies stay silent (the text still shows).
+        </p>
+        {apiKey && !valid && (
+          <p className="field-error">That key looks too short.</p>
+        )}
+      </div>
+
+      <div className="field">
+        <label htmlFor="eleven-voice" className="field-label">Voice ID (optional)</label>
+        <input
+          id="eleven-voice"
+          type="text"
+          className="field-input mono"
+          placeholder="defaults to Alexander Kensington"
+          value={voiceId ?? ''}
+          onChange={(e) => props.onChange({ apiKey, voiceId: e.target.value, modelId })}
+        />
+        <p className="field-hint">
+          Leave blank for the default <strong>Alexander Kensington</strong> (a British studio voice) — NEXUS finds it in
+          your ElevenLabs account by name. Or paste any Voice ID to override.
+        </p>
+      </div>
+
+      <div className="btn-row">
+        <button type="button" className="btn-g" onClick={props.onBack}>← Back</button>
+        <button type="button" className="btn-p" onClick={props.onNext} disabled={!valid}>
+          Continue →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   4b. LEARN ABOUT YOU — opt-in deep PC scan (runs after install)
+────────────────────────────────────────────────────────────────── */
+export function LearnAboutYouStep(props: {
+  value: boolean;
+  onChange: (v: boolean) => void;
+  onNext: () => void;
+  onBack: () => void;
+}): JSX.Element {
+  const choose = (v: boolean): void => { props.onChange(v); props.onNext(); };
+  return (
+    <div className="step">
+      <span className="eyebrow">Optional · about you</span>
+      <h1 className="step-title">Want NEXUS to <em>learn about you</em>?</h1>
+      <p className="step-lead">
+        With your okay, once it's up and running NEXUS takes a quick, <strong>read-only</strong> look
+        around this Mac — your projects, the tools you use, how you work — and remembers it, so it
+        knows your world from day one. It's your own machine, nothing leaves it, and it never touches
+        passwords, keys, or anything private.
+      </p>
+      <div className="card" style={{ marginBottom: 22 }}>
+        <div className="card-row">
+          <div>
+            <h3>What it looks at</h3>
+            <p>
+              Installed apps, your Documents / Desktop / Downloads / Projects folders, and project
+              files like READMEs — to understand what you build and the stack you use. Nothing is
+              written, moved, or sent anywhere.
+            </p>
+          </div>
+        </div>
+      </div>
+      <div className="btn-row">
+        <button type="button" className="btn-g" onClick={props.onBack}>← Back</button>
+        <button type="button" className="btn-g" onClick={() => choose(false)}>Skip</button>
+        <button type="button" className="btn-p" onClick={() => choose(true)}>Yes, learn about me →</button>
+      </div>
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────
    5. AGENTS
 ────────────────────────────────────────────────────────────────── */
 export function AgentsStep(props: {
@@ -1233,76 +1347,90 @@ export function MemoryImportStep(props: { onNext: () => void; onBack: () => void
 /* ──────────────────────────────────────────────────────────────────
    11. DONE
 ────────────────────────────────────────────────────────────────── */
-export function DoneStep(props: { mode: 'install' | 'reconfigure' | 'repair' }): JSX.Element {
-  const leadText =
-    props.mode === 'reconfigure'
-      ? 'Your new settings are live. The service restarted automatically — send your bot a message to verify.'
-      : props.mode === 'repair'
-        ? 'NEXUS has been updated and restarted. Your config is unchanged.'
-        : 'The service is running in the background. Send your Telegram bot any message to say hi.';
+export function DoneStep(props: { mode: 'install' | 'reconfigure' | 'repair'; learnAboutMe?: boolean }): JSX.Element {
+  const [research, setResearch] = useState<'idle' | 'started'>('idle');
+  const [launching, setLaunching] = useState<null | 'telegram' | 'voice'>(null);
+  const firedRef = useRef(false);
 
-  const eyebrowText =
-    props.mode === 'reconfigure' ? 'Config saved'
-    : props.mode === 'repair' ? 'Repair complete'
-    : 'Setup complete';
+  // Deferred deep-research trigger: the user opted in on the "learn about you" step,
+  // but the daemon only came up at install — so fire it now, exactly once.
+  useEffect(() => {
+    if (props.learnAboutMe && !firedRef.current) {
+      firedRef.current = true;
+      setResearch('started');
+      void window.nexus.main.runDeepResearch();
+    }
+  }, [props.learnAboutMe]);
+
+  const launchTelegram = async (): Promise<void> => {
+    setLaunching('telegram');
+    try {
+      await window.nexus.main.sendTelegramIntro();
+      window.nexus.external.open('https://t.me');
+    } finally {
+      setLaunching(null);
+    }
+  };
+  const launchVoice = async (): Promise<void> => {
+    setLaunching('voice');
+    try {
+      await window.nexus.main.launchVoiceIntro();
+    } finally {
+      setLaunching(null);
+    }
+  };
+
+  // Reconfigure / repair keep the simple confirmation — the launch-choice is for a
+  // fresh install (meeting NEXUS for the first time).
+  if (props.mode !== 'install') {
+    return (
+      <div className="step">
+        <div className="done-hero">
+          <div className="done-emoji">✨</div>
+          <span className="eyebrow">{props.mode === 'repair' ? 'Repair complete' : 'Config saved'}</span>
+          <h1 className="step-title">NEXUS is <em>ready</em>.</h1>
+          <p className="step-lead">
+            {props.mode === 'repair'
+              ? 'NEXUS has been updated and restarted. Your config is unchanged.'
+              : 'Your new settings are live and the service restarted.'}{' '}
+            Look for the <strong style={{ color: 'var(--t)' }}>◉</strong> in your menu bar.
+          </p>
+        </div>
+        <div className="btn-row">
+          <button type="button" className="btn-p" onClick={() => void window.nexus.main.openDashboard()}>Open dashboard →</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="step">
       <div className="done-hero">
         <div className="done-emoji">✨</div>
-        <span className="eyebrow">{eyebrowText}</span>
+        <span className="eyebrow">Setup complete</span>
         <h1 className="step-title">
           NEXUS is <em>ready</em>.
         </h1>
         <p className="step-lead">
-          {leadText} Look for the <strong style={{ color: 'var(--t)' }}>◉</strong> icon in your menu bar —
-          that's NEXUS living in the top-right of your screen, ready whenever you need it.
+          It's running in the background — that <strong style={{ color: 'var(--t)' }}>◉</strong> in your
+          menu bar is NEXUS. How would you like to meet it?
+          {research === 'started' && " It's also having a quick look around to learn about you — that runs in the background."}
         </p>
       </div>
-      <div className="done-list">
-        <div className="done-item">
-          <div className="done-item-n">1</div>
-          <div>
-            <h4>Open Telegram</h4>
-            <p>Find your bot and send any message — even just "hi".</p>
-          </div>
-        </div>
-        <div className="done-item">
-          <div className="done-item-n">2</div>
-          <div>
-            <h4>Try a command</h4>
-            <p>
-              Send <code>/status</code> to confirm everything is wired up. You can also
-              try <em>"Take a screenshot of my desktop"</em>.
-            </p>
-          </div>
-        </div>
-        <div className="done-item">
-          <div className="done-item-n">3</div>
-          <div>
-            <h4>Manage it from the terminal</h4>
-            <p>
-              Run <code>nexus status</code>, <code>nexus logs</code>, or{' '}
-              <code>nexus stop</code> any time.
-            </p>
-          </div>
-        </div>
+
+      <div className="preset-grid" style={{ marginTop: 8 }}>
+        <button type="button" className="preset-card" onClick={() => void launchTelegram()} disabled={launching !== null}>
+          <div className="preset-name">{launching === 'telegram' ? 'Messaging you…' : 'Launch in Telegram'}</div>
+          <div className="preset-desc">NEXUS sends you a message introducing itself. Talk to it from anywhere.</div>
+        </button>
+        <button type="button" className="preset-card" onClick={() => void launchVoice()} disabled={launching !== null}>
+          <div className="preset-name">{launching === 'voice' ? 'Coming online…' : 'Launch in Voice Chat'}</div>
+          <div className="preset-desc">Opens the Jarvis screen and NEXUS introduces itself out loud — just talk to it.</div>
+        </button>
       </div>
-      <div className="btn-row">
-        <button
-          type="button"
-          className="btn-p"
-          onClick={() => void window.nexus.main.openDashboard()}
-        >
-          Open NEXUS dashboard →
-        </button>
-        <button
-          type="button"
-          className="btn-g"
-          onClick={() => window.nexus.external.open('https://t.me')}
-        >
-          Open Telegram ↗
-        </button>
+
+      <div className="btn-row" style={{ marginTop: 24 }}>
+        <button type="button" className="btn-g" onClick={() => void window.nexus.main.openDashboard()}>Open dashboard</button>
       </div>
     </div>
   );

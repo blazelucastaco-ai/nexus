@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { AICompletionOptions, AIMessage, AIResponse, AIToolCall } from '../types.js';
+import { SYSTEM_CACHE_SPLIT } from '../types.js';
 import { createLogger } from '../utils/logger.js';
 import { retry } from '../utils/retry.js';
 
@@ -46,11 +47,17 @@ const MAX_RETRIES = 2;
  */
 function toAnthropicTools(tools: AICompletionOptions['tools']): Anthropic.Tool[] {
   if (!tools?.length) return [];
-  return tools.map((t) => ({
+  const out: Anthropic.Tool[] = tools.map((t) => ({
     name: t.function.name,
     description: t.function.description,
     input_schema: t.function.parameters as Anthropic.Tool['input_schema'],
   }));
+  // The tool set is identical every turn — mark the last definition so Anthropic
+  // caches all ~77 tools as a prefix (a cache read instead of re-tokenizing the
+  // whole set on every call). Big time-to-first-token win on repeat turns.
+  const last = out[out.length - 1];
+  if (last) last.cache_control = { type: 'ephemeral' };
+  return out;
 }
 
 /**
@@ -220,6 +227,21 @@ export class ClaudeProvider {
       ].join('\n\n') || '',
     ) || undefined;
 
+    // Split on the cache-break marker so the stable prefix carries `cache_control`
+    // (and caches across turns) while the per-turn volatile tail does not. With no
+    // marker (internal Haiku calls) the whole prompt is one cached block.
+    const systemBlocks = ((): Anthropic.TextBlockParam[] | undefined => {
+      if (!fullSystem) return undefined;
+      const cc = { type: 'ephemeral' as const };
+      const i = fullSystem.indexOf(SYSTEM_CACHE_SPLIT);
+      if (i < 0) return [{ type: 'text' as const, text: fullSystem, cache_control: cc }];
+      const stable = fullSystem.slice(0, i).trimEnd();
+      const volatile = fullSystem.slice(i + SYSTEM_CACHE_SPLIT.length).trimStart();
+      const blocks: Anthropic.TextBlockParam[] = [{ type: 'text' as const, text: stable, cache_control: cc }];
+      if (volatile) blocks.push({ type: 'text' as const, text: volatile });
+      return blocks;
+    })();
+
     // Convert messages and tools
     const cleanMessages = options.messages.map((m) => ({
       ...m,
@@ -257,11 +279,24 @@ export class ClaudeProvider {
           max_tokens: maxTokens,
           ...(supportsTemperature ? { temperature } : {}),
           messages: anthropicMessages,
-          ...(fullSystem ? { system: [{ type: 'text' as const, text: fullSystem, cache_control: { type: 'ephemeral' as const } }] } : {}),
+          ...(systemBlocks ? { system: systemBlocks } : {}),
           ...(anthropicTools.length > 0 ? { tools: anthropicTools } : {}),
           ...(toolChoice ? { tool_choice: toolChoice } : {}),
         };
         const stream = this.client.messages.stream(params);
+        // Forward text deltas to the caller (web/Jarvis renders them live) so the
+        // user sees the answer stream in immediately instead of waiting for the
+        // whole buffered reply. finalMessage() still returns the complete result.
+        if (options.onToken) {
+          const emit = options.onToken;
+          stream.on('text', (delta: string) => {
+            try {
+              emit(delta);
+            } catch {
+              /* a UI callback must never break generation */
+            }
+          });
+        }
         return stream.finalMessage();
       },
       {
@@ -302,6 +337,8 @@ export class ClaudeProvider {
         model: result.model,
         inputTokens: result.tokensUsed?.input,
         outputTokens: result.tokensUsed?.output,
+        cacheRead: response.usage.cache_read_input_tokens ?? 0,
+        cacheWrite: response.usage.cache_creation_input_tokens ?? 0,
         toolCalls: toolCalls.length,
         stopReason: result.stopReason,
         duration,

@@ -60,6 +60,12 @@ export type NexusEvent =
   | { type: 'system.started'; version: string; uptime: number }
   | { type: 'system.shutdown'; graceful: boolean; reason?: string }
 
+  // UI directives — emitted when the model calls a ui_* tool to drive the
+  // Jarvis web interface. The web channel forwards these to the browser; any
+  // other subscriber (or no subscriber) is fine. `kind` is the directive name
+  // (e.g. 'chart', 'diagram', 'panel', 'projects', 'orb', 'clear').
+  | { type: 'ui.directive'; kind: string; payload: Record<string, unknown>; chatId?: string }
+
   // Main-agent heartbeat — emitted every N minutes by the orchestrator while
   // it's alive. Paused during the dream window so it doesn't compete with
   // the consolidation pass.

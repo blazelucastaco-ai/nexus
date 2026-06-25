@@ -701,7 +701,7 @@ function autoScore(p: Prompt, response: string, taskText: string): { scores: Res
     },
     54: () => {
       const f = checkDesktopFile('meeting-actions.txt');
-      const hasItems = f.exists && (f.content.includes('Lucas') || f.content.includes('README') || f.content.includes('regression') || f.content.includes('Marketing'));
+      const hasItems = f.exists && (f.content.includes('the user') || f.content.includes('README') || f.content.includes('regression') || f.content.includes('Marketing'));
       completion = hasItems ? 2 : f.exists ? 1 : 0;
       verif = f.exists ? `has_action_items=${hasItems}` : 'FILE MISSING';
     },

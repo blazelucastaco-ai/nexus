@@ -5,6 +5,8 @@ export type StepKey =
   | 'repo'
   | 'telegram'
   | 'ai'
+  | 'voice'
+  | 'learn-about-you'
   | 'agents'
   | 'personality'
   | 'permissions'
@@ -25,6 +27,7 @@ export interface DetectionResult {
   repoPath: string;
   existingTelegram?: { botToken: string; chatId: string };
   existingAnthropicKey?: string;
+  existingElevenLabsKey?: string;
   existingAgents?: string[];
   existingPersonality?: {
     preset: 'professional' | 'friendly' | 'sarcastic_genius' | 'custom';
@@ -80,6 +83,12 @@ export interface RepoStatus {
 export interface ConfigInput {
   telegram: { botToken: string; chatId: string };
   anthropicKey: string;
+  /** Optional ElevenLabs voice TTS (from the "voice" step). Blank = browser voice. */
+  elevenLabsKey: string;
+  elevenLabsVoiceId?: string;
+  elevenLabsModelId?: string;
+  /** Opt-in (from the "learn about you" step) to run a deep PC scan after install. */
+  learnAboutMe?: boolean;
   agents: string[];
   personality: {
     preset: 'professional' | 'friendly' | 'sarcastic_genius' | 'custom';

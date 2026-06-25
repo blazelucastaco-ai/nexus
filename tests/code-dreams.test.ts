@@ -22,7 +22,7 @@ function makeFakeAi(response: string): AIManager {
     complete: vi.fn(async (): Promise<AIResponse> => ({
       content: response,
       provider: 'anthropic',
-      model: 'claude-opus-4-7',
+      model: 'claude-opus-4-8',
       duration: 100,
     })),
   } as unknown as AIManager;
@@ -128,7 +128,7 @@ describe('runCodeDreamsCycle', () => {
           confidence: 0.8,
         }),
         provider: 'anthropic',
-        model: 'claude-opus-4-7',
+        model: 'claude-opus-4-8',
         duration: 100,
       })),
     } as unknown as AIManager;
@@ -233,7 +233,7 @@ describe('startCodeDreams event subscriber', () => {
     // Patch fetchDiff via a fresh subscriber: startCodeDreams uses the real
     // getRecentDiff, which will return null for non-existent dirs. For this
     // test we verify the subscription fires the runner by checking AI was called.
-    subs = startCodeDreams({ ai, model: 'claude-opus-4-7' });
+    subs = startCodeDreams({ ai, model: 'claude-opus-4-8' });
 
     events.emit({ type: 'dream.started' });
 

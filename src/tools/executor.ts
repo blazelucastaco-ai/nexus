@@ -13,6 +13,7 @@ import {
 } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { join, dirname, resolve, extname, sep } from 'node:path';
+import { readCalendar, listEmails, googleNotReadyReason } from '../integrations/google.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createLogger } from '../utils/logger.js';
@@ -131,6 +132,9 @@ const TOOL_RISK: Record<string, 'AUTO' | 'LOGGED' | 'CONFIRM'> = {
   check_updates:       'AUTO',
   web_search:          'AUTO',
   web_fetch:           'AUTO',
+  get_weather:         'AUTO',
+  read_calendar:       'AUTO',
+  check_email:         'AUTO',
   crawl_url:           'AUTO',
   check_injection:     'AUTO',
   write_file:          'LOGGED',
@@ -153,8 +157,15 @@ const TOOL_RISK: Record<string, 'AUTO' | 'LOGGED' | 'CONFIRM'> = {
   transcribe_audio:    'AUTO',
   // Approval
   check_command_risk:  'AUTO',
-  // GUI / Computer Use — driving Lucas's actual Mac. LOGGED so every
+  // GUI / Computer Use — driving the user's actual Mac. LOGGED so every
   // mouse/keyboard/app action is loud in logs.
+  // Jarvis web UI directives — cosmetic, no side effects, silent if no browser.
+  ui_show_chart:       'AUTO',
+  ui_show_diagram:     'AUTO',
+  ui_show_panel:       'AUTO',
+  ui_show_projects:    'AUTO',
+  ui_set_orb:          'AUTO',
+  ui_clear:            'AUTO',
   click_at:            'LOGGED',
   double_click_at:     'LOGGED',
   move_mouse:          'AUTO',     // mouse move alone is harmless
@@ -451,7 +462,7 @@ export class ToolExecutor {
    * Wired by the orchestrator so the start_task / start_ultra_task tools
    * can hand the request back to planTask + launchTask. Lets the chat-mode
    * model decide when a multi-step plan is warranted instead of relying on
-   * regex classification (Lucas's 2026-05-07 directive: model intelligence
+   * regex classification (the user's 2026-05-07 directive: model intelligence
    * over keyword triggers).
    */
   private taskLauncher?: TaskLauncher;
@@ -574,6 +585,9 @@ export class ToolExecutor {
       case 'recall':              return this.recall(args);
       case 'web_search':          return this.webSearch(args);
       case 'web_fetch':           return this.webFetch(args);
+      case 'get_weather':         return this.getWeather(args);
+      case 'read_calendar':       return this.readCalendar(args);
+      case 'check_email':         return this.checkEmail(args);
       case 'crawl_url':           return this.crawlUrl(args);
       case 'check_injection':     return this.checkInjection(args);
       case 'introspect':          return this.introspect();
@@ -638,6 +652,14 @@ export class ToolExecutor {
       case 'browser_switch_tab':       return this.runBrowserTool('switch_tab',      args);
       case 'browser_select':           return this.runBrowserTool('select',          args);
       case 'browser_clear':            return this.runBrowserTool('clear',           args);
+      // Jarvis web interface — model-driven UI directives
+      case 'ui_show_visual':      return this.uiShowVisual(args, context);
+      case 'ui_show_chart':       return this.uiShowChart(args, context);
+      case 'ui_show_diagram':     return this.uiShowDiagram(args, context);
+      case 'ui_show_panel':       return this.uiShowPanel(args, context);
+      case 'ui_show_projects':    return this.uiShowProjects(args, context);
+      case 'ui_set_orb':          return this.uiSetOrb(args, context);
+      case 'ui_clear':            return this.uiClear(args, context);
       default: {
         // Check plugin handlers
         for (const plugin of this.plugins) {
@@ -649,6 +671,149 @@ export class ToolExecutor {
         return `Error: Unknown tool "${toolName}"`;
       }
     }
+  }
+
+  // ── Jarvis web interface — model-driven UI directives ───────────────
+  // Each emits a `ui.directive` event the WebGateway forwards to the browser.
+  // They do no real work and never throw on malformed input — they return a
+  // short note the model can read. Silent (but still "succeed") if no browser.
+
+  private emitUi(kind: string, payload: Record<string, unknown>, context?: ToolContext): void {
+    events.emit({ type: 'ui.directive', kind, payload, chatId: context?.chatId });
+  }
+
+  private parseJsonArg(value: unknown): unknown {
+    if (typeof value !== 'string') return value;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private uiShowChart(args: Record<string, unknown>, context?: ToolContext): string {
+    const title = String(args.title ?? 'Chart');
+    const chartType = String(args.chart_type ?? 'bar');
+    const subtitle = args.subtitle ? String(args.subtitle) : undefined;
+    const data = this.parseJsonArg(args.data);
+    if (!Array.isArray(data) || data.length === 0) {
+      return 'Error: `data` must be a non-empty JSON array like [{"label":"Mon","value":12}].';
+    }
+    this.emitUi('chart', { title, chartType, subtitle, data }, context);
+    return `Rendered a ${chartType} chart "${title}" on the Jarvis screen.`;
+  }
+
+  private uiShowDiagram(args: Record<string, unknown>, context?: ToolContext): string {
+    const title = String(args.title ?? 'Diagram');
+    const layout = args.layout ? String(args.layout) : 'flow';
+    const nodes = this.parseJsonArg(args.nodes);
+    const edgesRaw = this.parseJsonArg(args.edges);
+    if (!Array.isArray(nodes) || nodes.length === 0) {
+      return 'Error: `nodes` must be a non-empty JSON array like [{"id":"a","label":"Start"}].';
+    }
+    const edges = Array.isArray(edgesRaw) ? edgesRaw : [];
+    this.emitUi('diagram', { title, layout, nodes, edges }, context);
+    return `Drew the "${title}" diagram on the Jarvis screen.`;
+  }
+
+  private uiShowPanel(args: Record<string, unknown>, context?: ToolContext): string {
+    const title = String(args.title ?? 'Note');
+    const body = String(args.body ?? '');
+    if (!body.trim()) return 'Error: `body` is required for ui_show_panel.';
+    const accent = args.accent ? String(args.accent) : undefined;
+    this.emitUi('panel', { title, body, accent }, context);
+    return `Opened the "${title}" panel on the Jarvis screen.`;
+  }
+
+  private uiShowProjects(args: Record<string, unknown>, context?: ToolContext): string {
+    const limit = Number(args.limit) || 12;
+    const rows = listProjects({ limit }).map((p) => ({
+      name: p.display_name || p.name,
+      slug: p.name,
+      path: p.path,
+      description: p.description,
+      taskCount: p.task_count,
+      lastTask: p.last_task_title,
+      lastTaskOk: p.last_task_success,
+      lastActive: p.last_active_at,
+    }));
+    this.emitUi('projects', { projects: rows }, context);
+    return rows.length ? `Showing ${rows.length} project(s) on the Jarvis screen.` : 'No tracked projects yet.';
+  }
+
+  private uiSetOrb(args: Record<string, unknown>, context?: ToolContext): string {
+    const state = String(args.state ?? 'idle');
+    const hue = args.hue !== undefined && args.hue !== '' ? Number(args.hue) : undefined;
+    this.emitUi('orb', { state, hue }, context);
+    return `Orb set to "${state}".`;
+  }
+
+  private uiClear(_args: Record<string, unknown>, context?: ToolContext): string {
+    this.emitUi('clear', {}, context);
+    return 'Cleared the Jarvis screen.';
+  }
+
+  // The unified, richer entry: bring up the best-fitting visual for a reply. The
+  // spec is a JSON object with a `type` (node_graph | chart | stat_dashboard |
+  // comparison | timeline | steps | list | code | info_panel | custom). The
+  // renderer is defensive (bounds counts, renders all text as TEXT — never HTML —
+  // so a hostile spec can't inject script); here we whitelist the type + bound the
+  // payload size, then forward it as a `visual` directive the Stage renders.
+  private uiShowVisual(args: Record<string, unknown>, context?: ToolContext): string {
+    const spec = this.parseJsonArg(args.spec);
+    if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
+      return 'Error: `spec` must be a JSON object, e.g. {"type":"node_graph","title":"NEXUS","layout":"hub","nodes":[{"id":"core","label":"NEXUS","order":0}],"edges":[]}.';
+    }
+    const s = spec as Record<string, unknown>;
+    const type = String(s.type ?? '');
+    const ALLOWED = ['node_graph', 'chart', 'stat_dashboard', 'comparison', 'timeline', 'steps', 'list', 'code', 'info_panel', 'custom'];
+    if (!ALLOWED.includes(type)) {
+      return `Error: unknown visual type "${type}". Use one of: ${ALLOWED.join(', ')}.`;
+    }
+    if (JSON.stringify(s).length > 24_000) {
+      return 'Error: that visual spec is too large — keep it to a screenful of structure, not a data dump.';
+    }
+    const id = String(s.id ?? `v${Date.now()}`);
+    const clean = type === 'custom' ? this.sanitizeCustom(s) : s;
+    this.emitUi('visual', { ...clean, id, type }, context);
+    const title = s.title ? ` "${String(s.title)}"` : '';
+    return `Brought up a ${type}${title} on the Jarvis screen, building in as you speak.`;
+  }
+
+  // Sanitize a `custom` shapes spec before it reaches the page: keep only the four
+  // known shape kinds, clamp every coordinate to the 0-100 normalized canvas,
+  // allowlist accents (named or #rrggbb), truncate labels, cap the shape count.
+  // The renderer clamps again — this is defense in depth so the daemon never
+  // forwards a malformed/oversized custom visual.
+  private sanitizeCustom(s: Record<string, unknown>): Record<string, unknown> {
+    const prim = (s.primitive ?? {}) as Record<string, unknown>;
+    const KINDS = new Set(['box', 'circle', 'line', 'text']);
+    const ACCENTS = new Set(['amber', 'orange', 'red', 'green', 'blue', 'violet', 'cyan', 'gray', 'white']);
+    const clampNum = (v: unknown): number => {
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
+    };
+    const accent = (a: unknown): string | undefined => {
+      const v = String(a ?? '').trim().toLowerCase();
+      return ACCENTS.has(v) || /^#[0-9a-f]{6}$/.test(v) ? v : undefined;
+    };
+    const rawShapes = Array.isArray(prim.shapes) ? prim.shapes : [];
+    const shapes = rawShapes
+      .map((sh) => (sh ?? {}) as Record<string, unknown>)
+      .filter((sh) => KINDS.has(String(sh.kind)))
+      .slice(0, 40)
+      .map((sh) => {
+        const out: Record<string, unknown> = { kind: String(sh.kind) };
+        for (const k of ['x', 'y', 'w', 'h', 'r', 'x1', 'y1', 'x2', 'y2']) {
+          if (sh[k] !== undefined) out[k] = clampNum(sh[k]);
+        }
+        if (sh.label !== undefined) out.label = String(sh.label).slice(0, 60);
+        if (sh.text !== undefined) out.text = String(sh.text).slice(0, 60);
+        const ac = accent(sh.accent);
+        if (ac) out.accent = ac;
+        return out;
+      });
+    return { ...s, primitive: { shapes } };
   }
 
   // ── run_terminal_command ────────────────────────────────────────────
@@ -738,7 +903,7 @@ export class ToolExecutor {
     // We run as a login shell (-l) AND explicitly source .zshrc for interactive-only setups.
     const wrappedCommand = `source ~/.zshrc 2>/dev/null; source ~/.zprofile 2>/dev/null; source ~/.bashrc 2>/dev/null; source ~/.profile 2>/dev/null; ${command}`;
 
-    // Prefer zsh on macOS (Lucas's primary target), but fall back to bash on
+    // Prefer zsh on macOS (the user's primary target), but fall back to bash on
     // systems that don't ship zsh — notably GitHub's ubuntu-latest runners.
     const { existsSync } = await import('node:fs');
     const shell = existsSync('/bin/zsh') ? '/bin/zsh' : '/bin/bash';
@@ -1228,7 +1393,7 @@ export class ToolExecutor {
   }
 
   // ── check_updates ──────────────────────────────────────────────────
-  // Refuses to expose commit/branch info to the LLM. Lucas can invoke this
+  // Refuses to expose commit/branch info to the LLM. the user can invoke this
   // directly via CLI/maintenance hooks; it should never be surfaced in a
   // chat response.
 
@@ -1472,6 +1637,70 @@ export class ToolExecutor {
     }
   }
 
+  // ── get_weather ────────────────────────────────────────────────────
+
+  private async getWeather(args: Record<string, unknown>): Promise<string> {
+    const location = String(args.location ?? '').trim();
+    const url = `https://wttr.in/${encodeURIComponent(location)}?format=j1`;
+    try {
+      const resp = await fetch(url, {
+        headers: { 'User-Agent': 'curl/8' },
+        signal: AbortSignal.timeout(12_000),
+      });
+      if (!resp.ok) return `Error: weather service returned HTTP ${resp.status}`;
+      const data = (await resp.json()) as {
+        current_condition?: Array<{
+          temp_F?: string;
+          FeelsLikeF?: string;
+          weatherDesc?: Array<{ value?: string }>;
+          windspeedMiles?: string;
+          humidity?: string;
+        }>;
+        weather?: Array<{ maxtempF?: string; mintempF?: string }>;
+        nearest_area?: Array<{ areaName?: Array<{ value?: string }> }>;
+      };
+      const cur = data.current_condition?.[0];
+      if (!cur) return 'No weather data available for that location.';
+      const place = data.nearest_area?.[0]?.areaName?.[0]?.value ?? (location || 'the current location');
+      const desc = (cur.weatherDesc?.[0]?.value ?? 'clear').toLowerCase();
+      const today = data.weather?.[0];
+      const parts = [
+        `Weather for ${place} — right now: ${cur.temp_F}°F (feels like ${cur.FeelsLikeF}°F), ${desc}, wind ${cur.windspeedMiles} mph, humidity ${cur.humidity}%.`,
+      ];
+      if (today) parts.push(`Today: high ${today.maxtempF}°F, low ${today.mintempF}°F.`);
+      parts.push('(Relay this to the user as one natural spoken sentence, not a data dump.)');
+      return parts.join(' ');
+    } catch (err) {
+      return `Error getting weather: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  // ── read_calendar / check_email (Google) ──────────────────────────
+
+  private async readCalendar(args: Record<string, unknown>): Promise<string> {
+    const reason = await googleNotReadyReason();
+    if (reason) return reason;
+    try {
+      return await readCalendar(Number(args.days_ahead) || 1);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg === 'NOT_CONNECTED') return (await googleNotReadyReason()) ?? 'Google is not connected.';
+      return `Couldn't read the calendar: ${msg}`;
+    }
+  }
+
+  private async checkEmail(args: Record<string, unknown>): Promise<string> {
+    const reason = await googleNotReadyReason();
+    if (reason) return reason;
+    try {
+      return await listEmails(String(args.query ?? 'is:unread'), Number(args.max) || 8);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg === 'NOT_CONNECTED') return (await googleNotReadyReason()) ?? 'Google is not connected.';
+      return `Couldn't read email: ${msg}`;
+    }
+  }
+
   // ── generate_image ─────────────────────────────────────────────────
 
   private async generateImage(args: Record<string, unknown>): Promise<string> {
@@ -1663,7 +1892,7 @@ export class ToolExecutor {
   // Cheap lister so the chat-mode model knows what projects exist
   // before calling read_project. Saves a wrong-guess round-trip.
   // Auto-backfills from disk first (~/projects/* + ~/nexus) so projects
-  // Lucas hasn't recently touched via NEXUS still show up. Idempotent
+  // the user hasn't recently touched via NEXUS still show up. Idempotent
   // and fast — a few stat() calls per call.
   private async listProjectsTool(): Promise<string> {
     try { backfillProjectsFromDisk(); } catch (err) { log.debug({ err }, 'list_projects backfill failed — falling back to DB only'); }
@@ -1871,7 +2100,7 @@ export class ToolExecutor {
       return 'Error: read_project requires a "name" parameter.';
     }
 
-    // Backfill the projects table from disk so projects Lucas has on
+    // Backfill the projects table from disk so projects the user has on
     // disk but hasn't recently worked on via NEXUS still show up.
     // Idempotent — upsertProject preserves existing fields.
     try { backfillProjectsFromDisk(); } catch (err) { log.debug({ err }, 'read_project backfill failed — falling back to DB only'); }

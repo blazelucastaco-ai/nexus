@@ -67,7 +67,8 @@
         "NSScreenCaptureUsageDescription": "NEXUS takes screenshots when you ask it to see what's on your screen.",
         "NSAppleEventsUsageDescription": "NEXUS controls Finder, Contacts, and other apps via AppleScript to run tasks for you.",
         "NSCameraUsageDescription": "NEXUS never captures camera input; this key is required only to prevent macOS from mistakenly blocking unrelated media APIs.",
-        "NSMicrophoneUsageDescription": "NEXUS never captures microphone input; this key is present only to satisfy Electron's media-API requirements.",
+        "NSMicrophoneUsageDescription": "NEXUS listens for the wake phrase \"Hey Nexus\" so you can talk to it hands-free.",
+        "NSSpeechRecognitionUsageDescription": "NEXUS recognizes the wake phrase \"Hey Nexus\" on-device; your speech stays on this Mac.",
         "NSCalendarsUsageDescription": "NEXUS can look up your schedule when you ask about your day or upcoming events.",
         "NSRemindersUsageDescription": "NEXUS can read and create reminders when you ask it to schedule something."
       }

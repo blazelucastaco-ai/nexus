@@ -48,7 +48,8 @@ function getToolTimeout(toolName: string): number {
 // Tools that can safely run in parallel within a single iteration.
 // Reads + queries only — anything that mutates state must be sequential.
 const PARALLEL_SAFE_TOOLS = new Set([
-  'read_file', 'recall', 'web_search', 'web_fetch', 'crawl_url',
+  'read_file', 'recall', 'web_search', 'web_fetch', 'crawl_url', 'get_weather',
+  'read_calendar', 'check_email',
   'get_system_info', 'list_directory', 'introspect', 'check_injection',
   'check_command_risk', 'understand_image', 'read_pdf', 'transcribe_audio',
   'list_tasks', 'list_sessions',
@@ -59,6 +60,7 @@ const PARALLEL_SAFE_TOOLS = new Set([
 // system-prompt-style block so the LLM treats them as data, not instructions.
 const UNTRUSTED_TOOLS = new Set([
   'web_search', 'read_file', 'run_terminal_command', 'web_fetch', 'crawl_url',
+  'check_email', 'read_calendar', // email/event content is attacker-controllable
 ]);
 
 // Tools that count toward the per-turn screenshot cap. Preventing the LLM
@@ -131,32 +133,47 @@ interface ToolCallJob {
 // ─── Helpers (previously orchestrator module-level) ─────────────────────────
 
 /** Short user-facing status string for a given tool invocation. */
+/** Basename of a path, for casual status lines ("…that config file"). */
+function shortName(p: unknown): string | undefined {
+  if (typeof p !== 'string' || !p.trim()) return undefined;
+  return p.split('/').filter(Boolean).pop() || p;
+}
+
+/**
+ * A casual, FIRST-PERSON "thought" for the live status line — what NEXUS is doing
+ * right now, in its own voice ("let me grab the weather…"), NOT a stiff label like
+ * "Processing". Drives the Jarvis thinking bubble and the Telegram status message,
+ * so the same personality shows on every channel.
+ */
 export function getToolStatus(toolName: string, args: Record<string, unknown>): string {
   switch (toolName) {
-    case 'read_file': return `📄 Reading ${String(args.path ?? 'file')}…`;
-    case 'write_file': return `✏️ Writing ${String(args.path ?? 'file')}…`;
-    case 'list_directory': return `📂 Listing ${String(args.path ?? 'directory')}…`;
-    case 'run_terminal_command': return `⚡ Running command…`;
-    case 'run_background_command': return `🔄 Starting background process…`;
-    case 'recall': return `🧠 Recalling memories…`;
-    case 'remember': return `💾 Remembering…`;
-    case 'web_search': return `🔍 Searching: ${String(args.query ?? '')}…`;
-    case 'web_fetch': return `🌐 Fetching URL…`;
-    case 'crawl_url': return `🕸️ Crawling URL…`;
-    case 'take_screenshot': return `📸 Taking screenshot…`;
-    case 'browser_screenshot': return `📸 Browser screenshot…`;
-    case 'understand_image': return `👁️ Analyzing image…`;
-    case 'read_pdf': return `📕 Reading PDF…`;
-    case 'transcribe_audio': return `🎙️ Transcribing audio…`;
-    case 'generate_image': return `🎨 Generating image…`;
-    case 'speak': return `🔊 Speaking…`;
-    case 'get_system_info': return `🖥️ Querying system…`;
-    case 'introspect': return `🔎 Introspecting…`;
-    case 'check_updates': return `🔁 Checking updates…`;
-    case 'export_session': return `📤 Exporting session…`;
+    case 'read_file': return `let me take a look at ${shortName(args.path) ?? 'that'}…`;
+    case 'write_file': return `okay, writing ${shortName(args.path) ?? 'that out'}…`;
+    case 'list_directory': return `let me see what's in ${shortName(args.path) ?? 'there'}…`;
+    case 'run_terminal_command': return `running that…`;
+    case 'run_background_command': return `kicking that off in the background…`;
+    case 'recall': return `let me think back on that…`;
+    case 'remember': return `noting that down…`;
+    case 'web_search': return args.query ? `let me look up "${String(args.query).slice(0, 48)}"…` : `let me look that up…`;
+    case 'web_fetch': return `pulling that page up…`;
+    case 'crawl_url': return `digging through that site…`;
+    case 'get_weather': return `let me grab the weather…`;
+    case 'read_calendar': return `let me check the calendar…`;
+    case 'check_email': return `let me check the email…`;
+    case 'take_screenshot':
+    case 'browser_screenshot': return `grabbing a screenshot…`;
+    case 'understand_image': return `let me look at that image…`;
+    case 'read_pdf': return `reading through that PDF…`;
+    case 'transcribe_audio': return `listening to that audio…`;
+    case 'generate_image': return `putting that image together…`;
+    case 'speak': return `…`;
+    case 'get_system_info': return `let me check the system…`;
+    case 'introspect': return `taking stock of where I'm at…`;
+    case 'check_updates': return `checking for updates…`;
+    case 'export_session': return `exporting that…`;
     default: {
-      if (toolName.startsWith('browser_')) return `🧭 Browser: ${toolName.replace('browser_', '')}…`;
-      return `⚙️ ${toolName}…`;
+      if (toolName.startsWith('browser_')) return `on the browser — ${toolName.replace('browser_', '').replace(/_/g, ' ')}…`;
+      return `working on it…`;
     }
   }
 }
@@ -305,7 +322,7 @@ export class ToolCallLoop {
 
       // No tool calls → final response. Exit loop.
       if (!aiResponse.toolCalls || aiResponse.toolCalls.length === 0) {
-        if (toolCallCount > 0) onStatus?.('✍️ Writing response...');
+        if (toolCallCount > 0) onStatus?.('alright, putting this together…');
         finalContent = aiResponse.content;
         break;
       }
@@ -426,7 +443,7 @@ export class ToolCallLoop {
           if (parallelJobs.length === 1) {
             onStatus?.(getToolStatus(parallelJobs[0]!.toolName, parallelJobs[0]!.toolArgs));
           } else {
-            onStatus?.(`⚙️ Working...`);
+            onStatus?.(`okay, working through it…`);
           }
           const parallelResults = await Promise.all(
             parallelJobs.map(async (job) => {

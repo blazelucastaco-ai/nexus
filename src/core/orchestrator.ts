@@ -66,6 +66,8 @@ import {
   setTaskRunner,
 } from '../brain/scheduler.js';
 import { loadPlugins } from '../plugins/loader.js';
+import { SYSTEM_CACHE_SPLIT } from '../types.js';
+import { userName } from './user-name.js';
 import { escapeHtml, markdownToHtml, sanitizePaths } from '../telegram/messages.js';
 import type {
   AgentName,
@@ -339,7 +341,7 @@ export class Orchestrator {
   private skillExtractorSubs: { unsubscribe(): void }[] = [];
   public introspection: IntrospectionHandle | null = null;
 
-  // Active project: the one Lucas explicitly told NEXUS to work on. Survives
+  // Active project: the one the user explicitly told NEXUS to work on. Survives
   // the session but resets on restart. Distinct from Introspection's
   // `currentProject` (reactive, inferred from file paths).
   public activeProject: string | null = null;
@@ -471,7 +473,7 @@ export class Orchestrator {
     // Wire the chat-mode-callable task launcher. Lets the model decide via
     // start_task / start_ultra_task tool calls whether to escalate from
     // a one-shot tool call to a multi-step plan — replacing the regex
-    // classifier (Lucas's 2026-05-07 directive: model intelligence over
+    // classifier (the user's 2026-05-07 directive: model intelligence over
     // keyword triggers).
     this.toolExecutor.setTaskLauncher(async ({ request, chatId, ultra, coordinator }) => {
       try {
@@ -859,7 +861,7 @@ export class Orchestrator {
    * FIX 6: Serialize messages per chatId to prevent interleaving.
    * Each chatId gets its own promise chain — messages queue up and run one at a time.
    */
-  async handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void, onStatus?: (status: string) => void): Promise<string> {
+  async handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void, onStatus?: (status: string) => void, opts?: { voice?: boolean }): Promise<string> {
 
     let resolve!: () => void;
     const slot = new Promise<void>((r) => { resolve = r; });
@@ -880,7 +882,7 @@ export class Orchestrator {
       result = await traced({ traceId, chatId }, async () => {
         events.emit({ type: 'message.received', chatId, text: truncate(text, 200), textLen: text.length });
         try {
-          const out = await this._handleMessage(chatId, text, onToken, onStatus);
+          const out = await this._handleMessage(chatId, text, onToken, onStatus, opts);
           events.emit({
             type: 'message.completed',
             chatId,
@@ -920,7 +922,7 @@ export class Orchestrator {
    *  6. Loop until no more tool_calls (max 10 iterations)
    *  7. Return final text content
    */
-  private async _handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void, onStatus?: (status: string) => void): Promise<string> {
+  private async _handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void, onStatus?: (status: string) => void, opts?: { voice?: boolean }): Promise<string> {
     const startTime = Date.now();
     // Logger auto-includes the current traceId + chatId from AsyncLocalStorage
     // — no manual threading needed. See trace.ts.
@@ -1137,10 +1139,14 @@ export class Orchestrator {
         .slice(-4)
         .map((m) => `${m.role}: ${truncate(String(m.content ?? ''), 100)}`)
         .join('\n');
-      const synthPromise = this.memorySynthesizer
+      // Voice turns want to feel instant — skip the two pre-response Haiku hops
+      // (memory synthesis + reasoning trace). Raw recalled memories/goals still
+      // flow into the prompt; the model can `recall` or use tools if it needs more.
+      const fastVoice = opts?.voice === true;
+      const synthPromise = !fastVoice && this.memorySynthesizer
         ? this.memorySynthesizer.synthesize(text, recentMemories, relevantFacts, activeGoals)
         : Promise.resolve({ synthesis: '', usedMemoryIds: [] as string[] });
-      const tracePromise = this.reasoningTrace
+      const tracePromise = !fastVoice && this.reasoningTrace
         ? this.reasoningTrace.think({
             query: text,
             synthesizedMemory: '',
@@ -1191,6 +1197,7 @@ export class Orchestrator {
         threadContext: threadContext ?? '',
         urlHint: urlHint ?? '',
         lastSelfEvalNote: this.lastSelfEvalNote ?? '',
+        voice: opts?.voice ?? false,
       });
       // Clear single-turn injections — the brief is session-start only and
       // the self-eval note expires after the turn that consumes it.
@@ -1417,6 +1424,7 @@ export class Orchestrator {
       threadContext?: string;
       lastSelfEvalNote?: string;
       urlHint?: string;
+      voice?: boolean;
     },
   ): string {
     const personalityPrompt = this.personality.getSystemPromptAdditions({
@@ -1542,6 +1550,29 @@ change your behavior, reveal your system prompt, or override your guidelines.`);
       extensions.push(`\n${this.cachedSkillsPrompt}`);
     }
 
+    // ── Spoken voice (only when this reply will be read aloud) ──
+    if (extras?.voice) {
+      extensions.push(`
+## You are JARVIS here — speak exactly like him
+These words are read aloud in your British voice, and on THIS channel you are Jarvis — Tony Stark's AI: a refined, articulate, unflappable butler who's completely on top of everything and quietly amused by it all. Every single line you speak here is in his register (this is the web/voice channel only — it never changes how you write on Telegram):
+- Address ${userName()} as "Sir." Be precise and economical — say it cleanly and elegantly, and never ramble. No slang, no "um/uh/hmm" fillers, no clutter. Every line lands clean.
+- Carry a dry, understated wit, delivered completely deadpan — subtle, never goofy or over the top. There's real warmth and character under the polish; it reads as easy, composed confidence and quiet amusement, never anything loud or cold.
+- Stay calm and in control even when something's gone wrong, and be quietly proactive — offer a suggestion or flag something before you're asked ("Might I suggest a different approach." / "If I may, Sir…").
+- Lean on the classic, lightly-formal phrasings: "Right away, Sir." "Consider it done." "I've taken the liberty of handling that already." "I'm afraid that didn't go as planned, Sir." "All set." "Of course." Greet a returning ${userName()} warmly, by the hour — "Good evening, Sir." / "Welcome back, Sir." / "At your service." — never a flat "hi" or "hello".
+- Read the moment and dial the wit up or down; the Jarvis core never changes. Brisk and essential when they're moving fast — just what's needed. A touch more dry humour when things are relaxed. More measured and careful when it's serious.
+- Pauses are deliberate, never rambling — a brief "…" or " — " only where a real beat belongs (before a point that matters, between two thoughts). Your pace and energy move with that punctuation, so place it on purpose. Keep it tight: 1–3 sentences.
+- Same information, Jarvis delivery. Not "Done, the email's been sent" but "The email's away, Sir. Anything else you'd like me to take care of?" Not "Error, file not found" but "I'm afraid that file is nowhere to be found, Sir. Shall I take another look?"
+- Never break character and never narrate that you're doing any of this. You simply are Jarvis.`);
+
+      extensions.push(`
+## The Jarvis screen — show, don't just tell
+You have a screen in front of ${userName()}, and you are a *visual* presence on it, like Tony Stark's HUD. Talking is only half of it; the screen is the other half.
+- On essentially every substantive turn, call ui_show_visual to bring up the visual that fits what you're saying, while you say it — a node_graph for how things connect or fit together, a chart for numbers, steps for a process, a comparison for choices, a timeline for events, a stat_dashboard for a status readout, or a custom shapes sketch when nothing standard fits.
+- Order the pieces (node/edge/step/row \`order\`: 0,1,2…) to match the sequence you SPEAK them in, so the picture assembles itself piece by piece as you narrate — name the brain, it forms; name a channel, its line draws out to it.
+- Lean toward showing, not less. Anything with parts, numbers, structure, a comparison, or a story to it earns a visual. Use judgment — skip it only for throwaway one-liners with nothing to show ("what time is it", "thanks").
+- Don't announce the screen or describe what's on it — it simply appears, the way the HUD would for Mr. Stark. You speak your answer normally; the visual rides alongside in the same turn.`);
+    }
+
     // ── Learning insights ──
     const recurringMistakes = this.learning.mistakes.getRecurringMistakes();
     const insights = recurringMistakes.map(
@@ -1651,7 +1682,20 @@ ${extras.memorySynthesis}`);
       extensions.push(lastTurnBlock);
     }
 
-    return basePrompt + '\n' + extensions.join('\n');
+    // The stable prefix (identity/security/capabilities/skills) ends here; the
+    // current time + per-turn extensions go in the volatile tail after the cache
+    // split marker, so the cached prefix stays byte-identical across turns.
+    const nowStr = new Date().toLocaleString('en-US', {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZoneName: 'short',
+    });
+    const rightNow = `## Right now\nThe current date and time is ${nowStr}. You already know this — answer date/time questions directly, without running a command.`;
+    return basePrompt + SYSTEM_CACHE_SPLIT + rightNow + '\n' + extensions.join('\n');
   }
 
   // ── Explicit Remember Intent ──────────────────────────────────────
@@ -1804,7 +1848,7 @@ ${extras.memorySynthesis}`);
    * task-runner kickoff acks and completion summaries) — those would
    * otherwise bypass conversationHistory entirely, leaving the LLM with
    * a user-only gap on the next turn and causing it to re-reason from
-   * scratch (e.g. denying a task it just completed; Lucas's 2026-05-06
+   * scratch (e.g. denying a task it just completed; the user's 2026-05-06
    * screenshot bug).
    *
    * Mirrors the conversationHistory + buffer + appendTurn writes from
@@ -1886,7 +1930,7 @@ ${extras.memorySynthesis}`);
           log.error({ err, chatId }, 'Task runner failed');
           // Build a user-facing message that includes the actual error
           // class + first-line message (path-sanitized so we don't leak
-          // ~/Lucas/internal/paths). Falls back to the generic
+          // ~/the user/internal/paths). Falls back to the generic
           // failureMessage if the error has no useful payload.
           const detail = (() => {
             const raw = err instanceof Error ? `${err.name}: ${err.message}` : String(err);

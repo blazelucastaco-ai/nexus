@@ -18,7 +18,7 @@ import type { AIManager } from '../ai/index.js';
 const log = createLogger('CoWork');
 
 // Co Work always uses the strongest available model — that's the whole point
-const COWORK_MODEL = 'claude-opus-4-7';
+const COWORK_MODEL = 'claude-opus-4-8';
 const COWORK_MAX_TOKENS = 4096;
 
 // ─── Types ────────────────────────────────────────────────────────────────────

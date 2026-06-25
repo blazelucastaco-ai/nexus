@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { userName } from '../core/user-name.js';
 import { promisify } from 'node:util';
 import type { AgentResult } from '../types.js';
 import { BaseAgent } from './base-agent.js';
@@ -103,7 +104,7 @@ export class CommsAgent extends BaseAgent {
         body || `[Compose your ${tone} message here]`,
         '',
         'Best regards,',
-        'Lucas',
+        userName(),
       ].join('\n'),
       slack: [
         body || `[Compose your ${tone} Slack message here]`,

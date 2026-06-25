@@ -60,6 +60,17 @@ export function loadConfig(): NexusConfig {
   if (process.env.NEXUS_AI_FAST_MODEL) p.ai.fastModel = process.env.NEXUS_AI_FAST_MODEL;
   if (process.env.NEXUS_AI_FALLBACK_MODEL) p.ai.fallbackModel = process.env.NEXUS_AI_FALLBACK_MODEL;
 
+  // Voice / ElevenLabs TTS. The API key is a secret — it only ever lives in env.
+  p.tts = p.tts ?? {};
+  if (process.env.ELEVENLABS_API_KEY) {
+    p.tts.apiKey = process.env.ELEVENLABS_API_KEY;
+    p.tts.provider = 'elevenlabs';
+  }
+  if (process.env.ELEVENLABS_VOICE_ID) p.tts.voiceId = process.env.ELEVENLABS_VOICE_ID;
+  if (process.env.ELEVENLABS_VOICE_NAME) p.tts.voiceName = process.env.ELEVENLABS_VOICE_NAME;
+  if (process.env.ELEVENLABS_MODEL_ID) p.tts.modelId = process.env.ELEVENLABS_MODEL_ID;
+  if (process.env.ELEVENLABS_OUTPUT_FORMAT) p.tts.outputFormat = process.env.ELEVENLABS_OUTPUT_FORMAT;
+
   const config = NexusConfigSchema.parse(parsed);
 
   if (!config.telegram.botToken) {

@@ -198,6 +198,52 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
   {
+    name: 'get_weather',
+    description:
+      "Get the current weather plus today's high/low for a location. Use this for ANY weather " +
+      'question — it is fast and reliable, much better than web_search for weather. Omit `location` ' +
+      "to use the user's current location (geolocated automatically).",
+    parameters: {
+      type: 'object',
+      properties: {
+        location: {
+          type: 'string',
+          description: 'City or place, e.g. "Pompton Plains NJ" or "London". Leave empty for the current location.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'read_calendar',
+    description:
+      "Read the user's upcoming Google Calendar events. Use for 'what's on my calendar', 'what does my day look like', " +
+      "'am I free this afternoon', or any schedule question.",
+    parameters: {
+      type: 'object',
+      properties: {
+        days_ahead: { type: 'number', description: 'How many days ahead to include. Default 1 (today).' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'check_email',
+    description:
+      "Read the user's recent Gmail. Use for 'any new email', 'check my inbox', 'did I hear back from X'. Defaults to unread.",
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Gmail search, e.g. "is:unread", "from:alice", "subject:invoice". Default "is:unread".',
+        },
+        max: { type: 'number', description: 'Max messages to read. Default 8.' },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'web_search',
     description:
       'Search the web with a natural-language QUERY. Returns a list of result snippets ' +
@@ -988,7 +1034,7 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
   // ── Project context ────────────────────────────────────────────────────
-  // Pulls a snapshot of one of Lucas's tracked projects: path, description,
+  // Pulls a snapshot of one of the user's tracked projects: path, description,
   // file tree, key files (README / package manifests), and recent journal.
   // Saves the model 3-5 tool calls (list_directory + read_file ×N) when
   // the user asks "what's the latest on X?" or a step needs project
@@ -1016,7 +1062,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'list_projects',
     description:
-      'List Lucas\'s tracked projects: display name, slug, path, last-active date, task count. Returns up to 50 most recently active. ' +
+      'List the user\'s tracked projects: display name, slug, path, last-active date, task count. Returns up to 50 most recently active. ' +
       'CALL THIS — do not pull from memory — whenever the user asks about their projects, what they\'re tracking, what they\'re working on, or anything that should reflect the live project state. ' +
       'The DB is auto-backfilled from disk on every call so the list reflects what\'s actually there right now. ' +
       'Memory is stale by design — projects evolve. The right move is always to call this and answer from fresh data.',
@@ -1205,6 +1251,109 @@ export const toolDefinitions: ToolDefinition[] = [
       },
       required: ['script'],
     },
+  },
+
+  // ── Jarvis web interface — model-driven UI ─────────────────────────────────
+  // These render things on NEXUS's own local "Jarvis" website (a black screen
+  // with a glowing orb). You decide when a visual helps the user — there are no
+  // rules forcing or forbidding it. Reach for these whenever showing something
+  // beats describing it: data → a chart, a process/relationship → a diagram,
+  // a structured summary → a panel. They're silent if no browser is open, so
+  // using them is never wrong. All structured inputs are JSON strings.
+  // ui_show_visual is the unified, preferred entry — reach for it by default.
+  {
+    name: 'ui_show_visual',
+    description:
+      "Bring the right visual up on the Jarvis screen, in sync with what you say. NEXUS is a VISUAL presence here — on essentially every substantive turn, show something alongside your spoken answer. Pass `spec`, a JSON object with a `type`: 'node_graph' (how things connect / architecture / relationships), 'chart' (numbers), 'stat_dashboard' (a few key stats), 'comparison' (X vs Y as a table), 'timeline' (events over time), 'steps' (a process/flow), 'list' (items), 'code' (a snippet), 'info_panel' (a titled markdown note), or 'custom' (a freeform shapes sketch when nothing standard fits). Give each node/edge/step/row an `order` (0,1,2…) matching the sequence you will SPEAK them in — the screen assembles itself piece by piece as you narrate. WHEN: lean toward showing. If the answer has parts, numbers, structure, a comparison, a process, or a story, show it. Skip only for throwaway one-liners with nothing to show (e.g. 'what time is it', 'thanks'). You speak normally in the same turn; this just adds the visual. Don't announce or describe the screen — it simply appears.",
+    parameters: {
+      type: 'object',
+      properties: {
+        spec: {
+          type: 'string',
+          description:
+            'JSON object for the visual. Examples — node_graph: {"type":"node_graph","layout":"hub","title":"NEXUS","nodes":[{"id":"core","label":"NEXUS","order":0},{"id":"web","label":"Jarvis Web","order":1}],"edges":[{"from":"core","to":"web","order":1}]}. chart: {"type":"chart","chartType":"bar","title":"Revenue","data":[{"label":"Mon","value":12}]}. steps: {"type":"steps","title":"Deploy","steps":[{"label":"Build","status":"done","order":0},{"label":"Test","order":1}]}. comparison: {"type":"comparison","columns":["A","B"],"rows":[{"label":"Speed","cells":["fast","slow"]}]}.',
+        },
+      },
+      required: ['spec'],
+    },
+  },
+  {
+    name: 'ui_show_chart',
+    description:
+      'Render an animated chart on the Jarvis screen (it draws itself in). Use when the user would grasp numbers faster visually than as text. You can speak/answer normally in the same turn; this just adds the visual.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Chart title.' },
+        chart_type: { type: 'string', description: 'Chart style.', enum: ['bar', 'line', 'area', 'donut'] },
+        data: {
+          type: 'string',
+          description:
+            'JSON array of points: [{"label":"Mon","value":12},{"label":"Tue","value":18}]. For donut, value is the slice size.',
+        },
+        subtitle: { type: 'string', description: 'Optional subtitle / unit (e.g. "$ per day").' },
+      },
+      required: ['title', 'chart_type', 'data'],
+    },
+  },
+  {
+    name: 'ui_show_diagram',
+    description:
+      'Construct an animated node-and-arrow diagram on the Jarvis screen (nodes and edges build in piece by piece). Use for flows, architectures, relationships, or step sequences.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Diagram title.' },
+        nodes: { type: 'string', description: 'JSON array of nodes: [{"id":"a","label":"Start"},{"id":"b","label":"Build"}].' },
+        edges: { type: 'string', description: 'JSON array of edges: [{"from":"a","to":"b","label":"then"}]. Use [] if none.' },
+        layout: { type: 'string', description: 'Layout hint.', enum: ['flow', 'tree', 'radial'] },
+      },
+      required: ['title', 'nodes', 'edges'],
+    },
+  },
+  {
+    name: 'ui_show_panel',
+    description:
+      'Open a clean info panel on the Jarvis screen with a title and a body (plain text or light markdown). Use to surface a structured summary, a list, code, or details you want kept on screen.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Panel title.' },
+        body: { type: 'string', description: 'Panel body — plain text or simple markdown (headings, lists, `code`).' },
+        accent: { type: 'string', description: 'Optional accent color hint (e.g. "amber", "violet", "#ff7a1c").' },
+      },
+      required: ['title', 'body'],
+    },
+  },
+  {
+    name: 'ui_show_projects',
+    description:
+      "Display the user's tracked projects on the Jarvis screen as animated cards (name, last activity, task count). Use when the user asks to see their projects or what they're working on.",
+    parameters: {
+      type: 'object',
+      properties: {
+        limit: { type: 'string', description: 'Optional max number of projects to show (default 12).' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'ui_set_orb',
+    description:
+      "Deliberately set the orb's mood on the Jarvis screen. Optional — the orb already reflects activity automatically; use this only to emphasize a state (e.g. 'alert' for something important).",
+    parameters: {
+      type: 'object',
+      properties: {
+        state: { type: 'string', description: 'Orb mood.', enum: ['idle', 'listening', 'thinking', 'speaking', 'alert', 'dreaming'] },
+        hue: { type: 'string', description: 'Optional hue override in degrees (0-360); the default warm orange is ~28.' },
+      },
+      required: ['state'],
+    },
+  },
+  {
+    name: 'ui_clear',
+    description: 'Clear all panels, charts, and diagrams from the Jarvis screen, leaving just the orb. Use to reset the view.',
+    parameters: { type: 'object', properties: {}, required: [] },
   },
 ];
 

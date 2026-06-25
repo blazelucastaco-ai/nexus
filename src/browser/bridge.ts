@@ -44,7 +44,7 @@ export class BrowserBridge {
       // maxPayload caps incoming frames. 10 MB accommodates browser_extract
       // results from content-heavy pages (LoopNet listings, multi-pane SPAs,
       // pages with embedded data tables). Earlier 1 MB cap silently closed
-      // the connection mid-extract — the symptom Lucas observed was the
+      // the connection mid-extract — the symptom the user observed was the
       // flap pattern during a real LoopNet scrape. Origin check (below)
       // still rejects non-extension WebSocket clients.
       this.wss = new WebSocketServer({

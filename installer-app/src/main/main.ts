@@ -32,6 +32,9 @@ import {
   takeScreenshot,
   triggerDream,
   runHealthCheck,
+  sendTelegramIntro,
+  launchVoiceIntro,
+  runDeepResearch,
   detectMemorySources,
   runMemoryImport,
   getAboutInfo,
@@ -118,6 +121,7 @@ function isSafeExternalUrl(url: string): boolean {
 
 let wizardWindow: BrowserWindow | null = null;
 let dashboardWindow: BrowserWindow | null = null;
+let jarvisWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let statusPollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -400,6 +404,11 @@ async function rebuildTrayMenu(): Promise<void> {
       label: 'Open NEXUS dashboard…',
       click: () => { createDashboardWindow(); },
     },
+    {
+      label: 'Open Jarvis…',
+      enabled: status.running,
+      click: () => { showJarvis(); },
+    },
     { type: 'separator' },
     {
       label: 'Start NEXUS',
@@ -454,12 +463,70 @@ async function rebuildTrayMenu(): Promise<void> {
   tray.setContextMenu(Menu.buildFromTemplate(template));
 }
 
+// ── Jarvis window ──────────────────────────────────────────────────────
+// A frameless, full-screen native window hosting the orb UI (served by the
+// daemon at http://127.0.0.1:4242). Created hidden at launch so it's connected
+// and ready; the "Hey Nexus" wake word brings it to the front.
+const JARVIS_URL = 'http://127.0.0.1:4242';
+
+function createJarvisWindow(): void {
+  if (jarvisWindow && !jarvisWindow.isDestroyed()) return;
+  jarvisWindow = new BrowserWindow({
+    show: false,
+    frame: false,
+    backgroundColor: '#050405',
+    title: 'NEXUS',
+    webPreferences: {
+      preload: join(__dirname, '..', 'preload', 'jarvis-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      backgroundThrottling: false,
+      devTools: !app.isPackaged,
+    },
+  });
+  jarvisWindow.webContents.on('did-fail-load', (_e, _code, desc) => {
+    // The daemon may still be starting on first launch — retry shortly.
+    console.error('Jarvis window failed to load:', desc);
+    setTimeout(() => {
+      if (jarvisWindow && !jarvisWindow.isDestroyed()) void jarvisWindow.loadURL(JARVIS_URL);
+    }, 1500);
+  });
+  jarvisWindow.webContents.on('before-input-event', (_e, input) => {
+    if (input.type === 'keyDown' && input.key === 'Escape') hideJarvis();
+  });
+  jarvisWindow.on('closed', () => {
+    jarvisWindow = null;
+  });
+  void jarvisWindow.loadURL(JARVIS_URL);
+}
+
+function showJarvis(): void {
+  createJarvisWindow();
+  const w = jarvisWindow;
+  if (!w || w.isDestroyed()) return;
+  if (!w.isVisible()) w.show();
+  if (!w.isSimpleFullScreen()) w.setSimpleFullScreen(true);
+  w.focus();
+}
+
+function hideJarvis(): void {
+  const w = jarvisWindow;
+  if (!w || w.isDestroyed()) return;
+  if (w.isSimpleFullScreen()) w.setSimpleFullScreen(false);
+  w.hide();
+}
+
 function startMenubarMode(): void {
   if (!wizardWindow && !dashboardWindow) {
     app.dock?.hide();
   }
   tray = new Tray(makeTrayIcon(false));
   void rebuildTrayMenu();
+  // Pre-create the Jarvis window (hidden) so it's connected to the daemon and
+  // ready to appear the instant the wake word fires.
+  createJarvisWindow();
   statusPollTimer = setInterval(() => {
     void rebuildTrayMenu();
   }, 3_000);
@@ -484,7 +551,7 @@ app.whenReady().then(() => {
   startTaskOverlay();
 
   // ── Update notification popup ──────────────────────────────────────
-  // ONE-SHOT poll 30s after launch. No background interval — Lucas's
+  // ONE-SHOT poll 30s after launch. No background interval — the user's
   // 2026-05-12 directive: nothing fires autonomously on a wall-clock
   // cadence. Subsequent checks happen via the tray menu's
   // "Check for Updates Now" item, which is user-initiated.
@@ -534,6 +601,10 @@ app.whenReady().then(() => {
       }
     },
   });
+
+  // Jarvis window IPC — the orb page shows/hides its own native window on wake.
+  ipcMain.handle('jarvis:show', () => { showJarvis(); });
+  ipcMain.handle('jarvis:hide', () => { hideJarvis(); });
 
   // Wizard IPC
   ipcMain.handle('system:checks', async () => runSystemChecks());
@@ -644,6 +715,17 @@ app.whenReady().then(() => {
   ipcMain.handle('main:action-screenshot', async () => takeScreenshot());
   ipcMain.handle('main:action-dream', async () => triggerDream());
   ipcMain.handle('main:action-health', async () => runHealthCheck());
+
+  // Launch-choice + onboarding deep-research (the final installer screen).
+  ipcMain.handle('main:send-telegram-intro', async () => sendTelegramIntro());
+  ipcMain.handle('main:launch-voice-intro', async () => {
+    // Surface the Jarvis orb window, give it a beat to connect to the daemon, then
+    // have NEXUS speak its intro into it.
+    showJarvis();
+    await new Promise((r) => setTimeout(r, 1500));
+    return launchVoiceIntro();
+  });
+  ipcMain.handle('main:run-deep-research', async () => runDeepResearch());
   ipcMain.handle('main:memory-detect-sources', async () => detectMemorySources());
   ipcMain.handle('main:memory-import', async (event, sourceIds: unknown) => {
     if (!Array.isArray(sourceIds)) return { imported: 0, skipped: 0, sources: {} };

@@ -8,7 +8,7 @@
 //   2. isUndercoverProbe — security gate against prompts that try to extract
 //                          NEXUS's own architecture, source, or tooling.
 //
-// These are the only acceptable use of regex in NEXUS routing per Lucas's
+// These are the only acceptable use of regex in NEXUS routing per the user's
 // directive: "extremely smart with executing everything and anything …
 // no specific keywords that trigger anything (other than for security
 // purposes)." classifyMessage / detectMissingRequirements / TASK_TRIGGERS

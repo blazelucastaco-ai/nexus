@@ -8,6 +8,7 @@ dist/
 .nexus/
 coverage/
 .claude/
+.wake-bin/
 installer-app/release/
 
 # Built DMG stays on GitHub Releases, never in git.

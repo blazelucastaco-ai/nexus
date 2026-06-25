@@ -211,6 +211,7 @@ export async function runInstall(input: ConfigInput, onProgress: ProgressCb): Pr
     { phase: 'linking-cli', label: 'Linking the nexus CLI…', run: () => linkCli(onProgress) },
     { phase: 'writing-config', label: 'Writing configuration…', run: () => writeConfig(input) },
     { phase: 'initializing-db', label: 'Creating memory database…', run: () => initDatabase() },
+    { phase: 'registering-service', label: 'Enabling “Hey Nexus” voice…', run: () => requestVoicePermissions() },
     { phase: 'registering-service', label: 'Registering background service…', run: () => registerLaunchd(input) },
   ];
 
@@ -221,6 +222,36 @@ export async function runInstall(input: ConfigInput, onProgress: ProgressCb): Pr
   }
 
   onProgress({ phase: 'done', label: 'Install complete.', pct: 100 });
+}
+
+/**
+ * Fire the macOS Microphone + Speech Recognition prompts during install so the
+ * "Hey Nexus" wake word works on first run. Runs the on-device wake helper
+ * (built by the preceding `pnpm run build` step), which requests both; resolves
+ * once it reports READY (both granted) or after a grace period. No-op when the
+ * helper isn't present (non-macOS, or Swift unavailable) — the daemon will also
+ * prompt on first start as a fallback.
+ */
+async function requestVoicePermissions(): Promise<void> {
+  const bin = join(NEXUS_DIR, 'app', 'nexus-wake');
+  if (!existsSync(bin)) return;
+  await new Promise<void>((resolve) => {
+    let done = false;
+    // biome-ignore lint/style/useConst: assigned at setTimeout below, but referenced earlier by `finish` (circular)
+    let timer: ReturnType<typeof setTimeout>;
+    const child = spawn(bin, [], { stdio: ['ignore', 'ignore', 'pipe'] });
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { child.kill('SIGTERM'); } catch { /* ignore */ }
+      resolve();
+    };
+    timer = setTimeout(finish, 60000); // give the user time to click Allow
+    child.stderr?.on('data', (b: Buffer) => { if (b.toString().includes('READY')) finish(); });
+    child.on('exit', finish);
+    child.on('error', finish);
+  });
 }
 
 async function cloneOrUpdateRepo(onProgress: ProgressCb): Promise<void> {
@@ -575,6 +606,11 @@ function writeConfig(input: ConfigInput): Promise<void> {
     telegram: {
       allowedUsers: [input.telegram.chatId],
     },
+    // Voice TTS — the ElevenLabs API key is a secret and lives only in .env;
+    // config.yaml just records the provider + (non-secret) voice/model choices.
+    tts: input.elevenLabsKey
+      ? { provider: 'elevenlabs', voiceId: input.elevenLabsVoiceId ?? '', modelId: input.elevenLabsModelId ?? '' }
+      : { provider: 'none' },
     macos: {
       screenshotQuality: 0.8,
       accessibilityEnabled: true,
@@ -610,6 +646,11 @@ function writeConfig(input: ConfigInput): Promise<void> {
     'NEXUS_AI_MODEL=claude-sonnet-4-6',
     'NEXUS_AI_OPUS_MODEL=claude-opus-4-7',
     'NEXUS_AI_FAST_MODEL=claude-haiku-4-5-20251001',
+    '',
+    '# Voice — ElevenLabs TTS (optional; blank = browser voice)',
+    input.elevenLabsKey ? `ELEVENLABS_API_KEY=${input.elevenLabsKey}` : '# ELEVENLABS_API_KEY=',
+    input.elevenLabsVoiceId ? `ELEVENLABS_VOICE_ID=${input.elevenLabsVoiceId}` : '# ELEVENLABS_VOICE_ID=',
+    input.elevenLabsModelId ? `ELEVENLABS_MODEL_ID=${input.elevenLabsModelId}` : '# ELEVENLABS_MODEL_ID=',
     '',
     '# System',
     `NEXUS_DATA_DIR=${NEXUS_DIR}`,
@@ -660,6 +701,9 @@ async function registerLaunchd(input?: ConfigInput): Promise<void> {
     envVars.TELEGRAM_BOT_TOKEN = input.telegram.botToken;
     envVars.TELEGRAM_CHAT_ID = input.telegram.chatId;
     envVars.ANTHROPIC_API_KEY = input.anthropicKey;
+    if (input.elevenLabsKey) envVars.ELEVENLABS_API_KEY = input.elevenLabsKey;
+    if (input.elevenLabsVoiceId) envVars.ELEVENLABS_VOICE_ID = input.elevenLabsVoiceId;
+    if (input.elevenLabsModelId) envVars.ELEVENLABS_MODEL_ID = input.elevenLabsModelId;
   }
   // NODE_PATH points at the repo's node_modules so `require('better-sqlite3')`
   // et al. resolve — without it, the service crashes at startup with
@@ -982,8 +1026,10 @@ export async function detectExistingInstall(): Promise<DetectionResult> {
       const botToken = get('TELEGRAM_BOT_TOKEN');
       const chatId = get('TELEGRAM_CHAT_ID');
       const anthropicKey = get('ANTHROPIC_API_KEY');
+      const elevenLabsKey = get('ELEVENLABS_API_KEY');
       if (botToken && chatId) result.existingTelegram = { botToken, chatId };
       if (anthropicKey) result.existingAnthropicKey = anthropicKey;
+      if (elevenLabsKey) result.existingElevenLabsKey = elevenLabsKey;
     } catch {
       /* ignore */
     }
@@ -1723,6 +1769,28 @@ export async function triggerDream(): Promise<{ ok: boolean; output: string }> {
 export async function runHealthCheck(): Promise<{ ok: boolean; output: string }> {
   return runNexusCli(['health']);
 }
+
+// ── Daemon control (loopback :4242/control) — launch-choice + deep research ──
+// The installer only names which of three whitelisted, non-destructive actions to
+// run; the actual prompts live in the daemon. Requires the daemon to be running.
+async function postControl(command: 'telegram-intro' | 'voice-intro' | 'deep-research'): Promise<{ ok: boolean; output: string }> {
+  try {
+    const r = await fetch('http://127.0.0.1:4242/control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const j = (await r.json().catch(() => ({ ok: false }))) as { ok?: boolean };
+    return { ok: r.ok && j.ok === true, output: r.ok ? 'ok' : `daemon returned ${r.status}` };
+  } catch (e) {
+    return { ok: false, output: `could not reach NEXUS on :4242 (${String(e)})` };
+  }
+}
+
+export async function sendTelegramIntro(): Promise<{ ok: boolean; output: string }> { return postControl('telegram-intro'); }
+export async function launchVoiceIntro(): Promise<{ ok: boolean; output: string }> { return postControl('voice-intro'); }
+export async function runDeepResearch(): Promise<{ ok: boolean; output: string }> { return postControl('deep-research'); }
 
 // ── Memory import (detect + merge other agents' memory) ─────────────
 

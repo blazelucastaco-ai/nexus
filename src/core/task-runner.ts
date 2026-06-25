@@ -383,7 +383,7 @@ function formatFinalSummary(
   // ── Answer section (R2: drop the "Result:" label) ────────────────────────
   // Surface the FINAL successful step's actual output as the visible answer.
   // Without this, NEXUS replies with just a checklist of completed steps and
-  // the user has to ask "but what was the answer?" (Lucas's 2026-05-06 bug).
+  // the user has to ask "but what was the answer?" (the user's 2026-05-06 bug).
   // The label was redundant — the answer reads like prose without it.
   const lastSuccessful = [...stepResults].reverse().find((r) => r.success);
   if (lastSuccessful) {
@@ -458,7 +458,7 @@ function formatFinalSummary(
  * a follow-up turn the LLM sees a user-only gap and re-reasons from
  * scratch — which is how NEXUS ended up refusing a Chrome-extension
  * follow-up at 8:58 PM after having shipped the extension at 8:48 PM,
- * and then denying the work entirely on the next turn (Lucas's
+ * and then denying the work entirely on the next turn (the user's
  * 2026-05-06 screenshot bug).
  *
  * The output is plain prose so the LLM reads it as a normal assistant
@@ -500,7 +500,7 @@ export function summarizeTaskForHistory(
  * Strip Markdown that Telegram's HTML parse mode can't render, leaving
  * the plain text behind. Without this, model output containing `## headings`,
  * `---` rules, and `| pipe | tables |` shows up as literal noise in the
- * Result block (Lucas's bug screenshot from 2026-05-06).
+ * Result block (the user's bug screenshot from 2026-05-06).
  *
  * The output of this helper still goes through escapeHtml downstream, so we
  * deliberately produce plain text rather than HTML — emitting `<b>...</b>`

@@ -239,7 +239,7 @@ describe('buildSystemPrompt', () => {
   });
 
   it('should include the intellectual-rigor / no-validation directive', () => {
-    // Lucas asked for this directly: "challenge my assumptions, stress test
+    // the user asked for this directly: "challenge my assumptions, stress test
     // everything — i need bulletproof thinking, not validation." Foundation-
     // level imprint, sits next to ## Opinions, must always be in the prompt
     // regardless of caller-provided personality / agents.
