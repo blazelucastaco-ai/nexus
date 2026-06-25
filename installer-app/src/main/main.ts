@@ -506,12 +506,15 @@ function showJarvis(): void {
   createJarvisWindow();
   const w = jarvisWindow;
   if (!w || w.isDestroyed()) return;
+  // The app runs as a menu-bar ACCESSORY (app.dock.hide() at startup), and an
+  // accessory app's windows will NOT come to the foreground no matter how you
+  // focus() — that's why "Hey Nexus" showed the window stuck BEHIND the active app.
+  // Briefly switch to a regular app, then show + steal focus so it actually fronts.
+  // hideJarvis() switches back to accessory so the Dock icon stays hidden.
+  if (process.platform === 'darwin') app.setActivationPolicy('regular');
   w.show();
   if (!w.isSimpleFullScreen()) w.setSimpleFullScreen(true);
   w.moveTop();
-  // A menu-bar/accessory app must explicitly steal focus — otherwise show()+focus()
-  // leaves the window BEHIND the active app, so saying "Hey Nexus" looks like nothing
-  // happened. app.focus({steal:true}) brings NEXUS to the foreground for real.
   app.focus({ steal: true });
   w.focus();
 }
@@ -521,6 +524,7 @@ function hideJarvis(): void {
   if (!w || w.isDestroyed()) return;
   if (w.isSimpleFullScreen()) w.setSimpleFullScreen(false);
   w.hide();
+  if (process.platform === 'darwin') app.setActivationPolicy('accessory'); // back to menu-bar only (hide Dock icon)
 }
 
 function startMenubarMode(): void {
