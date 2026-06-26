@@ -1,0 +1,27 @@
+# NEXUS rendezvous on Fly.io. `fly launch` will copy this and let you set the app name
+# + region. It's a tiny always-on switchboard — keep one machine running so your Mac can
+# hold a persistent connection to it.
+app = "nexus-rendezvous"
+primary_region = "iad"   # change to your nearest region (e.g. sjc, lax, ord) during launch
+
+[build]
+
+[http_service]
+  internal_port = 8080
+  force_https = true            # clients connect over WSS (Fly terminates TLS)
+  auto_stop_machines = false    # always-on: the Mac keeps a persistent WS open
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.http_options.response.headers]
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

@@ -1,0 +1,10 @@
+{
+  "name": "nexus-rendezvous",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "description": "Data-blind WebRTC signaling rendezvous for the NEXUS phone link.",
+  "engines": { "node": ">=20" },
+  "scripts": { "start": "node src/server.js" },
+  "dependencies": { "ws": "^8.20.0" }
+}
