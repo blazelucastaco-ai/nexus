@@ -54,27 +54,27 @@ export class WebRtcPeer {
     });
     this.pc = pc;
 
-    pc.onLocalDescription((sdp, type) => {
+    pc.onLocalDescription((sdp, type) => this.safely('onLocalDescription', () => {
       // Sign every offer/answer before it touches the rendezvous.
       this.opts.onSignal({ kind: 'sdp', env: this.opts.sign(sdp, this.opts.role) });
       log(`local ${type} signed + sent`);
-    });
-    pc.onLocalCandidate((candidate, mid) => {
+    }));
+    pc.onLocalCandidate((candidate, mid) => this.safely('onLocalCandidate', () => {
       this.opts.onSignal({ kind: 'ice', candidate, mid });
-    });
-    pc.onStateChange((state) => {
+    }));
+    pc.onStateChange((state) => this.safely('onStateChange', () => {
       log(`pc state: ${state}`);
       if (state === 'failed' || state === 'closed' || state === 'disconnected') this.fail(`pc ${state}`);
-    });
+    }));
 
     if (this.opts.initiator) {
       this.dc = pc.createDataChannel(DC_LABEL); // triggers the offer
       this.wireDataChannel(this.dc);
     } else {
-      pc.onDataChannel((dc) => {
+      pc.onDataChannel((dc) => this.safely('onDataChannel', () => {
         this.dc = dc;
         this.wireDataChannel(dc);
-      });
+      }));
     }
   }
 
@@ -91,7 +91,12 @@ export class WebRtcPeer {
       this.remoteSdp = msg.env.sdp;
       // If WE initiated, the remote SDP is the answer; otherwise it's the offer.
       const type: DescriptionType = this.opts.initiator ? 'answer' : 'offer';
-      pc.setRemoteDescription(msg.env.sdp, type);
+      try {
+        pc.setRemoteDescription(msg.env.sdp, type);
+      } catch (e) {
+        // A malformed/unsupported remote SDP must fail THIS peer, never crash the daemon.
+        this.fail(`setRemoteDescription failed: ${String(e)}`);
+      }
     } else {
       try {
         pc.addRemoteCandidate(msg.candidate, msg.mid);
@@ -124,7 +129,7 @@ export class WebRtcPeer {
   }
 
   private wireDataChannel(dc: ReturnType<PeerConnection['createDataChannel']>): void {
-    dc.onOpen(() => {
+    dc.onOpen(() => this.safely('dc.onOpen', () => {
       // DTLS is up by the time the channel opens — assert the fingerprint binding NOW,
       // before any app frame is trusted.
       if (!this.assertFingerprint()) {
@@ -134,12 +139,21 @@ export class WebRtcPeer {
       this.verified = true;
       this.opts.log?.('channel verified + open');
       this.opts.onConnected?.();
-    });
-    dc.onMessage((msg) => {
+    }));
+    dc.onMessage((msg) => this.safely('dc.onMessage', () => {
       if (!this.verified) return; // never deliver pre-verification
       this.opts.onFrame?.(typeof msg === 'string' ? msg : msg.toString());
-    });
-    dc.onClosed?.(() => this.fail('data channel closed'));
+    }));
+    dc.onClosed?.(() => this.safely('dc.onClosed', () => this.fail('data channel closed')));
+  }
+
+  /** Run a native-callback body so any throw is contained — never an uncaught daemon crash. */
+  private safely(what: string, fn: () => void): void {
+    try {
+      fn();
+    } catch (e) {
+      this.opts.log?.(`${what} threw (contained): ${String(e)}`);
+    }
   }
 
   private assertFingerprint(): boolean {
