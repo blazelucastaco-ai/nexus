@@ -20,6 +20,7 @@ import { WebServer } from './web/server.js';
 import { WebGateway } from './web/gateway.js';
 import { PhoneGateway } from './phone/gateway.js';
 import { PhoneLink } from './webrtc/phone-link.js';
+import { ApnsSender, apnsConfigFromEnv } from './push/apns.js';
 import { loadPhoneConfig } from './phone/types.js';
 import { createTelephonyProvider } from './phone/provider.js';
 import { WEB_FALLBACK_CHAT_ID } from './web/protocol.js';
@@ -189,7 +190,11 @@ async function main() {
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
-      phoneLink = new PhoneLink(orchestrator, tts, { signalUrl, iceServers, chatId: webChatId });
+      const apnsCfg = apnsConfigFromEnv();
+      phoneLink = new PhoneLink(orchestrator, tts, {
+        signalUrl, iceServers, chatId: webChatId,
+        apns: apnsCfg ? new ApnsSender(apnsCfg) : undefined,
+      });
       phoneLink.start();
       log.info({ signalUrl, paired: phoneLink.isPaired }, 'phone companion link started');
     }

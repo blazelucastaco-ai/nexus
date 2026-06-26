@@ -18,6 +18,7 @@ import { WebRtcPeer } from './peer.js';
 import { WebRtcTransport } from './transport.js';
 import { SignalingClient } from './signaling-client.js';
 import type { QrPayload } from './identity.js';
+import type { ApnsSender } from '../push/apns.js';
 
 const log = createLogger('phone-link');
 
@@ -29,6 +30,8 @@ export interface PhoneLinkOptions {
   chatId: string;
   /** Override the identity dir (defaults to ~/.nexus/identity). For tests. */
   identityDir?: string;
+  /** APNs sender — enables NEXUS-initiated calls (ringing the phone). */
+  apns?: ApnsSender;
 }
 
 export class PhoneLink {
@@ -140,7 +143,7 @@ export class PhoneLink {
       sign: (sdp, from) => this.store.sign(sdp, from, pid),
       verifyPeer: this.store.makeVerifier(pid),
       onSignal: (m) => this.signaling?.send(m),
-      onFrame: (text) => this.transport.feed(text),
+      onFrame: (text) => this.onPhoneFrame(text),
       onConnected: () => log.info('phone connected (authenticated)'),
       onClosed: (reason) => {
         log.info({ reason }, 'phone connection closed');
@@ -160,5 +163,32 @@ export class PhoneLink {
       /* ignore */
     }
     this.peer = null;
+  }
+
+  /** Inbound app frame from the phone. Intercepts control frames (the VoIP token), else
+   *  passes it to the gateway (orb/voice). */
+  private onPhoneFrame(text: string): void {
+    try {
+      const f = JSON.parse(text) as { t?: string; token?: string };
+      if (f.t === 'voip-token' && typeof f.token === 'string' && this.activePairingId) {
+        this.store.setVoipToken(this.activePairingId, f.token);
+        return;
+      }
+    } catch {
+      /* not control JSON — fall through to the gateway */
+    }
+    this.transport.feed(text);
+  }
+
+  /** Ring the phone (NEXUS-initiated call) via a contentless APNs VoIP push. Best-effort;
+   *  needs APNs configured + a stored VoIP token. */
+  async callUser(): Promise<boolean> {
+    const pid = this.store.pairedPeers[0]?.pairingId;
+    const token = pid ? this.store.getVoipToken(pid) : undefined;
+    if (!this.opts.apns || !token) {
+      log.warn('callUser: APNs not configured or no VoIP token yet');
+      return false;
+    }
+    return this.opts.apns.ring(token);
   }
 }

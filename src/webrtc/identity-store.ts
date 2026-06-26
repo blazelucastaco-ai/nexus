@@ -38,6 +38,7 @@ export interface PairedPeer {
   label?: string;
   pairedAt: number;
   lastTs?: number; // highest accepted SDP-envelope ts (anti-replay across connections)
+  voipToken?: string; // APNs VoIP token (so NEXUS can ring the phone) — delivered over E2E
 }
 
 /** The phone's first pairing message (M1), relayed over the rendezvous. */
@@ -154,6 +155,19 @@ export class IdentityStore {
     this.persistPeers();
     log.info({ pairingId }, 'peer revoked');
     return true;
+  }
+
+  /** Store the phone's APNs VoIP token (delivered over the E2E channel) for ringing it. */
+  setVoipToken(pairingId: string, token: string): void {
+    const peer = this.peers.find((p) => p.pairingId === pairingId);
+    if (peer && peer.voipToken !== token) {
+      peer.voipToken = token;
+      this.persistPeers();
+    }
+  }
+
+  getVoipToken(pairingId: string): string | undefined {
+    return this.peers.find((p) => p.pairingId === pairingId)?.voipToken;
   }
 
   // ── connection-time crypto, bound to this Mac identity + a paired peer ───────────────

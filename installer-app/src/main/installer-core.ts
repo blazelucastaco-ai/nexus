@@ -656,6 +656,9 @@ function writeConfig(input: ConfigInput): Promise<void> {
     `NEXUS_DATA_DIR=${NEXUS_DIR}`,
     'NEXUS_LOG_LEVEL=info',
     '',
+    '# Phone companion (E2E iPhone link via the self-hosted rendezvous)',
+    'NEXUS_SIGNAL_URL=wss://nexus-rendezvous.fly.dev',
+    '',
   ];
   // mode 0o600: the .env holds Anthropic API key + Telegram bot token.
   // World-readable would let any other local user process harvest them.
@@ -708,6 +711,9 @@ async function registerLaunchd(input?: ConfigInput): Promise<void> {
   // NODE_PATH points at the repo's node_modules so `require('better-sqlite3')`
   // et al. resolve — without it, the service crashes at startup with
   // MODULE_NOT_FOUND. See "Destructive test 2" finding, 2026-04-19.
+  // Phone companion: point the daemon at the self-hosted rendezvous so the iPhone link
+  // comes up automatically. Override-able if the relay ever moves.
+  envVars.NEXUS_SIGNAL_URL = envVars.NEXUS_SIGNAL_URL ?? 'wss://nexus-rendezvous.fly.dev';
   envVars.NODE_PATH = join(REPO_DIR, 'node_modules');
   envVars.PATH = envVars.PATH ?? '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin';
 
