@@ -79,6 +79,9 @@ export class WebGateway {
   /** Set when this turn put a visual on the Stage → synth the reply WITH word
    *  timestamps so the diagram reveals lock to the voice. Reset each turn. */
   private sawVisual = false;
+  /** Monotonic turn id. A new turn or an `interrupt` advances it; a turn only broadcasts
+   *  while its id is still current, so a superseded (barged-in) turn's reply/audio is dropped. */
+  private turnGen = 0;
 
   constructor(
     private readonly brain: WebBrain,
@@ -92,6 +95,11 @@ export class WebGateway {
       if (frame.t === 'listening') {
         // Reflect mic state on the orb immediately (local + any other clients).
         this.server.broadcast({ t: 'orb', state: frame.on ? 'listening' : 'idle', ttlMs: frame.on ? 0 : 0 });
+        return;
+      }
+      if (frame.t === 'interrupt') {
+        // Barge-in: drop the in-flight turn's remaining output (the user talked over it).
+        this.interrupt();
         return;
       }
       if (frame.t === 'user_message') {
@@ -123,11 +131,13 @@ export class WebGateway {
 
   private async handleUserMessage(text: string): Promise<void> {
     if (!text) return;
+    const gen = ++this.turnGen; // this turn supersedes any in-flight one (barge-in)
+    const live = () => gen === this.turnGen;
     this.sawVisual = false; // reset; set if this turn puts a visual on the Stage
     this.server.broadcast({ t: 'orb', state: 'thinking' });
     this.server.broadcast({ t: 'status', text: 'thinking…' });
 
-    const onToken = (chunk: string) => this.server.broadcast({ t: 'token', delta: chunk });
+    const onToken = (chunk: string) => { if (live()) this.server.broadcast({ t: 'token', delta: chunk }); };
     // Acknowledge OUT LOUD only when the brain actually goes off to DO something. The
     // first tool status is that signal — the brain reports status only while using
     // tools, never for an answer it can give straight away. So simple / conversational
@@ -135,6 +145,7 @@ export class WebGateway {
     // lookups/tasks get the "one moment…" + answer, and the ack is matched to the work.
     let acked = false;
     const onStatus = (status: string, toolName?: string) => {
+      if (!live()) return;
       this.server.broadcast({ t: 'status', text: status });
       if (!acked) {
         acked = true;
@@ -144,21 +155,32 @@ export class WebGateway {
 
     try {
       const raw = await this.brain.handleMessage(this.chatId, text, onToken, onStatus, { voice: true });
+      if (!live()) return; // barged-in mid-turn → drop the reply + audio entirely
       // Empty return = the brain already replied out-of-band (e.g. a task that
       // streams progress). Don't render an empty bubble — the activity feed and
       // orb already reflect what happened.
       const out = redactSelfDisclosure(raw ?? '').trim();
       if (out) {
         this.server.broadcast({ t: 'assistant', text: out, final: true });
-        void this.speakReply(out);
+        void this.speakReply(out, gen);
       }
     } catch (err) {
       log.warn({ err }, 'web handleMessage failed');
-      this.server.broadcast({ t: 'assistant', text: 'Something went wrong handling that — check the daemon logs.', final: true });
+      if (live()) this.server.broadcast({ t: 'assistant', text: 'Something went wrong handling that — check the daemon logs.', final: true });
     } finally {
-      this.server.broadcast({ t: 'status', text: '' });
-      this.server.broadcast({ t: 'orb', state: 'idle' });
+      if (live()) {
+        this.server.broadcast({ t: 'status', text: '' });
+        this.server.broadcast({ t: 'orb', state: 'idle' });
+      }
     }
+  }
+
+  /** Barge-in: supersede the in-flight turn so its remaining reply/audio is suppressed and
+   *  the "thinking" state clears. The phone calls this the moment you talk over NEXUS. */
+  interrupt(): void {
+    this.turnGen++;
+    this.server.broadcast({ t: 'status', text: '' });
+    this.server.broadcast({ t: 'orb', state: 'idle' });
   }
 
   /** Map the current mood (-1..+1) to an overall voice character. */
@@ -199,22 +221,24 @@ export class WebGateway {
     }
   }
 
-  /** Synthesize the real reply and queue it to play right after the ack. */
-  private async speakReply(text: string): Promise<void> {
+  /** Synthesize the real reply and queue it to play right after the ack. `gen` gates the
+   *  broadcast: if the turn was superseded (barge-in) during synthesis, the audio is dropped. */
+  private async speakReply(text: string, gen?: number): Promise<void> {
     if (!this.tts) return;
+    const fresh = () => gen === undefined || gen === this.turnGen;
     try {
       // When this turn put a visual on the Stage, synth WITH per-character timestamps
       // so the diagram reveals lock to the voice. Any failure → plain synth below.
       if (this.sawVisual) {
         const r = await this.tts.synthesizeWithAlignment(text, this.moodStyle());
         if (r?.buffer) {
-          this.server.broadcast(this.audioFrame(r.buffer, text, { queue: true, align: r.align ?? undefined }));
+          if (fresh()) this.server.broadcast(this.audioFrame(r.buffer, text, { queue: true, align: r.align ?? undefined }));
           return;
         }
       }
       const buffer = await this.tts.synthesize(text, this.moodStyle());
       if (buffer) {
-        this.server.broadcast(this.audioFrame(buffer, text, { queue: true }));
+        if (fresh()) this.server.broadcast(this.audioFrame(buffer, text, { queue: true }));
       } else {
         log.warn({ len: text.length, style: this.moodStyle() }, 'tts produced no audio for reply');
       }

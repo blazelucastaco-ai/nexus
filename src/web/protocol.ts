@@ -65,6 +65,9 @@ export type ClientFrame =
   | { t: 'user_message'; text: string }
   /** Mic open/closed — lets the orb reflect "listening" instantly. */
   | { t: 'listening'; on: boolean }
+  /** Barge-in: the user started talking over NEXUS — supersede the in-flight turn so its
+   *  remaining reply/audio is dropped. The next `user_message` is the new turn. */
+  | { t: 'interrupt' }
   | { t: 'ping' };
 
 /** Narrow an unknown parsed object to a ClientFrame, or null if malformed. */
@@ -76,6 +79,8 @@ export function parseClientFrame(raw: unknown): ClientFrame | null {
       return typeof f.text === 'string' ? { t: 'user_message', text: f.text } : null;
     case 'listening':
       return typeof f.on === 'boolean' ? { t: 'listening', on: f.on } : null;
+    case 'interrupt':
+      return { t: 'interrupt' };
     case 'ping':
       return { t: 'ping' };
     default:

@@ -14,7 +14,7 @@ function harness(handleMessage: Brain) {
   const server = { broadcast: vi.fn(), putTts: () => 'id', onMessage: vi.fn() } as never;
   const tts = { synthesize, outputMime: 'audio/mpeg', outputExt: 'mp3' } as never;
   const gw = new WebGateway({ handleMessage } as never, server, 'web-chat', tts);
-  return { gw, synthesize };
+  return { gw, synthesize, server };
 }
 const flush = async () => {
   await new Promise((r) => setTimeout(r, 0));
@@ -59,6 +59,27 @@ describe('voice-turn ack gating', () => {
     expect(synthesize).toHaveBeenCalledTimes(2); // one ack + one reply, not three
     const ack = synthesize.mock.calls.map((c) => c[0]).find((s) => s !== 'Done, Sir.');
     expect(CHECK).toContain(ack); // matched to the first tool (read_file)
+  });
+});
+
+describe('barge-in (interrupt)', () => {
+  it('drops the superseded turn — no reply + no audio after an interrupt', async () => {
+    let release!: (v: string) => void;
+    const { gw, synthesize, server } = harness(() => new Promise<string>((r) => { release = r; }));
+    // Start a slow turn, let it reach the await, then barge in before it finishes.
+    const p = (gw as unknown as { handleUserMessage(t: string): Promise<void> }).handleUserMessage('tell me a long story');
+    await flush();
+    (gw as unknown as { interrupt(): void }).interrupt();
+    release('Once upon a time, Sir, there was a very long tale.');
+    await p;
+    await flush();
+
+    const frames = (server.broadcast as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as { t: string; text?: string });
+    // The superseded reply must never be sent or spoken.
+    expect(frames.some((f) => f.t === 'assistant' && (f.text ?? '').includes('Once upon'))).toBe(false);
+    expect(synthesize).not.toHaveBeenCalledWith('Once upon a time, Sir, there was a very long tale.', expect.anything());
+    // interrupt() resets the orb to idle.
+    expect(frames.some((f) => f.t === 'orb' && (f as { state?: string }).state === 'idle')).toBe(true);
   });
 });
 
