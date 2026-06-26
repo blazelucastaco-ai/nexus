@@ -53,7 +53,9 @@ export class PhoneLink {
   start(): void {
     this.store.load();
     this.gateway.start();
-    const paired = this.store.pairedPeers[0];
+    // Listen for the MOST-RECENTLY paired phone (so a re-pair always wins over a stale bond).
+    const peers = this.store.pairedPeers;
+    const paired = peers.length ? peers.reduce((a, b) => (b.pairedAt > a.pairedAt ? b : a)) : undefined;
     if (paired) {
       log.info({ pairingId: paired.pairingId }, 'paired phone found — listening');
       this.listen(paired.pairingId);
@@ -95,6 +97,7 @@ export class PhoneLink {
     this.signaling?.stop();
     this.signaling = new SignalingClient(this.opts.signalUrl, 'mac', {
       onPeerPresent: (present) => {
+        log.info({ present, mode: this.mode }, 'phone presence on rendezvous');
         if (!present) this.teardownPeer(); // phone left → drop the connection, await its return
       },
       onMessage: (msg) => this.onSignal(msg),
@@ -128,6 +131,7 @@ export class PhoneLink {
 
     // Connection signaling (the phone's offer / ICE) — the Mac answers.
     if (m.kind === 'sdp' || m.kind === 'ice') {
+      log.info({ kind: m.kind }, 'phone signal received');
       this.ensurePeer();
       this.peer?.handleSignal(msg as never);
     }
@@ -150,7 +154,7 @@ export class PhoneLink {
         log.info({ reason }, 'phone connection closed');
         this.teardownPeer();
       },
-      log: (l) => log.debug(l),
+      log: (l) => log.info(l), // surface ICE/DTLS/fingerprint progress for diagnosis
     });
     this.transport.attach(this.peer);
     this.peer.start();

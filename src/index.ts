@@ -244,7 +244,8 @@ async function main() {
           const payload = phoneLink.beginPairing();
           const QRCode = (await import('qrcode')).default;
           const qrDataUrl = await QRCode.toDataURL(JSON.stringify(payload), { margin: 1, width: 220, errorCorrectionLevel: 'M' });
-          return { ok: true, qrDataUrl, expiresAt: payload.exp };
+          // payload is returned too (loopback only) so an automated harness can pair.
+          return { ok: true, qrDataUrl, expiresAt: payload.exp, payload };
         }
       } catch (err) {
         log.warn({ err, cmd }, 'control command failed');
