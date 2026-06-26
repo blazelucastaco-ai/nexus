@@ -14,7 +14,7 @@ export default defineConfig([
     dts: true,
     splitting: false,
     treeshake: true,
-    noExternal: [/^(?!better-sqlite3|grammy|ws).*/],
+    noExternal: [/^(?!better-sqlite3|grammy|ws|node-datachannel).*/],
     banner: { js: requirePolyfill },
   },
   {
@@ -37,7 +37,7 @@ export default defineConfig([
     sourcemap: false,
     splitting: false,
     treeshake: true,
-    noExternal: [/^(?!better-sqlite3|ws).*/],
+    noExternal: [/^(?!better-sqlite3|ws|node-datachannel).*/],
     banner: { js: requirePolyfill },
   },
 ]);
