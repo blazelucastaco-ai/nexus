@@ -98,7 +98,8 @@ export class PhoneLink {
     this.signaling = new SignalingClient(this.opts.signalUrl, 'mac', {
       onPeerPresent: (present) => {
         log.info({ present, mode: this.mode }, 'phone presence on rendezvous');
-        if (!present) this.teardownPeer(); // phone left → drop the connection, await its return
+        // Do NOT tear down on absence — once DTLS is up the P2P link is independent of the
+        // signaling room; the peer's own close/ICE state handles a real disconnect.
       },
       onMessage: (msg) => this.onSignal(msg),
     });
