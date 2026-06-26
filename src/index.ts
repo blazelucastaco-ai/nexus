@@ -19,6 +19,7 @@ import { setMcpToolExecutor } from './mcp/server.js';
 import { WebServer } from './web/server.js';
 import { WebGateway } from './web/gateway.js';
 import { PhoneGateway } from './phone/gateway.js';
+import { PhoneLink } from './webrtc/phone-link.js';
 import { loadPhoneConfig } from './phone/types.js';
 import { createTelephonyProvider } from './phone/provider.js';
 import { WEB_FALLBACK_CHAT_ID } from './web/protocol.js';
@@ -117,12 +118,14 @@ async function main() {
   let wakeListener: WakeListener | undefined;
   let tts: TtsService | undefined;
   let phoneGateway: PhoneGateway | undefined;
+  let phoneLink: PhoneLink | undefined;
 
   // Handle graceful shutdown
   const shutdown = async () => {
     log.info('Received shutdown signal');
     wakeListener?.stop();
     tts?.stop();
+    phoneLink?.stop();
     void phoneGateway?.stop();
     webGateway?.stop();
     webServer?.stop();
@@ -176,6 +179,20 @@ async function main() {
     webServer.start();
     webGateway.start();
     void tts.start();
+
+    // Phone companion (orb-only): a 2nd gateway over an E2E WebRTC channel feeding the
+    // SAME brain + memory, reachable from anywhere via the self-hosted rendezvous. Starts
+    // only when NEXUS_SIGNAL_URL is set (the installer wires it); best-effort like the rest.
+    const signalUrl = process.env.NEXUS_SIGNAL_URL?.trim();
+    if (signalUrl) {
+      const iceServers = (process.env.NEXUS_ICE_SERVERS ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      phoneLink = new PhoneLink(orchestrator, tts, { signalUrl, iceServers, chatId: webChatId });
+      phoneLink.start();
+      log.info({ signalUrl, paired: phoneLink.isPaired }, 'phone companion link started');
+    }
 
     // Loopback control hook for the installer's launch-choice + "learn about you"
     // buttons — each command drives the ONE brain (no parallel path). The two intros

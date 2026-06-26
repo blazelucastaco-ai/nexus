@@ -27,6 +27,9 @@ export class WebRtcTransport implements WebTransport {
   }
 
   broadcast(frame: ServerFrame): void {
+    // Orb-only: the phone shows ONLY the orb + voice — never the visual/widget Stage.
+    // Drop `ui` frames so widgets/diagrams/nodes never reach the companion.
+    if (frame.t === 'ui') return;
     this.send(frame);
   }
 
