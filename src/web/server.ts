@@ -21,6 +21,7 @@ import { join, normalize, extname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createLogger } from '../utils/logger.js';
+import type { ClientMessageHandler, WebTransport } from './transport.js';
 import { getDataDir } from '../config.js';
 import { WEB_DEFAULT_PORT, type ServerFrame, type ClientFrame, parseClientFrame } from './protocol.js';
 
@@ -54,7 +55,9 @@ export interface WebServerOptions {
   chatId?: string;
 }
 
-export type ClientMessageHandler = (frame: ClientFrame, reply: (f: ServerFrame) => void) => void;
+// ClientMessageHandler + WebTransport now live in ./transport.ts (the gateway depends on
+// the interface, not on WebServer). Re-exported here for back-compat.
+export type { ClientMessageHandler };
 
 /**
  * Resolve the directory containing the built frontend. Checked in order:
@@ -77,7 +80,9 @@ function resolveStaticDir(): string | null {
 /** Whitelisted loopback control actions the installer can trigger (intro / research). */
 export type ControlCommand = 'telegram-intro' | 'voice-intro' | 'deep-research';
 
-export class WebServer {
+export class WebServer implements WebTransport {
+  /** This transport serves TTS over a loopback `/tts/<id>` HTTP route. */
+  readonly servesHttp = true;
   private http: Server | null = null;
   private wss: WebSocketServer | null = null;
   private readonly clients = new Set<WebSocket>();

@@ -18,7 +18,7 @@ import { createLogger } from '../utils/logger.js';
 import { events, type NexusEvent, type Subscription } from '../core/events.js';
 import { redactSelfDisclosure } from '../core/self-protection.js';
 import type { TtsService, TtsStyle } from './tts.js';
-import type { WebServer } from './server.js';
+import type { WebTransport } from './transport.js';
 import type { OrbState, ServerFrame } from './protocol.js';
 
 const log = createLogger('WebGateway');
@@ -82,7 +82,7 @@ export class WebGateway {
 
   constructor(
     private readonly brain: WebBrain,
-    private readonly server: WebServer,
+    private readonly server: WebTransport,
     private readonly chatId: string,
     private readonly tts?: TtsService,
   ) {}
@@ -168,6 +168,22 @@ export class WebGateway {
     return 'neutral';
   }
 
+  /** Build an audio frame for the active transport: a `/tts/<id>` URL when it serves
+   *  loopback HTTP (the desktop browser), or the clip bytes embedded as base64 (the
+   *  phone, over the P2P data channel — there is no loopback HTTP there). */
+  private audioFrame(
+    buffer: Buffer,
+    text: string,
+    extra: { queue?: boolean; align?: { text: string; times: number[] } } = {},
+  ): ServerFrame {
+    const mime = this.tts?.outputMime ?? 'audio/mpeg';
+    if (this.server.servesHttp) {
+      const id = this.server.putTts(buffer, mime);
+      return { t: 'audio', url: `/tts/${id}.${this.tts?.outputExt ?? 'mp3'}`, text, ...extra };
+    }
+    return { t: 'audio', audioB64: buffer.toString('base64'), mime, text, ...extra };
+  }
+
   /** Speak a brief acknowledgment — ONLY when NEXUS is actually about to go do
    * something (a lookup / check / task), and matched to the kind of work via
    * `getToolAck`, never the same canned line. Best-effort. */
@@ -177,10 +193,7 @@ export class WebGateway {
     if (!phrase) return; // e.g. the `speak` tool — don't acknowledge speaking
     try {
       const buffer = await this.tts.synthesize(phrase, 'bright');
-      if (buffer) {
-        const id = this.server.putTts(buffer, this.tts.outputMime);
-        this.server.broadcast({ t: 'audio', url: `/tts/${id}.${this.tts.outputExt}`, text: phrase });
-      }
+      if (buffer) this.server.broadcast(this.audioFrame(buffer, phrase));
     } catch {
       /* the ack is best-effort */
     }
@@ -195,17 +208,13 @@ export class WebGateway {
       if (this.sawVisual) {
         const r = await this.tts.synthesizeWithAlignment(text, this.moodStyle());
         if (r?.buffer) {
-          const id = this.server.putTts(r.buffer, this.tts.outputMime);
-          this.server.broadcast({
-            t: 'audio', url: `/tts/${id}.${this.tts.outputExt}`, text, queue: true, align: r.align ?? undefined,
-          });
+          this.server.broadcast(this.audioFrame(r.buffer, text, { queue: true, align: r.align ?? undefined }));
           return;
         }
       }
       const buffer = await this.tts.synthesize(text, this.moodStyle());
       if (buffer) {
-        const id = this.server.putTts(buffer, this.tts.outputMime);
-        this.server.broadcast({ t: 'audio', url: `/tts/${id}.${this.tts.outputExt}`, text, queue: true });
+        this.server.broadcast(this.audioFrame(buffer, text, { queue: true }));
       } else {
         log.warn({ len: text.length, style: this.moodStyle() }, 'tts produced no audio for reply');
       }
