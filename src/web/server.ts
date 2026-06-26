@@ -78,7 +78,10 @@ function resolveStaticDir(): string | null {
 }
 
 /** Whitelisted loopback control actions the installer can trigger (intro / research). */
-export type ControlCommand = 'telegram-intro' | 'voice-intro' | 'deep-research';
+export type ControlCommand = 'telegram-intro' | 'voice-intro' | 'deep-research' | 'start-pairing';
+/** Control results are JSON-serialized as-is, so handlers may return extra fields (e.g.
+ *  the pairing QR for `start-pairing`). */
+export type ControlResult = { ok: boolean } & Record<string, unknown>;
 
 export class WebServer implements WebTransport {
   /** This transport serves TTS over a loopback `/tts/<id>` HTTP route. */
@@ -120,7 +123,7 @@ export class WebServer implements WebTransport {
   }
 
   /** Register the handler for loopback control actions (POST /control). */
-  onControl(handler: (cmd: ControlCommand) => Promise<{ ok: boolean }>): void {
+  onControl(handler: (cmd: ControlCommand) => Promise<ControlResult>): void {
     this.controlHandler = handler;
   }
 
@@ -293,7 +296,7 @@ export class WebServer implements WebTransport {
       let cmd: ControlCommand | null = null;
       try {
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as { command?: string };
-        if (body.command === 'telegram-intro' || body.command === 'voice-intro' || body.command === 'deep-research') {
+        if (body.command === 'telegram-intro' || body.command === 'voice-intro' || body.command === 'deep-research' || body.command === 'start-pairing') {
           cmd = body.command;
         }
       } catch { /* invalid json → 400 below */ }

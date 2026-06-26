@@ -35,6 +35,7 @@ import {
   sendTelegramIntro,
   launchVoiceIntro,
   runDeepResearch,
+  startPairing,
   detectMemorySources,
   runMemoryImport,
   getAboutInfo,
@@ -735,6 +736,7 @@ app.whenReady().then(() => {
     return launchVoiceIntro();
   });
   ipcMain.handle('main:run-deep-research', async () => runDeepResearch());
+  ipcMain.handle('main:start-pairing', async () => startPairing());
   ipcMain.handle('main:memory-detect-sources', async () => detectMemorySources());
   ipcMain.handle('main:memory-import', async (event, sourceIds: unknown) => {
     if (!Array.isArray(sourceIds)) return { imported: 0, skipped: 0, sources: {} };

@@ -101,6 +101,7 @@ const api = {
     sendTelegramIntro: (): Promise<QuickActionResult> => ipcRenderer.invoke('main:send-telegram-intro'),
     launchVoiceIntro: (): Promise<QuickActionResult> => ipcRenderer.invoke('main:launch-voice-intro'),
     runDeepResearch: (): Promise<QuickActionResult> => ipcRenderer.invoke('main:run-deep-research'),
+    startPairing: (): Promise<{ ok: boolean; qrDataUrl?: string; expiresAt?: number; output: string }> => ipcRenderer.invoke('main:start-pairing'),
     memoryDetectSources: (): Promise<Array<{ id: string; name: string; status: string; summary: string; estimatedItems: number }>> =>
       ipcRenderer.invoke('main:memory-detect-sources'),
     memoryImport: (sourceIds: string[]): Promise<{ imported: number; skipped: number; sources: Record<string, number> }> =>

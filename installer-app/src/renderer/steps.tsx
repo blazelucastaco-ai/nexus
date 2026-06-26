@@ -1380,6 +1380,20 @@ export function DoneStep(props: { mode: 'install' | 'reconfigure' | 'repair'; le
     }
   };
 
+  const [pairing, setPairing] = useState<'idle' | 'loading' | 'shown' | 'error'>('idle');
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [pairErr, setPairErr] = useState('');
+  const pairPhone = async (): Promise<void> => {
+    setPairing('loading');
+    try {
+      const r = await window.nexus.main.startPairing();
+      if (r.ok && r.qrDataUrl) { setQrDataUrl(r.qrDataUrl); setPairing('shown'); }
+      else { setPairErr(r.output || 'Could not start pairing.'); setPairing('error'); }
+    } catch (e) {
+      setPairErr(String(e)); setPairing('error');
+    }
+  };
+
   // Reconfigure / repair keep the simple confirmation — the launch-choice is for a
   // fresh install (meeting NEXUS for the first time).
   if (props.mode !== 'install') {
@@ -1427,7 +1441,30 @@ export function DoneStep(props: { mode: 'install' | 'reconfigure' | 'repair'; le
           <div className="preset-name">{launching === 'voice' ? 'Coming online…' : 'Launch in Voice Chat'}</div>
           <div className="preset-desc">Opens the Jarvis screen and NEXUS introduces itself out loud — just talk to it.</div>
         </button>
+        <button type="button" className="preset-card" onClick={() => void pairPhone()} disabled={pairing === 'loading'}>
+          <div className="preset-name">{pairing === 'loading' ? 'Preparing…' : 'Pair your phone'}</div>
+          <div className="preset-desc">Show a code to scan with the NEXUS Companion app — links your iPhone for good.</div>
+        </button>
       </div>
+
+      {pairing === 'shown' && qrDataUrl && (
+        <div style={{ marginTop: 18, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+          <img
+            src={qrDataUrl}
+            alt="Pairing QR code"
+            width={220}
+            height={220}
+            style={{ background: '#fff', borderRadius: 12, padding: 10 }}
+          />
+          <p className="step-lead" style={{ textAlign: 'center', margin: 0, maxWidth: 360 }}>
+            Open <strong>NEXUS Companion</strong> on your iPhone and scan this. It links permanently —
+            the only setup there is. (The code expires in about a minute; tap again for a fresh one.)
+          </p>
+        </div>
+      )}
+      {pairing === 'error' && (
+        <p className="step-lead" style={{ color: '#d66', textAlign: 'center', marginTop: 12 }}>{pairErr}</p>
+      )}
 
       <div className="btn-row" style={{ marginTop: 24 }}>
         <button type="button" className="btn-g" onClick={() => void window.nexus.main.openDashboard()}>Open dashboard</button>

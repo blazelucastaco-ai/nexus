@@ -1792,6 +1792,23 @@ export async function sendTelegramIntro(): Promise<{ ok: boolean; output: string
 export async function launchVoiceIntro(): Promise<{ ok: boolean; output: string }> { return postControl('voice-intro'); }
 export async function runDeepResearch(): Promise<{ ok: boolean; output: string }> { return postControl('deep-research'); }
 
+/** Mint a single-use pairing QR (for the companion app). Returns a PNG data URL. */
+export async function startPairing(): Promise<{ ok: boolean; qrDataUrl?: string; expiresAt?: number; output: string }> {
+  try {
+    const r = await fetch('http://127.0.0.1:4242/control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: 'start-pairing' }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const j = (await r.json().catch(() => ({ ok: false }))) as { ok?: boolean; qrDataUrl?: string; expiresAt?: number; error?: string };
+    if (!r.ok || j.ok !== true || !j.qrDataUrl) return { ok: false, output: j.error ?? `daemon returned ${r.status}` };
+    return { ok: true, qrDataUrl: j.qrDataUrl, expiresAt: j.expiresAt, output: 'ok' };
+  } catch (e) {
+    return { ok: false, output: `could not reach NEXUS on :4242 (${String(e)})` };
+  }
+}
+
 // ── Memory import (detect + merge other agents' memory) ─────────────
 
 export interface DetectedMemorySource {

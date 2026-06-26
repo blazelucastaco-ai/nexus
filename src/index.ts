@@ -233,6 +233,14 @@ async function main() {
           void orchestrator.handleMessage(webChatId, DEEP_RESEARCH).catch((err) => log.warn({ err }, 'deep-research job failed'));
           return { ok: true };
         }
+        if (cmd === 'start-pairing') {
+          // Show the QR at the end of setup: mint a single-use pairing offer + render it.
+          if (!phoneLink) return { ok: false, error: 'phone link unavailable (set NEXUS_SIGNAL_URL)' };
+          const payload = phoneLink.beginPairing();
+          const QRCode = (await import('qrcode')).default;
+          const qrDataUrl = await QRCode.toDataURL(JSON.stringify(payload), { margin: 1, width: 220, errorCorrectionLevel: 'M' });
+          return { ok: true, qrDataUrl, expiresAt: payload.exp };
+        }
       } catch (err) {
         log.warn({ err, cmd }, 'control command failed');
       }
