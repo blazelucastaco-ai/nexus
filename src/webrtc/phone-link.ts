@@ -45,7 +45,8 @@ export class PhoneLink {
 
   constructor(brain: WebBrain, tts: TtsService | undefined, private readonly opts: PhoneLinkOptions) {
     this.store = new IdentityStore(opts.identityDir);
-    this.gateway = new WebGateway(brain, this.transport, opts.chatId, tts);
+    // 'phone' tells the brain it's the orb-only companion — no screen for visuals.
+    this.gateway = new WebGateway(brain, this.transport, opts.chatId, tts, 'phone');
   }
 
   /** Load identity + start the gateway; if a phone is already paired, listen for it. */

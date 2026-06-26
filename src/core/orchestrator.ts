@@ -861,7 +861,7 @@ export class Orchestrator {
    * FIX 6: Serialize messages per chatId to prevent interleaving.
    * Each chatId gets its own promise chain — messages queue up and run one at a time.
    */
-  async handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void, onStatus?: (status: string) => void, opts?: { voice?: boolean }): Promise<string> {
+  async handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void, onStatus?: (status: string) => void, opts?: { voice?: boolean; surface?: 'desktop' | 'phone' }): Promise<string> {
 
     let resolve!: () => void;
     const slot = new Promise<void>((r) => { resolve = r; });
@@ -922,7 +922,7 @@ export class Orchestrator {
    *  6. Loop until no more tool_calls (max 10 iterations)
    *  7. Return final text content
    */
-  private async _handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void, onStatus?: (status: string) => void, opts?: { voice?: boolean }): Promise<string> {
+  private async _handleMessage(chatId: string, text: string, onToken?: (chunk: string) => void, onStatus?: (status: string) => void, opts?: { voice?: boolean; surface?: 'desktop' | 'phone' }): Promise<string> {
     const startTime = Date.now();
     // Logger auto-includes the current traceId + chatId from AsyncLocalStorage
     // — no manual threading needed. See trace.ts.
@@ -1198,6 +1198,7 @@ export class Orchestrator {
         urlHint: urlHint ?? '',
         lastSelfEvalNote: this.lastSelfEvalNote ?? '',
         voice: opts?.voice ?? false,
+        surface: opts?.surface ?? 'desktop',
       });
       // Clear single-turn injections — the brief is session-start only and
       // the self-eval note expires after the turn that consumes it.
@@ -1425,6 +1426,7 @@ export class Orchestrator {
       lastSelfEvalNote?: string;
       urlHint?: string;
       voice?: boolean;
+      surface?: 'desktop' | 'phone';
     },
   ): string {
     const personalityPrompt = this.personality.getSystemPromptAdditions({
@@ -1564,13 +1566,24 @@ These words are read aloud in your British voice, and on THIS channel you are Ja
 - Same information, Jarvis delivery. Not "Done, the email's been sent" but "The email's away, Sir. Anything else you'd like me to take care of?" Not "Error, file not found" but "I'm afraid that file is nowhere to be found, Sir. Shall I take another look?"
 - Never break character and never narrate that you're doing any of this. You simply are Jarvis.`);
 
-      extensions.push(`
+      if (extras?.surface === 'phone') {
+        // The phone companion is the orb + your voice ONLY — there is no screen there.
+        extensions.push(`
+## You're on the phone companion — voice only, no screen
+Right now you're reaching ${userName()} through the NEXUS phone app: it is the orb and your voice, nothing else. There is NO screen for visuals here.
+- Do NOT call ui_show_visual or try to display, draw, or bring up anything visual — there is no canvas, chart, diagram, widget, or page on the phone. It would simply go nowhere.
+- You cannot "show", "pull up", "display", "bring up", or "put on screen" anything here. If ${userName()} asks you to show or pull something up on the phone, say so plainly — you can't put it on screen on the phone — and offer to tell them what they need out loud, or to have it ready for them on the Mac.
+- You CAN still do everything else remotely: run tasks on the Mac, look things up, take actions, and report the result. The work happens on the Mac; here you simply speak the outcome.
+- So answer in words, conversationally — never by pointing at a screen that isn't there.`);
+      } else {
+        extensions.push(`
 ## The Jarvis screen — show, don't just tell
 You have a screen in front of ${userName()}, and you are a *visual* presence on it, like Tony Stark's HUD. Talking is only half of it; the screen is the other half.
 - On essentially every substantive turn, call ui_show_visual to bring up the visual that fits what you're saying, while you say it — a node_graph for how things connect or fit together, a chart for numbers, steps for a process, a comparison for choices, a timeline for events, a stat_dashboard for a status readout, or a custom shapes sketch when nothing standard fits.
 - Order the pieces (node/edge/step/row \`order\`: 0,1,2…) to match the sequence you SPEAK them in, so the picture assembles itself piece by piece as you narrate — name the brain, it forms; name a channel, its line draws out to it.
 - Lean toward showing, not less. Anything with parts, numbers, structure, a comparison, or a story to it earns a visual. Use judgment — skip it only for throwaway one-liners with nothing to show ("what time is it", "thanks").
 - Don't announce the screen or describe what's on it — it simply appears, the way the HUD would for Mr. Stark. You speak your answer normally; the visual rides alongside in the same turn.`);
+      }
     }
 
     // ── Learning insights ──

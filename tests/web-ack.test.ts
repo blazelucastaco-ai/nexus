@@ -62,6 +62,30 @@ describe('voice-turn ack gating', () => {
   });
 });
 
+describe('surface awareness (desktop vs phone)', () => {
+  it('tells the brain which surface a turn came from, so it knows the phone has no screen', async () => {
+    const seen: Array<string | undefined> = [];
+    const brain = {
+      handleMessage: async (_c: string, _t: string, _ot?: unknown, _os?: unknown, opts?: { surface?: string }) => {
+        seen.push(opts?.surface);
+        return 'ok';
+      },
+    };
+    const server = { broadcast: vi.fn(), putTts: () => 'id', onMessage: vi.fn() } as never;
+    const tts = { synthesize: vi.fn().mockResolvedValue(Buffer.from('a')), outputMime: 'audio/mpeg', outputExt: 'mp3' } as never;
+
+    const phone = new WebGateway(brain as never, server, 'c', tts, 'phone');
+    await (phone as unknown as { handleUserMessage(t: string): Promise<void> }).handleUserMessage('hi');
+    await flush();
+    expect(seen[0]).toBe('phone');
+
+    const desktop = new WebGateway(brain as never, server, 'c', tts); // default surface
+    await (desktop as unknown as { handleUserMessage(t: string): Promise<void> }).handleUserMessage('hi');
+    await flush();
+    expect(seen[1]).toBe('desktop');
+  });
+});
+
 describe('barge-in (interrupt)', () => {
   it('drops the superseded turn — no reply + no audio after an interrupt', async () => {
     let release!: (v: string) => void;

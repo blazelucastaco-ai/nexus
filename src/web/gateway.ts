@@ -33,7 +33,7 @@ export interface WebBrain {
     text: string,
     onToken?: (chunk: string) => void,
     onStatus?: (status: string, toolName?: string) => void,
-    opts?: { voice?: boolean },
+    opts?: { voice?: boolean; surface?: 'desktop' | 'phone' },
   ): Promise<string>;
 }
 
@@ -88,6 +88,8 @@ export class WebGateway {
     private readonly server: WebTransport,
     private readonly chatId: string,
     private readonly tts?: TtsService,
+    /** 'phone' = the orb-only companion (no screen for visuals); 'desktop' = the Jarvis UI. */
+    private readonly surface: 'desktop' | 'phone' = 'desktop',
   ) {}
 
   start(): void {
@@ -154,7 +156,7 @@ export class WebGateway {
     };
 
     try {
-      const raw = await this.brain.handleMessage(this.chatId, text, onToken, onStatus, { voice: true });
+      const raw = await this.brain.handleMessage(this.chatId, text, onToken, onStatus, { voice: true, surface: this.surface });
       if (!live()) return; // barged-in mid-turn → drop the reply + audio entirely
       // Empty return = the brain already replied out-of-band (e.g. a task that
       // streams progress). Don't render an empty bubble — the activity feed and
