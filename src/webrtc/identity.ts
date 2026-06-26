@@ -233,3 +233,18 @@ export function pairingTag(secret: string, label: string, ...fields: string[]): 
 export function verifyPairingTag(secret: string, tag: Buffer, label: string, ...fields: string[]): boolean {
   return safeEqual(tag, pairingTag(secret, label, ...fields));
 }
+
+/** Transcript the PHONE signs with its Secure-Enclave P-256 key during pairing — binds
+ *  the bond to BOTH long-term public keys so it can't be transplanted to another device.
+ *  The Mac verifies this signature against the phone pubkey supplied in the handshake. */
+export function pairingTranscript(pairingId: string, macPub: string, phonePub: string, nonce: string): Buffer {
+  const parts = ['nexus-pair-v1', pairingId, macPub, phonePub, nonce];
+  const chunks: Buffer[] = [];
+  for (const p of parts) {
+    const b = Buffer.from(p, 'utf8');
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(b.length, 0);
+    chunks.push(len, b);
+  }
+  return sha256(Buffer.concat(chunks));
+}
