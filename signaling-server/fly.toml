@@ -2,7 +2,7 @@
 # + region. It's a tiny always-on switchboard — keep one machine running so your Mac can
 # hold a persistent connection to it.
 app = "nexus-rendezvous"
-primary_region = "iad"   # change to your nearest region (e.g. sjc, lax, ord) during launch
+primary_region = "ewr"
 
 [build]
 
