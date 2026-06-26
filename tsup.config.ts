@@ -15,6 +15,9 @@ export default defineConfig([
     splitting: false,
     treeshake: true,
     noExternal: [/^(?!better-sqlite3|grammy|ws|node-datachannel).*/],
+    // Native addons MUST stay external — bundling inlines a broken relative path to their
+    // .node binary (node-datachannel lazily requires it on certain ICE ops → crash).
+    external: ['better-sqlite3', 'node-datachannel'],
     banner: { js: requirePolyfill },
   },
   {
@@ -38,6 +41,7 @@ export default defineConfig([
     splitting: false,
     treeshake: true,
     noExternal: [/^(?!better-sqlite3|ws|node-datachannel).*/],
+    external: ['better-sqlite3', 'node-datachannel'],
     banner: { js: requirePolyfill },
   },
 ]);
