@@ -134,7 +134,25 @@ export class PhoneLink {
     if (m.kind === 'sdp' || m.kind === 'ice') {
       log.info({ kind: m.kind }, 'phone signal received');
       this.ensurePeer();
-      this.peer?.handleSignal(msg as never);
+      try {
+        // Accept BOTH wire shapes for the SDP: the iOS client sends the envelope FLAT
+        // ({kind,sdp,from,ts,pairingId,sig}); node peers send it NESTED ({kind,env:{...}}).
+        // Normalize to what WebRtcPeer.handleSignal expects so neither can crash the daemon.
+        if (m.kind === 'sdp') {
+          const env = (m.env as Record<string, unknown> | undefined) ?? {
+            sdp: m.sdp,
+            from: m.from,
+            ts: m.ts,
+            pairingId: m.pairingId,
+            sig: m.sig,
+          };
+          this.peer?.handleSignal({ kind: 'sdp', env } as never);
+        } else {
+          this.peer?.handleSignal({ kind: 'ice', candidate: m.candidate, mid: m.mid } as never);
+        }
+      } catch (e) {
+        log.warn({ err: String(e) }, 'phone signal handling failed (contained)');
+      }
     }
   }
 
@@ -148,7 +166,9 @@ export class PhoneLink {
       iceServers: this.opts.iceServers ?? [],
       sign: (sdp, from) => this.store.sign(sdp, from, pid),
       verifyPeer: this.store.makeVerifier(pid),
-      onSignal: (m) => this.signaling?.send(m),
+      // Send BOTH shapes so the iOS client (reads flat top-level fields) and node peers
+      // (read nested .env) can each decode the Mac's signed offer/answer.
+      onSignal: (m) => this.signaling?.send(m.kind === 'sdp' ? { kind: 'sdp', env: m.env, ...m.env } : m),
       onFrame: (text) => this.onPhoneFrame(text),
       onConnected: () => log.info('phone connected (authenticated)'),
       onClosed: (reason) => {

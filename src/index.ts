@@ -158,11 +158,35 @@ async function main() {
   });
 
   process.on('uncaughtException', (err) => {
-    log.fatal({ err }, 'uncaught_exception');
-    // Let the process actually exit so launchd restarts — an uncaught
-    // exception has put us in an unknown state that we shouldn't try to
-    // recover from in-process.
-    setTimeout(() => process.exit(1), 100);
+    // pino's err serializer renders some thrown values (non-Error objects from native
+    // addons) as {} — capture the real shape explicitly so the cause is never invisible.
+    let detail: string;
+    try {
+      const e = err as unknown as Record<string, unknown> | null;
+      detail = JSON.stringify({
+        str: String(err),
+        name: (e?.name as string) ?? (err as { constructor?: { name?: string } })?.constructor?.name,
+        message: e?.message,
+        keys: e && typeof e === 'object' ? Object.getOwnPropertyNames(e) : undefined,
+        stack: err instanceof Error ? err.stack?.split('\n').slice(0, 12) : undefined,
+      });
+    } catch {
+      detail = String(err);
+    }
+    log.fatal({ uncaught: detail }, 'uncaught_exception');
+    // Do NOT exit. An isolated subsystem error — e.g. the WebRTC peer choking on a remote
+    // ICE candidate from libwebrtc — must not take down Telegram, the brain, or the web UI.
+    // Mirrors the unhandledRejection handler: log, notify, recover in-process.
+    try {
+      const chatId = config.telegram.chatId;
+      if (chatId) {
+        telegram
+          .sendMessage(chatId, '⚠️ NEXUS caught an uncaught exception and stayed up. Check logs.', { parseMode: 'HTML' })
+          .catch(() => null);
+      }
+    } catch {
+      /* ignore — already in a bad state */
+    }
   });
 
   // Start everything

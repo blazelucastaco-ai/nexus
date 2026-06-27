@@ -55,7 +55,9 @@ describe('phone E2E (live daemon)', () => {
           return { sdp, from, ts, pairingId, sig: phone.sign(sdpTranscript(pairingId, from, ts, sdp)).toString('base64url') };
         },
         verifyPeer: (env) => verifySdpEnvelope(env, { ed25519Raw: macPub }, { expectPairingId: pairingId }),
-        onSignal: (m) => sig.send(m),
+        // Mimic the REAL iOS client: send the SDP envelope FLAT (fields at top level), not
+        // nested under {env}. This is the exact wire shape that crashed the daemon.
+        onSignal: (m) => sig.send(m.kind === 'sdp' ? { kind: 'sdp', ...m.env } : m),
         onFrame: (text) => {
           let f: { t?: string; text?: string };
           try { f = JSON.parse(text); } catch { return; }
